@@ -6,6 +6,24 @@ use tauri::State;
 use walkdir::WalkDir;
 
 #[tauri::command]
+pub fn library_page(state:State<'_,AppState>,filter:LibraryFilter,offset:i64,limit:i64)->Result<LibraryPage,String>{
+    let conn=state.db.lock().map_err(|e|e.to_string())?;
+    db::library_page(&conn,&filter,offset,limit)
+}
+
+#[tauri::command]
+pub fn library_facets(state:State<'_,AppState>)->Result<LibraryFacets,String>{
+    let conn=state.db.lock().map_err(|e|e.to_string())?;
+    db::facets(&conn)
+}
+
+#[tauri::command]
+pub fn get_asset(state:State<'_,AppState>,id:i64)->Result<AssetRecord,String>{
+    let conn=state.db.lock().map_err(|e|e.to_string())?;
+    db::get_asset(&conn,id)
+}
+
+#[tauri::command]
 pub fn update_prompt(state:State<'_,AppState>,id:i64,patch:PromptPatch)->Result<AssetRecord,String>{
     let mut conn=state.db.lock().map_err(|e|e.to_string())?;
     let stamp=db::now();

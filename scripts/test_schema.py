@@ -22,4 +22,5 @@ with tempfile.TemporaryDirectory() as td:
     con.execute("INSERT INTO prompt_revisions(asset_id,prompt,negative_prompt,model,tags_json,note,created_at) VALUES(?,?,?,?,?,?,?)",(aid,'p','n','m',json.dumps(['character']),'',now))
     con.commit()
     assert con.execute("select value from app_meta where key='schema_version'").fetchone()[0]=='1'
+con.close()
 print('ImageLore fresh schema: PASS')
