@@ -14,13 +14,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-
       - uses: dtolnay/rust-toolchain@stable
-
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: './src-tauri -> target'
@@ -28,10 +25,14 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
-      - name: Sync and verify version
+      - name: Verify project
         run: |
           npm run version:sync
           npm run version:check
+          python scripts/check_project.py
+          python scripts/test_schema.py
+          python scripts/test_scale.py
+          python scripts/test_contract.py
 
       - name: Build NSIS setup EXE
         run: npm run tauri:build
@@ -51,8 +52,7 @@ jobs:
         with:
           tagName: v__VERSION__
           releaseName: 'ImageLore v__VERSION__'
-          releaseBody: |
-            Windows one-click installer. Download the x64 setup EXE and double-click it.
+          releaseBody: Windows one-click installer.
           releaseDraft: false
           prerelease: false
           args: --bundles nsis

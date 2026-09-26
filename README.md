@@ -1,89 +1,55 @@
-# ImageLore v0.11.0
+# ImageLore v0.13.0
 
-ImageLore is a local-first desktop library for AI-generated images and the context behind them: prompts, generation metadata, revisions, collections, and parent/derivative relationships.
+ImageLore 是一个 local-first 的 AI 视觉生成记忆库，用来管理图片背后的提示词、模型、参数、历史版本、集合与生成谱系。
 
-## Why v0.10 is a clean rebuild
+## 当前核心
 
-The pre-v0.10 builds were prototypes and were never used as a real library. v0.10 deliberately removes legacy migration code and starts with a new data model.
+- 简体中文 Frutiger Aero 桌面界面
+- 图片 / 文件夹 / 拖拽导入
+- Prompt、Negative Prompt、模型、标签自动保存
+- Prompt Revision 历史版本
+- Collection 与多父 Generation Lineage
+- 父子 Prompt Diff
+- SQLite FTS + CJK 子串搜索
+- 虚拟化图库 + 持久化缩略图缓存
+- 缺失文件重定位
+- A1111 / ComfyUI 元数据读取
+- .imagelore.json Sidecar
+- Windows NSIS 一键安装包
 
-- New database: `%LOCALAPPDATA%\ImageLore\library.sqlite3`
-- New thumbnail cache: `%LOCALAPPDATA%\ImageLore\cache\thumbnails\`
-- Old `PromptDock` databases are not read.
-- Old `ImageLore\imagelore.db` is not read.
-- Only `.imagelore.json` Sidecar v2 is part of the new contract.
-- `CLEAN_LEGACY_DATA.bat` can remove old prototype data manually. It does not delete `library.sqlite3`.
+数据保存在：
+`%LOCALAPPDATA%\ImageLore\library.sqlite3`
 
-## Clean Core architecture
+原始图片不会复制进数据库，也不会因为从 ImageLore 移除记录而被删除。
 
-The old single `images` table has been replaced with explicit domains:
+## 快捷键
 
-- `assets` — physical image identity and file state
-- `prompt_state` — current Prompt / Negative Prompt / Model
-- `tags` + `asset_tags` — normalized tags
-- `asset_search` — FTS5 full-text search index
-- `prompt_revisions` — prompt snapshots
-- `relations` — multi-parent generation lineage
-- `collections` + `collection_assets` — project grouping
+- `Ctrl+F` 搜索
+- `Ctrl+I` 导入图片
+- `Ctrl+S` 保存当前编辑并建立 Prompt 版本
+- `Ctrl+Shift+C` 复制 Prompt
+- `F6` 聚焦 Prompt
+- `F7` 切换适应窗口 / 100%
+- `Alt+↑ / Alt+↓` 前后切图
 
-Original image files are never copied into SQLite.
-
-## 快速导入
-
-在 Windows 桌面版中，可以把图片、多个图片或整个文件夹直接拖进 ImageLore 窗口。文件夹会递归扫描，重复图片自动跳过。
-
-## v0.10 user experience
-
-The Frutiger Aero inspired workspace remains intentionally light and readable:
-
-- Left: views, Collection / Tag / Model filters, virtualized library
-- Center: image preview only
-- Right: Prompt, generation information, lineage and compare
-- Resizable panes and keyboard shortcuts
-- Clear text labels on primary actions
-
-### Shortcuts
-
-- `Ctrl+F` — search
-- `Ctrl+I` — import images
-- `Ctrl+S` — save Prompt revision
-- `Ctrl+Shift+C` — copy Prompt
-- `F6` — focus Prompt editor
-- `F7` — Fit / 100% preview
-- `Alt+↑ / Alt+↓` — previous / next record
-
-## Run in browser preview
-
-```bash
-npm install
-npm run dev
-```
-
-Browser preview uses mock data and does not access local files.
-
-## Native development
-
-Requirements: Node.js, Rust, Windows WebView2, and the normal Tauri Windows build prerequisites.
+## 开发
 
 ```bash
 npm install
 npm run tauri:dev
 ```
 
-## One-click Windows installer
+正式 Windows 构建：
 
-For local developer builds, double-click:
+```bash
+npm run tauri:build
+```
 
-`BUILD_WINDOWS_EXE.bat`
+也可以直接运行 `BUILD_WINDOWS_EXE.bat`，或使用仓库中的 GitHub Actions。
 
-The NSIS installer is generated under:
+## 版本
 
-`src-tauri\target\release\bundle\nsis\`
-
-For normal distribution, use the included GitHub Actions workflow. End users only need the generated setup EXE; they do not need Rust, Node.js or Python.
-
-## Versioning
-
-`VERSION` is the single version source.
+`VERSION` 是唯一版本源：
 
 ```bash
 npm run version:sync

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.13.0 — Reliability & Flow
+
+- Prevents unsaved Prompt/Negative Prompt/Model/Tags edits from being lost when switching records.
+- Ctrl+S flushes the editor before creating a Prompt revision.
+- Library pages now transfer lightweight AssetSummary records; full Prompt/JSON is loaded only for the active image.
+- Import scanning, metadata parsing and SHA-256 work no longer hold the SQLite mutex for the whole batch.
+- Consolidated image/file/folder import into one native importer module.
+- Prompt updates, tag writes and revision restores use atomic SQLite transactions.
+- Added schema migration foundation without resetting schema_version on startup.
+- Added CJK substring search fallback for Chinese/Japanese/Korean queries.
+- Split editor, drag-drop, workspace layout and dialogs into focused modules.
+- CI now runs schema, scale, command-contract and project-integrity tests before the Windows build.
+
+# Changelog
+
 ## 0.12.0
 
 - Added native drag-and-drop import across the whole ImageLore window.
