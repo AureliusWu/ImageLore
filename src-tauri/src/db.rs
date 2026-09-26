@@ -1,4 +1,4 @@
-use crate::models::{AssetRecord, CollectionRecord, FacetCount, LibraryFacets, LibraryFilter, LibraryPage};
+use crate::models::{AssetRecord, AssetSummary, CollectionRecord, FacetCount, LibraryFacets, LibraryFilter, LibraryPage};
 use rusqlite::{params, params_from_iter, types::Value as SqlValue, Connection, OptionalExtension, Row};
 use std::{fs, path::{Path, PathBuf}, time::{SystemTime, UNIX_EPOCH}};
 
@@ -49,6 +49,16 @@ LEFT JOIN prompt_state ps ON ps.asset_id=a.id
 LEFT JOIN asset_tags at ON at.asset_id=a.id
 LEFT JOIN tags t ON t.id=at.tag_id
 "#;
+
+fn row_summary(row:&Row<'_>)->rusqlite::Result<AssetSummary>{
+    Ok(AssetSummary{
+        id:row.get(0)?,path:row.get(1)?,name:row.get(2)?,favorite:row.get(3)?,
+        width:row.get(4)?,height:row.get(5)?,format:row.get(6)?,metadata_type:row.get(7)?,
+        fingerprint:row.get(8)?,file_mtime:row.get(9)?,missing:row.get(10)?,updated_at:row.get(11)?,
+    })
+}
+
+const SELECT_SUMMARY:&str=r#"SELECT a.id,a.path,a.name,a.favorite,a.width,a.height,a.format,a.metadata_type,a.fingerprint,a.file_mtime,a.missing,a.updated_at FROM assets a LEFT JOIN prompt_state ps ON ps.asset_id=a.id"#;
 
 pub fn get_asset(conn: &Connection, id: i64) -> Result<AssetRecord, String> {
     let sql = format!("{} WHERE a.id=?1 GROUP BY a.id", SELECT_ASSET);
@@ -152,21 +162,19 @@ fn filter_parts(filter: &LibraryFilter) -> (String, String, Vec<SqlValue>) {
 }
 
 pub fn library_page(conn: &Connection, filter: &LibraryFilter, offset: i64, limit: i64) -> Result<LibraryPage, String> {
-    let offset = offset.max(0);
-    let limit = limit.clamp(20, 500);
-    let (joins, where_sql, args) = filter_parts(filter);
+    let offset=offset.max(0);
+    let limit=limit.clamp(20,500);
+    let(joins,where_sql,args)=filter_parts(filter);
 
-    let count_sql = format!("SELECT COUNT(DISTINCT a.id) FROM assets a LEFT JOIN prompt_state ps ON ps.asset_id=a.id {} WHERE {}", joins, where_sql);
-    let total: i64 = conn.query_row(&count_sql, params_from_iter(args.clone()), |r| r.get(0)).map_err(|e| e.to_string())?;
+    let count_sql=format!("SELECT COUNT(DISTINCT a.id) FROM assets a LEFT JOIN prompt_state ps ON ps.asset_id=a.id {} WHERE {}",joins,where_sql);
+    let total:i64=conn.query_row(&count_sql,params_from_iter(args.clone()),|r|r.get(0)).map_err(|e|e.to_string())?;
 
-    let order = if filter.view == "recent" { "a.updated_at DESC,a.id DESC" } else { "a.favorite DESC,a.updated_at DESC,a.id DESC" };
-    let sql = format!("{} {} WHERE {} GROUP BY a.id ORDER BY {} LIMIT ? OFFSET ?", SELECT_ASSET, joins, where_sql, order);
-    let mut page_args = args;
-    page_args.push(SqlValue::Integer(limit));
-    page_args.push(SqlValue::Integer(offset));
-    let mut st = conn.prepare(&sql).map_err(|e| e.to_string())?;
-    let items = st.query_map(params_from_iter(page_args), row_asset).map_err(|e| e.to_string())?.filter_map(Result::ok).collect();
-    Ok(LibraryPage { items, total, offset, limit })
+    let order=if filter.view=="recent"{"a.updated_at DESC,a.id DESC"}else{"a.favorite DESC,a.updated_at DESC,a.id DESC"};
+    let sql=format!("{} {} WHERE {} ORDER BY {} LIMIT ? OFFSET ?",SELECT_SUMMARY,joins,where_sql,order);
+    let mut page_args=args;page_args.push(SqlValue::Integer(limit));page_args.push(SqlValue::Integer(offset));
+    let mut st=conn.prepare(&sql).map_err(|e|e.to_string())?;
+    let items=st.query_map(params_from_iter(page_args),row_summary).map_err(|e|e.to_string())?.filter_map(Result::ok).collect();
+    Ok(LibraryPage{items,total,offset,limit})
 }
 
 pub fn collections(conn: &Connection) -> Result<Vec<CollectionRecord>, String> {

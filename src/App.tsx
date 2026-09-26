@@ -4,9 +4,9 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 import { api, isTauri } from "./api";
 import { APP_VERSION } from "./version";
-import type { AssetRecord, CollectionRecord, LibraryFacets, LibraryFilter, Lineage, Revision } from "./types";
-import { useDebouncedEffect } from "./hooks/useDebouncedEffect";
+import type { AssetRecord, AssetSummary, CollectionRecord, LibraryFacets, LibraryFilter, Lineage, Revision } from "./types";
 import { useDebouncedValue } from "./hooks/useDebouncedValue";
+import { useEditorDraft } from "./hooks/useEditorDraft";
 import { AppHeader } from "./components/AppHeader";
 import { LibraryPane } from "./components/LibraryPane";
 import { PreviewPane } from "./components/PreviewPane";
@@ -32,15 +32,18 @@ export default function App(){
   const[filter,setFilter]=useState<LibraryFilter>({query:"",view:"all",tag:null,model:null,collection_id:null});
   const debouncedQuery=useDebouncedValue(filter.query,180);
   const effectiveFilter=useMemo(()=>({...filter,query:debouncedQuery}),[filter,debouncedQuery]);
-  const[assets,setAssets]=useState<AssetRecord[]>([]);const[total,setTotal]=useState(0);const[loading,setLoading]=useState(false);const[facets,setFacets]=useState<LibraryFacets>(emptyFacets);
+  const[assets,setAssets]=useState<AssetSummary[]>([]);const[total,setTotal]=useState(0);const[loading,setLoading]=useState(false);const[facets,setFacets]=useState<LibraryFacets>(emptyFacets);
   const[current,setCurrent]=useState<AssetRecord|null>(null);const[selected,setSelected]=useState<Set<number>>(new Set());
   const[preview,setPreview]=useState("");const[previewMode,setPreviewMode]=useState<PreviewMode>(()=>(localStorage.getItem("imagelore.preview")||"fit") as PreviewMode);
   const[tab,setTab]=useState<InspectorTab>("prompt");const[lineage,setLineage]=useState<Lineage>(emptyLineage);const[compareRecord,setCompareRecord]=useState<AssetRecord|null>(null);
-  const[prompt,setPrompt]=useState("");const[negative,setNegative]=useState("");const[model,setModel]=useState("");const[tagsText,setTagsText]=useState("");
   const[dropActive,setDropActive]=useState(false);const[dropCount,setDropCount]=useState(0);
   const[status,setStatus]=useState("就绪");const[modal,setModal]=useState<ModalState>(null);const[dialogText,setDialogText]=useState("");const[dialogChoice,setDialogChoice]=useState("");
   const[leftWidth,setLeftWidth]=useState(Number(localStorage.getItem("imagelore.left")||348));const[rightWidth,setRightWidth]=useState(Number(localStorage.getItem("imagelore.right")||510));
   const promptRef=useRef<HTMLTextAreaElement>(null);
+
+  const onEditorSaved=useCallback((a:AssetRecord)=>setCurrent(prev=>prev?.id===a.id?a:prev),[]);
+  const editor=useEditorDraft(current,onEditorSaved,refreshFacets,setStatus);
+  const{prompt,negative,model,tagsText,setPrompt,setNegative,setModel,setTagsText,flush:flushEditor}=editor;
 
   useEffect(()=>{if(isTauri)getVersion().then(setVersion).catch(()=>setVersion(APP_VERSION))},[]);
   useEffect(()=>{localStorage.setItem("imagelore.preview",previewMode)},[previewMode]);
@@ -48,29 +51,28 @@ export default function App(){
 
   const refreshFacets=useCallback(()=>api.facets().then(setFacets).catch(()=>setFacets(emptyFacets)),[]);
   const refresh=useCallback(async(preferId?:number)=>{
+    await flushEditor();
     setLoading(true);
     try{
       const page=await api.page(effectiveFilter,0,PAGE_SIZE);setAssets(page.items);setTotal(page.total);
-      let next:AssetRecord|null=null;
-      if(preferId)next=page.items.find(x=>x.id===preferId)??await api.get(preferId).catch(()=>null);
-      if(!next&&current?.id)next=page.items.find(x=>x.id===current.id)??null;
-      if(!next)next=page.items[0]??null;
+      let nextId:number|undefined;
+      if(preferId)nextId=preferId;
+      if(!nextId&&current?.id&&page.items.some(x=>x.id===current.id))nextId=current.id;
+      if(!nextId)nextId=page.items[0]?.id;
+      const next=nextId?await api.get(nextId).catch(()=>null):null;
       setCurrent(next);if(next)setSelected(new Set([next.id]));else setSelected(new Set());
     }catch(e){setStatus(`图库加载失败：${String(e)}`)}finally{setLoading(false)}
-  },[effectiveFilter,current?.id]);
+  },[effectiveFilter,current?.id,flushEditor]);
   const loadMore=useCallback(async()=>{if(loading||assets.length>=total)return;setLoading(true);try{const page=await api.page(effectiveFilter,assets.length,PAGE_SIZE);setAssets(prev=>{const ids=new Set(prev.map(x=>x.id));return[...prev,...page.items.filter(x=>!ids.has(x.id))]});setTotal(page.total)}catch(e){setStatus(String(e))}finally{setLoading(false)}},[loading,assets,effectiveFilter,total]);
 
   useEffect(()=>{refresh().catch(()=>{})},[debouncedQuery,filter.view,filter.tag,filter.model,filter.collection_id]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(()=>{refreshFacets()},[refreshFacets]);
   useEffect(()=>{
     if(!current){setPreview("");setLineage(emptyLineage);setCompareRecord(null);setPrompt("");setNegative("");setModel("");setTagsText("");return}
-    setPrompt(current.prompt);setNegative(current.negative_prompt);setModel(current.model);setTagsText(current.tags.join(", "));
     setStatus("正在加载预览…");api.preview(current.id,previewMode==="fit"?2200:4200,false).then(src=>{setPreview(src);setStatus("就绪")}).catch(e=>{setPreview("");setStatus(`预览失败：${String(e)}`)});
     api.lineage(current.id).then(async x=>{setLineage(x);const parent=x.parents[0];setCompareRecord(parent?await api.get(parent.other_id).catch(()=>null):null)}).catch(()=>setLineage(emptyLineage));
   },[current?.id,previewMode]);
 
-  useDebouncedEffect(()=>{if(!current)return;setStatus("正在保存提示词…");api.updatePrompt(current.id,{prompt,negative_prompt:negative,model}).then(a=>{setCurrent(a);setAssets(xs=>xs.map(x=>x.id===a.id?a:x));setStatus("已保存")}).catch(e=>setStatus(`保存失败：${String(e)}`))},[prompt,negative,model,current?.id],650);
-  useDebouncedEffect(()=>{if(!current)return;const tags=parseTags(tagsText);if(JSON.stringify(tags)===JSON.stringify(current.tags))return;api.replaceTags(current.id,tags).then(a=>{setCurrent(a);setAssets(xs=>xs.map(x=>x.id===a.id?a:x));refreshFacets();setStatus("标签已保存")}).catch(e=>setStatus(`标签保存失败：${String(e)}`))},[tagsText,current?.id],800);
 
   useEffect(()=>{
     if(!isTauri)return;
@@ -106,10 +108,10 @@ export default function App(){
   const chooseFolder=async()=>{if(!isTauri){setStatus("文件夹选择器仅在桌面版中可用");return}const picked=await open({directory:true,multiple:false});if(!picked||Array.isArray(picked))return;setStatus("正在扫描文件夹…");const result=await api.importFolder(picked);setStatus(`已导入 ${result.added} 张；跳过 ${result.skipped} 张；失败 ${result.failed} 张`);await refreshFacets();await refresh(result.last_id??undefined)};
   const importDerivative=async()=>{if(!current)return;if(!isTauri){setStatus("此功能仅在桌面版中可用");return}const picked=await open({multiple:false,filters:[{name:"图片",extensions:["png","jpg","jpeg","webp","bmp","gif"]}]});if(!picked||Array.isArray(picked))return;const result=await api.importPaths([picked]);if(result.last_id){await api.addRelation(current.id,result.last_id,"derived_from","");await refresh(result.last_id);setTab("lineage");setStatus("派生图已关联")}};
 
-  const onAsset=(asset:AssetRecord,e:React.MouseEvent)=>{if(e.ctrlKey||e.metaKey){setSelected(prev=>{const next=new Set(prev);next.has(asset.id)?next.delete(asset.id):next.add(asset.id);return next})}else{setSelected(new Set([asset.id]))}setCurrent(asset)};
-  const toggleFavorite=async()=>{if(!current)return;const a=await api.toggleFavorite(current.id);setCurrent(a);setAssets(xs=>xs.map(x=>x.id===a.id?a:x));};
+  const onAsset=async(asset:AssetSummary,e:React.MouseEvent)=>{await flushEditor();if(e.ctrlKey||e.metaKey){setSelected(prev=>{const next=new Set(prev);next.has(asset.id)?next.delete(asset.id):next.add(asset.id);return next})}else{setSelected(new Set([asset.id]))}setCurrent(await api.get(asset.id))};
+  const toggleFavorite=async()=>{if(!current)return;const a=await api.toggleFavorite(current.id);setCurrent(a);setAssets(xs=>xs.map(x=>x.id===a.id?{...x,favorite:a.favorite,updated_at:a.updated_at}:x));};
   const copyPrompt=()=>{if(!current)return;navigator.clipboard.writeText(prompt).then(()=>setStatus("提示词已复制"))};
-  const saveRevision=async()=>{if(!current)return;await api.addRevision(current.id,"");setStatus("提示词版本已保存")};
+  const saveRevision=async()=>{if(!current)return;await flushEditor();await api.addRevision(current.id,"");setStatus("提示词版本已保存")};
   const openHistory=async()=>{if(!current)return;setDialogChoice("");setModal({kind:"history",revisions:await api.revisions(current.id)})};
   const openCollection=async()=>{setDialogChoice("");setDialogText("");setModal({kind:"collection",collections:await api.collections()})};
   const openBatchTags=()=>{setDialogText("");setModal({kind:"batch-tags"})};
@@ -129,7 +131,7 @@ export default function App(){
     if(modal.kind==="remove"){if(!current)return;await api.deleteAsset(current.id);setModal(null);setCurrent(null);await refreshFacets();await refresh();setStatus("记录已移除")}
   };
 
-  useEffect(()=>{const handler=(e:KeyboardEvent)=>{if(e.key==="Escape"&&modal){setModal(null);return}if(e.ctrlKey&&e.key.toLowerCase()==="f"){e.preventDefault();document.querySelector<HTMLInputElement>("#search")?.focus()}if(e.key==="F6"){e.preventDefault();promptRef.current?.focus()}if(e.key==="F7"){e.preventDefault();setPreviewMode(x=>x==="fit"?"actual":"fit")}if(e.ctrlKey&&e.shiftKey&&e.key.toLowerCase()==="c"){e.preventDefault();copyPrompt()}if(e.ctrlKey&&e.key.toLowerCase()==="s"){e.preventDefault();saveRevision()}if(e.ctrlKey&&e.key.toLowerCase()==="i"){e.preventDefault();chooseImages()}if(e.altKey&&(e.key==="ArrowUp"||e.key==="ArrowDown")){e.preventDefault();if(!current)return;const i=assets.findIndex(x=>x.id===current.id);const n=e.key==="ArrowUp"?Math.max(0,i-1):Math.min(assets.length-1,i+1);if(assets[n]){setCurrent(assets[n]);setSelected(new Set([assets[n].id]))}}};window.addEventListener("keydown",handler);return()=>window.removeEventListener("keydown",handler)},[current,assets,prompt,modal]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(()=>{const handler=(e:KeyboardEvent)=>{if(e.key==="Escape"&&modal){setModal(null);return}if(e.ctrlKey&&e.key.toLowerCase()==="f"){e.preventDefault();document.querySelector<HTMLInputElement>("#search")?.focus()}if(e.key==="F6"){e.preventDefault();promptRef.current?.focus()}if(e.key==="F7"){e.preventDefault();setPreviewMode(x=>x==="fit"?"actual":"fit")}if(e.ctrlKey&&e.shiftKey&&e.key.toLowerCase()==="c"){e.preventDefault();copyPrompt()}if(e.ctrlKey&&e.key.toLowerCase()==="s"){e.preventDefault();saveRevision()}if(e.ctrlKey&&e.key.toLowerCase()==="i"){e.preventDefault();chooseImages()}if(e.altKey&&(e.key==="ArrowUp"||e.key==="ArrowDown")){e.preventDefault();if(!current)return;const i=assets.findIndex(x=>x.id===current.id);const n=e.key==="ArrowUp"?Math.max(0,i-1):Math.min(assets.length-1,i+1);if(assets[n]){void flushEditor().then(()=>api.get(assets[n].id)).then(a=>{setCurrent(a);setSelected(new Set([a.id]))})}}};window.addEventListener("keydown",handler);return()=>window.removeEventListener("keydown",handler)},[current,assets,prompt,modal]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const drag=(side:"left"|"right")=>(e:React.PointerEvent)=>{e.currentTarget.setPointerCapture(e.pointerId);const start=e.clientX,initial=side==="left"?leftWidth:rightWidth;const move=(ev:PointerEvent)=>{const delta=ev.clientX-start;if(side==="left")setLeftWidth(Math.min(590,Math.max(280,initial+delta)));else setRightWidth(Math.min(780,Math.max(410,initial-delta)))};const up=()=>{window.removeEventListener("pointermove",move);window.removeEventListener("pointerup",up)};window.addEventListener("pointermove",move);window.addEventListener("pointerup",up)};
 
@@ -148,7 +150,7 @@ export default function App(){
       {modal.kind==="batch-tags"?<label className="modal-field"><span>标签</span><input autoFocus value={dialogText} onChange={e=>setDialogText(e.target.value)} placeholder="角色, 卧室, 参考图"/></label>:null}
       {modal.kind==="history"?<div className="choice-list">{modal.revisions.length?modal.revisions.map(r=><label className={dialogChoice===String(r.id)?"selected":""} key={r.id}><input type="radio" name="revision" value={r.id} checked={dialogChoice===String(r.id)} onChange={e=>setDialogChoice(e.target.value)}/><div><strong>{new Date(r.created_at*1000).toLocaleString("zh-CN")}</strong><span>{r.note||"提示词快照"}</span><p>{r.prompt.slice(0,150)||"（空提示词）"}</p></div></label>):<p className="muted">还没有保存过历史版本。</p>}</div>:null}
       {modal.kind==="collection"?<><div className="choice-grid">{modal.collections.map(c=><label className={dialogChoice===String(c.id)?"selected":""} key={c.id}><input type="radio" name="collection" value={c.id} checked={dialogChoice===String(c.id)} onChange={e=>setDialogChoice(e.target.value)}/><div><strong>{c.name}</strong><span>{c.count} 条记录</span></div></label>)}<label className={dialogChoice==="new"?"selected":""}><input type="radio" name="collection" value="new" checked={dialogChoice==="new"} onChange={e=>setDialogChoice(e.target.value)}/><div><strong>＋ 新建集合</strong><span>创建一个项目分组</span></div></label></div>{dialogChoice==="new"?<label className="modal-field"><span>名称</span><input autoFocus value={dialogText} onChange={e=>setDialogText(e.target.value)} placeholder="角色研究"/></label>:null}</>:null}
-      {modal.kind==="link-parent"?<div className="choice-list">{assets.filter(x=>x.id!==current?.id).slice(0,150).map(a=><label className={dialogChoice===String(a.id)?"selected":""} key={a.id}><input type="radio" name="parent" value={a.id} checked={dialogChoice===String(a.id)} onChange={e=>setDialogChoice(e.target.value)}/><div><strong>{a.name}</strong><span>{a.model||a.metadata_type}</span></div></label>)}</div>:null}
+      {modal.kind==="link-parent"?<div className="choice-list">{assets.filter(x=>x.id!==current?.id).slice(0,150).map(a=><label className={dialogChoice===String(a.id)?"selected":""} key={a.id}><input type="radio" name="parent" value={a.id} checked={dialogChoice===String(a.id)} onChange={e=>setDialogChoice(e.target.value)}/><div><strong>{a.name}</strong><span>{a.metadata_type}</span></div></label>)}</div>:null}
       {modal.kind==="remove"?<div className="warning-card"><span>!</span><div><strong>原始图片不会被删除</strong><p>只会移除这条 ImageLore 记录、历史版本、关系和集合归属。</p></div></div>:null}
     </Modal>:null}
   </div>

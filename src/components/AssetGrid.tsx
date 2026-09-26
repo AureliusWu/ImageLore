@@ -1,17 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
-import type { AssetRecord } from "../types";
+import type { AssetSummary } from "../types";
 
-function LazyThumb({asset,selected,onClick}:{asset:AssetRecord;selected:boolean;onClick:(e:React.MouseEvent)=>void}){
+function LazyThumb({asset,selected,onClick}:{asset:AssetSummary;selected:boolean;onClick:(e:React.MouseEvent)=>void}){
   const ref=useRef<HTMLButtonElement>(null);const[src,setSrc]=useState("");
   useEffect(()=>{const el=ref.current;if(!el)return;const obs=new IntersectionObserver(entries=>{if(entries.some(x=>x.isIntersecting)){api.preview(asset.id,420,true).then(setSrc).catch(()=>setSrc(""));obs.disconnect()}},{rootMargin:"300px"});obs.observe(el);return()=>obs.disconnect()},[asset.id,asset.file_mtime,asset.fingerprint]);
   return <button ref={ref} className={`asset-card ${selected?"selected":""}`} onClick={onClick} title={asset.path}>
     <div className="asset-thumb">{src?<img src={src} alt=""/>:<div className="thumb-skeleton"/>}{asset.favorite?<span className="asset-star">★</span>:null}{asset.missing?<span className="asset-missing">文件缺失</span>:null}</div>
-    <div className="asset-copy"><strong>{asset.name}</strong><span>{asset.width&&asset.height?`${asset.width}×${asset.height}`:asset.format||"Image"}</span></div>
+    <div className="asset-copy"><strong>{asset.name}</strong><span>{asset.width&&asset.height?`${asset.width}×${asset.height}`:asset.format||"图片"}</span></div>
   </button>
 }
 
-export function AssetGrid({assets,total,currentId,selected,loading,onAsset,onLoadMore}:{assets:AssetRecord[];total:number;currentId?:number;selected:Set<number>;loading:boolean;onAsset:(asset:AssetRecord,e:React.MouseEvent)=>void;onLoadMore:()=>void}){
+export function AssetGrid({assets,total,currentId,selected,loading,onAsset,onLoadMore}:{assets:AssetSummary[];total:number;currentId?:number;selected:Set<number>;loading:boolean;onAsset:(asset:AssetSummary,e:React.MouseEvent)=>void;onLoadMore:()=>void}){
   const ref=useRef<HTMLDivElement>(null);const[size,setSize]=useState({w:320,h:600});const[scrollTop,setScrollTop]=useState(0);
   useEffect(()=>{const el=ref.current;if(!el)return;const ro=new ResizeObserver(([entry])=>setSize({w:entry.contentRect.width,h:entry.contentRect.height}));ro.observe(el);return()=>ro.disconnect()},[]);
   const pad=10,gap=9,min=128,rowH=151;const cols=Math.max(1,Math.floor((size.w-pad*2+gap)/(min+gap)));const itemW=Math.max(100,(size.w-pad*2-gap*(cols-1))/cols);const rows=Math.ceil(assets.length/cols);const first=Math.max(0,Math.floor(scrollTop/rowH)-2);const last=Math.min(rows,Math.ceil((scrollTop+size.h)/rowH)+3);const visible:number[]=[];

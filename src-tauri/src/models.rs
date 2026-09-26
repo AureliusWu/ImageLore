@@ -1,6 +1,22 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssetSummary {
+    pub id: i64,
+    pub path: String,
+    pub name: String,
+    pub favorite: i64,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    pub format: String,
+    pub metadata_type: String,
+    pub fingerprint: String,
+    pub file_mtime: i64,
+    pub missing: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AssetRecord {
     pub id: i64,
     pub path: String,
@@ -42,7 +58,7 @@ fn default_view() -> String { "all".to_string() }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct LibraryPage {
-    pub items: Vec<AssetRecord>,
+    pub items: Vec<AssetSummary>,
     pub total: i64,
     pub offset: i64,
     pub limit: i64,

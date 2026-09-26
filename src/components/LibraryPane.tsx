@@ -1,11 +1,11 @@
 import { AssetGrid } from "./AssetGrid";
-import type { AssetRecord, LibraryFacets, LibraryFilter, LibraryView } from "../types";
+import type { AssetSummary, LibraryFacets, LibraryFilter, LibraryView } from "../types";
 
 const views:Array<[LibraryView,string,string]>=[["all","全部","▦"],["favorites","收藏","★"],["recent","最近","◷"],["missing","缺失","!"]];
 
 export function LibraryPane({assets,total,currentId,selected,loading,filter,facets,onFilter,onAsset,onLoadMore,onBatchTags,onCollection,onClearSelection,onRefreshMissing}:{
-  assets:AssetRecord[];total:number;currentId?:number;selected:Set<number>;loading:boolean;filter:LibraryFilter;facets:LibraryFacets;
-  onFilter:(next:LibraryFilter)=>void;onAsset:(asset:AssetRecord,e:React.MouseEvent)=>void;onLoadMore:()=>void;onBatchTags:()=>void;onCollection:()=>void;onClearSelection:()=>void;onRefreshMissing:()=>void;
+  assets:AssetSummary[];total:number;currentId?:number;selected:Set<number>;loading:boolean;filter:LibraryFilter;facets:LibraryFacets;
+  onFilter:(next:LibraryFilter)=>void;onAsset:(asset:AssetSummary,e:React.MouseEvent)=>void;onLoadMore:()=>void;onBatchTags:()=>void;onCollection:()=>void;onClearSelection:()=>void;onRefreshMissing:()=>void;
 }){
   const activeFilters=Number(!!filter.tag)+Number(!!filter.model)+Number(!!filter.collection_id);
   return <aside className="library-pane panel glass-surface">

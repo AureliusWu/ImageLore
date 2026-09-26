@@ -9,30 +9,33 @@ export interface LibraryFilter {
   collection_id?: number | null;
 }
 
-export interface AssetRecord {
+export interface AssetSummary {
   id: number;
   path: string;
   name: string;
+  favorite: number;
+  width: number | null;
+  height: number | null;
+  format: string;
+  metadata_type: string;
+  fingerprint: string;
+  file_mtime: number;
+  missing: number;
+  updated_at: number;
+}
+
+export interface AssetRecord extends AssetSummary {
   prompt: string;
   negative_prompt: string;
   model: string;
   tags: string[];
-  favorite: number;
-  width: number | null;
-  height: number | null;
   file_size: number | null;
-  format: string;
   mime_type: string;
-  metadata_type: string;
   generation_json: string;
-  fingerprint: string;
-  file_mtime: number;
-  missing: number;
   created_at: number;
-  updated_at: number;
 }
 
-export interface LibraryPage { items: AssetRecord[]; total: number; offset: number; limit: number; }
+export interface LibraryPage { items: AssetSummary[]; total: number; offset: number; limit: number; }
 export interface FacetCount { name: string; count: number; }
 export interface CollectionRecord { id:number; name:string; description:string; created_at:number; updated_at:number; count:number; }
 export interface LibraryFacets { tags:FacetCount[]; models:FacetCount[]; collections:CollectionRecord[]; }
