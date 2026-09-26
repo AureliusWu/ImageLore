@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AssetRecord, CollectionRecord, ImportSummary, LibraryFacets, LibraryFilter, LibraryPage, Lineage, PromptPatch, Revision } from "./types";
+import type { AssetRecord, AssetSummary, CollectionRecord, ImportSummary, LibraryFacets, LibraryFilter, LibraryPage, Lineage, PromptPatch, Revision } from "./types";
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -19,6 +19,8 @@ const demoImages = new Map<number,string>([
 ]);
 let mockCollections:CollectionRecord[]=[{id:1,name:"Character Study",description:"Main character experiments",created_at:0,updated_at:0,count:3}];
 
+const toSummary=(a:AssetRecord):AssetSummary=>({id:a.id,path:a.path,name:a.name,favorite:a.favorite,width:a.width,height:a.height,format:a.format,metadata_type:a.metadata_type,fingerprint:a.fingerprint,file_mtime:a.file_mtime,missing:a.missing,updated_at:a.updated_at});
+
 function filtered(filter:LibraryFilter){
   const q=filter.query.trim().toLowerCase();
   return mockAssets.filter(a=>(!q||[a.name,a.prompt,a.negative_prompt,a.model,...a.tags].join(" ").toLowerCase().includes(q))
@@ -29,7 +31,7 @@ function filtered(filter:LibraryFilter){
 async function mockCall<T>(command:string,args:Record<string,unknown>):Promise<T>{
   await new Promise(r=>setTimeout(r,20));
   switch(command){
-    case "library_page":{const filter=args.filter as LibraryFilter;const offset=Number(args.offset||0),limit=Number(args.limit||200);const all=filtered(filter);return {items:all.slice(offset,offset+limit),total:all.length,offset,limit} as T;}
+    case "library_page":{const filter=args.filter as LibraryFilter;const offset=Number(args.offset||0),limit=Number(args.limit||200);const all=filtered(filter);return {items:all.slice(offset,offset+limit).map(toSummary),total:all.length,offset,limit} as T;}
     case "library_facets":return {tags:[{name:"character",count:2},{name:"aero",count:1},{name:"study",count:1}],models:[{name:"GPT Image",count:3},{name:"Flux",count:2}],collections:mockCollections} as T;
     case "get_asset":return mockAssets.find(x=>x.id===Number(args.id)) as T;
     case "preview_data_url":return (demoImages.get(Number(args.id))||demoSvg("Preview","#73c7e5","#71bb6a")) as T;
