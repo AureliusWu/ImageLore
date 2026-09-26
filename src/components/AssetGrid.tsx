@@ -6,7 +6,7 @@ function LazyThumb({asset,selected,onClick}:{asset:AssetRecord;selected:boolean;
   const ref=useRef<HTMLButtonElement>(null);const[src,setSrc]=useState("");
   useEffect(()=>{const el=ref.current;if(!el)return;const obs=new IntersectionObserver(entries=>{if(entries.some(x=>x.isIntersecting)){api.preview(asset.id,420,true).then(setSrc).catch(()=>setSrc(""));obs.disconnect()}},{rootMargin:"300px"});obs.observe(el);return()=>obs.disconnect()},[asset.id,asset.file_mtime,asset.fingerprint]);
   return <button ref={ref} className={`asset-card ${selected?"selected":""}`} onClick={onClick} title={asset.path}>
-    <div className="asset-thumb">{src?<img src={src} alt=""/>:<div className="thumb-skeleton"/>}{asset.favorite?<span className="asset-star">★</span>:null}{asset.missing?<span className="asset-missing">Missing</span>:null}</div>
+    <div className="asset-thumb">{src?<img src={src} alt=""/>:<div className="thumb-skeleton"/>}{asset.favorite?<span className="asset-star">★</span>:null}{asset.missing?<span className="asset-missing">文件缺失</span>:null}</div>
     <div className="asset-copy"><strong>{asset.name}</strong><span>{asset.width&&asset.height?`${asset.width}×${asset.height}`:asset.format||"Image"}</span></div>
   </button>
 }
@@ -20,6 +20,6 @@ export function AssetGrid({assets,total,currentId,selected,loading,onAsset,onLoa
   const handleScroll=(e:React.UIEvent<HTMLDivElement>)=>{const el=e.currentTarget;setScrollTop(el.scrollTop);if(!loading&&assets.length<total&&el.scrollTop+el.clientHeight>el.scrollHeight-750)onLoadMore()};
   return <div className="asset-grid" ref={ref} onScroll={handleScroll}><div className="asset-grid-inner" style={{height:innerH}}>
     {visible.map(i=>{const a=assets[i],r=Math.floor(i/cols),c=i%cols;return <div className="asset-grid-item" key={a.id} style={{left:pad+c*(itemW+gap),top:r*rowH,width:itemW}}><LazyThumb asset={a} selected={selected.has(a.id)||currentId===a.id} onClick={e=>onAsset(a,e)}/></div>})}
-    {assets.length<total?<div className="load-marker" style={{top:rows*rowH}}>{loading?"Loading…":`${assets.length} / ${total}`}</div>:null}
+    {assets.length<total?<div className="load-marker" style={{top:rows*rowH}}>{loading?"加载中…":`${assets.length} / ${total}`}</div>:null}
   </div></div>
 }

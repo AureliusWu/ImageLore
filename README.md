@@ -1,4 +1,4 @@
-# ImageLore v0.10.0 — Clean Core
+# ImageLore v0.11.0
 
 ImageLore is a local-first desktop library for AI-generated images and the context behind them: prompts, generation metadata, revisions, collections, and parent/derivative relationships.
 
