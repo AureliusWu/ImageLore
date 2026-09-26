@@ -80,5 +80,5 @@ export function useEditorDraft(
 
   useEffect(()=>()=>{window.clearTimeout(timer.current);void flush()},[flush]);
 
-  return{prompt,negative,model,tagsText,setPrompt,setNegative,setModel,setTagsText,flush};
+  return{prompt,negative,model,tagsText,setPrompt,setNegative,setModel,setTagsText,flush,load:hydrate};
 }
