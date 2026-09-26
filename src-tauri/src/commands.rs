@@ -1,159 +1,19 @@
-use crate::{db, metadata, models::*, preview, state::AppState};
+use crate::{db, metadata, models::*, preview, sidecar, state::AppState};
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
 use std::{collections::{HashMap, HashSet}, fs, path::{Path, PathBuf}, process::Command};
 use tauri::State;
 use walkdir::WalkDir;
 
-fn sidecar_path(path: &Path) -> PathBuf {
-    PathBuf::from(format!("{}.imagelore.json", path.to_string_lossy()))
-}
-
-fn read_sidecar(path: &Path) -> Option<Value> {
-    let text = fs::read_to_string(sidecar_path(path)).ok()?;
-    let value = serde_json::from_str::<Value>(&text).ok()?;
-    if value.get("schema").and_then(Value::as_str) == Some("imagelore.sidecar.v2") { Some(value) } else { None }
-}
-
-fn sidecar_text(value: &Value, key: &str) -> String {
-    value.get(key).and_then(Value::as_str).unwrap_or("").to_string()
-}
-
-fn sidecar_tags(value: &Value) -> Vec<String> {
-    value.get("tags").and_then(Value::as_array).map(|items| {
-        items.iter().filter_map(Value::as_str).map(str::to_string).collect()
-    }).unwrap_or_default()
-}
-
-fn add_one(conn: &mut Connection, path: &Path) -> Result<Option<i64>, String> {
-    if !path.is_file() || !metadata::is_supported(path) { return Ok(None); }
-    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    let path_text = canonical.to_string_lossy().to_string();
-    if let Some(id) = db::asset_exists_by_path(conn, &path_text)? {
-        conn.execute("UPDATE assets SET missing=0,updated_at=?1 WHERE id=?2", params![db::now(), id]).map_err(|e| e.to_string())?;
-        return Ok(Some(id));
-    }
-
-    let info = metadata::file_info(&canonical);
-    let extract = metadata::extract_generation(&canonical);
-    let sidecar = read_sidecar(&canonical);
-    let prompt = sidecar.as_ref().map(|x| sidecar_text(x,"prompt")).filter(|x| !x.is_empty()).unwrap_or(extract.prompt);
-    let negative = sidecar.as_ref().map(|x| sidecar_text(x,"negative_prompt")).filter(|x| !x.is_empty()).unwrap_or(extract.negative_prompt);
-    let model = sidecar.as_ref().map(|x| sidecar_text(x,"model")).filter(|x| !x.is_empty()).unwrap_or(extract.model);
-    let tags = sidecar.as_ref().map(sidecar_tags).unwrap_or_default();
-    let fingerprint = metadata::fingerprint(&canonical);
-    let timestamp = db::now();
-    let name = canonical.file_name().and_then(|x| x.to_str()).unwrap_or("image").to_string();
-
-    conn.execute(
-        "INSERT INTO assets(path,name,favorite,width,height,file_size,format,mime_type,metadata_type,generation_json,fingerprint,file_mtime,missing,created_at,updated_at) VALUES(?1,?2,0,?3,?4,?5,?6,?7,?8,?9,?10,?11,0,?12,?12)",
-        params![path_text,name,info.width,info.height,info.file_size,info.format,info.mime_type,extract.metadata_type,extract.generation_json,fingerprint,info.file_mtime,timestamp]
-    ).map_err(|e| e.to_string())?;
-    let id = conn.last_insert_rowid();
-    conn.execute(
-        "INSERT INTO prompt_state(asset_id,prompt,negative_prompt,model,updated_at) VALUES(?1,?2,?3,?4,?5)",
-        params![id,prompt,negative,model,timestamp]
-    ).map_err(|e| e.to_string())?;
-    db::set_tags(conn,id,&tags)?;
-    Ok(Some(id))
-}
-
 #[tauri::command]
-pub fn library_page(state: State<'_,AppState>, filter: LibraryFilter, offset:i64, limit:i64) -> Result<LibraryPage,String> {
-    let conn = state.db.lock().map_err(|e|e.to_string())?;
-    db::library_page(&conn,&filter,offset,limit)
-}
-
-#[tauri::command]
-pub fn library_facets(state: State<'_,AppState>) -> Result<LibraryFacets,String> {
-    let conn = state.db.lock().map_err(|e|e.to_string())?;
-    db::facets(&conn)
-}
-
-#[tauri::command]
-pub fn get_asset(state: State<'_,AppState>, id:i64) -> Result<AssetRecord,String> {
-    let conn = state.db.lock().map_err(|e|e.to_string())?;
-    db::get_asset(&conn,id)
-}
-
-#[tauri::command]
-pub fn import_paths(state: State<'_,AppState>, paths:Vec<String>) -> Result<ImportSummary,String> {
-    let mut conn = state.db.lock().map_err(|e|e.to_string())?;
-    let mut result = ImportSummary{added:0,skipped:0,failed:0,last_id:None};
-    for raw in paths {
-        let existed = db::asset_exists_by_path(&conn,&PathBuf::from(&raw).canonicalize().unwrap_or_else(|_|PathBuf::from(&raw)).to_string_lossy())?.is_some();
-        match add_one(&mut conn,Path::new(&raw)) {
-            Ok(Some(id)) => { if existed { result.skipped+=1 } else { result.added+=1 }; result.last_id=Some(id); },
-            Ok(None) => result.skipped+=1,
-            Err(_) => result.failed+=1,
-        }
-    }
-    Ok(result)
-}
-
-#[tauri::command]
-pub fn import_folder(state: State<'_,AppState>, path:String) -> Result<ImportSummary,String> {
-    let mut conn = state.db.lock().map_err(|e|e.to_string())?;
-    let mut result = ImportSummary{added:0,skipped:0,failed:0,last_id:None};
-    for entry in WalkDir::new(&path).follow_links(false).into_iter().filter_map(Result::ok) {
-        if !entry.file_type().is_file() || !metadata::is_supported(entry.path()) { continue; }
-        let canonical = entry.path().canonicalize().unwrap_or_else(|_|entry.path().to_path_buf());
-        let existed = db::asset_exists_by_path(&conn,&canonical.to_string_lossy())?.is_some();
-        match add_one(&mut conn,entry.path()) {
-            Ok(Some(id)) => { if existed { result.skipped+=1 } else { result.added+=1 }; result.last_id=Some(id); },
-            Ok(None) => result.skipped+=1,
-            Err(_) => result.failed+=1,
-        }
-    }
-    Ok(result)
-}
-
-#[tauri::command]
-pub fn import_dropped_paths(state: State<'_,AppState>, paths:Vec<String>) -> Result<ImportSummary,String> {
-    let mut conn = state.db.lock().map_err(|e|e.to_string())?;
-    let mut result = ImportSummary{added:0,skipped:0,failed:0,last_id:None};
-
-    for raw in paths {
-        let root = PathBuf::from(&raw);
-        if root.is_dir() {
-            for entry in WalkDir::new(&root).follow_links(false).into_iter().filter_map(Result::ok) {
-                if !entry.file_type().is_file() || !metadata::is_supported(entry.path()) { continue; }
-                let canonical = entry.path().canonicalize().unwrap_or_else(|_|entry.path().to_path_buf());
-                let existed = db::asset_exists_by_path(&conn,&canonical.to_string_lossy())?.is_some();
-                match add_one(&mut conn,entry.path()) {
-                    Ok(Some(id)) => {
-                        if existed { result.skipped+=1 } else { result.added+=1 }
-                        result.last_id=Some(id);
-                    },
-                    Ok(None) => result.skipped+=1,
-                    Err(_) => result.failed+=1,
-                }
-            }
-        } else if root.is_file() {
-            let canonical = root.canonicalize().unwrap_or_else(|_|root.clone());
-            let existed = db::asset_exists_by_path(&conn,&canonical.to_string_lossy())?.is_some();
-            match add_one(&mut conn,&root) {
-                Ok(Some(id)) => {
-                    if existed { result.skipped+=1 } else { result.added+=1 }
-                    result.last_id=Some(id);
-                },
-                Ok(None) => result.skipped+=1,
-                Err(_) => result.failed+=1,
-            }
-        } else {
-            result.failed+=1;
-        }
-    }
-    Ok(result)
-}
-
-#[tauri::command]
-pub fn update_prompt(state:State<'_,AppState>, id:i64, patch:PromptPatch) -> Result<AssetRecord,String> {
-    let conn = state.db.lock().map_err(|e|e.to_string())?;
+pub fn update_prompt(state:State<'_,AppState>,id:i64,patch:PromptPatch)->Result<AssetRecord,String>{
+    let mut conn=state.db.lock().map_err(|e|e.to_string())?;
     let stamp=db::now();
-    conn.execute("INSERT INTO prompt_state(asset_id,prompt,negative_prompt,model,updated_at) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(asset_id) DO UPDATE SET prompt=excluded.prompt,negative_prompt=excluded.negative_prompt,model=excluded.model,updated_at=excluded.updated_at", params![id,patch.prompt,patch.negative_prompt,patch.model,stamp]).map_err(|e|e.to_string())?;
-    conn.execute("UPDATE assets SET updated_at=?1 WHERE id=?2",params![stamp,id]).map_err(|e|e.to_string())?;
-    db::reindex_asset(&conn,id)?;
+    let tx=conn.transaction().map_err(|e|e.to_string())?;
+    tx.execute("INSERT INTO prompt_state(asset_id,prompt,negative_prompt,model,updated_at) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(asset_id) DO UPDATE SET prompt=excluded.prompt,negative_prompt=excluded.negative_prompt,model=excluded.model,updated_at=excluded.updated_at",params![id,patch.prompt,patch.negative_prompt,patch.model,stamp]).map_err(|e|e.to_string())?;
+    tx.execute("UPDATE assets SET updated_at=?1 WHERE id=?2",params![stamp,id]).map_err(|e|e.to_string())?;
+    db::reindex_asset(&tx,id)?;
+    tx.commit().map_err(|e|e.to_string())?;
     db::get_asset(&conn,id)
 }
 
@@ -209,7 +69,7 @@ pub fn list_revisions(state:State<'_,AppState>, id:i64) -> Result<Vec<Revision>,
 }
 
 #[tauri::command]
-pub fn restore_revision(state:State<'_,AppState>, revision_id:i64) -> Result<AssetRecord,String> {
+pub fn restore_revision(state:State<'_,AppState>,revision_id:i64)->Result<AssetRecord,String>{
     let mut conn=state.db.lock().map_err(|e|e.to_string())?;
     let rev:Revision=conn.query_row("SELECT id,asset_id,prompt,negative_prompt,model,tags_json,note,created_at FROM prompt_revisions WHERE id=?1",params![revision_id],|r|{
         let tags_json:String=r.get(5)?;
@@ -217,10 +77,13 @@ pub fn restore_revision(state:State<'_,AppState>, revision_id:i64) -> Result<Ass
     }).map_err(|e|e.to_string())?;
     let current=db::get_asset(&conn,rev.asset_id)?;
     let current_tags=serde_json::to_string(&current.tags).map_err(|e|e.to_string())?;
-    conn.execute("INSERT INTO prompt_revisions(asset_id,prompt,negative_prompt,model,tags_json,note,created_at) VALUES(?1,?2,?3,?4,?5,'Before restore',?6)",params![current.id,current.prompt,current.negative_prompt,current.model,current_tags,db::now()]).map_err(|e|e.to_string())?;
-    conn.execute("UPDATE prompt_state SET prompt=?1,negative_prompt=?2,model=?3,updated_at=?4 WHERE asset_id=?5",params![rev.prompt,rev.negative_prompt,rev.model,db::now(),rev.asset_id]).map_err(|e|e.to_string())?;
-    db::set_tags(&mut conn,rev.asset_id,&rev.tags)?;
-    db::reindex_asset(&conn,rev.asset_id)?;
+    let tx=conn.transaction().map_err(|e|e.to_string())?;
+    tx.execute("INSERT INTO prompt_revisions(asset_id,prompt,negative_prompt,model,tags_json,note,created_at) VALUES(?1,?2,?3,?4,?5,'Before restore',?6)",params![current.id,current.prompt,current.negative_prompt,current.model,current_tags,db::now()]).map_err(|e|e.to_string())?;
+    tx.execute("UPDATE prompt_state SET prompt=?1,negative_prompt=?2,model=?3,updated_at=?4 WHERE asset_id=?5",params![rev.prompt,rev.negative_prompt,rev.model,db::now(),rev.asset_id]).map_err(|e|e.to_string())?;
+    db::replace_tags_raw(&tx,rev.asset_id,&rev.tags)?;
+    tx.execute("UPDATE assets SET updated_at=?1 WHERE id=?2",params![db::now(),rev.asset_id]).map_err(|e|e.to_string())?;
+    db::reindex_asset(&tx,rev.asset_id)?;
+    tx.commit().map_err(|e|e.to_string())?;
     db::get_asset(&conn,rev.asset_id)
 }
 
@@ -300,7 +163,7 @@ pub fn rescan_metadata(state:State<'_,AppState>,id:i64)->Result<AssetRecord,Stri
 pub fn export_sidecar(state:State<'_,AppState>,id:i64)->Result<String,String>{
     let conn=state.db.lock().map_err(|e|e.to_string())?; let asset=db::get_asset(&conn,id)?; let lin=Lineage{parents:relations(&conn,id,true)?,children:relations(&conn,id,false)?};
     let data=json!({"schema":"imagelore.sidecar.v2","image":asset.path,"fingerprint":asset.fingerprint,"prompt":asset.prompt,"negative_prompt":asset.negative_prompt,"model":asset.model,"tags":asset.tags,"metadata_type":asset.metadata_type,"generation":serde_json::from_str::<Value>(&asset.generation_json).unwrap_or(Value::String(asset.generation_json)),"parents":lin.parents});
-    let out=sidecar_path(Path::new(&asset.path)); fs::write(&out,serde_json::to_string_pretty(&data).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?; Ok(out.to_string_lossy().to_string())
+    let out=sidecar::path_for(Path::new(&asset.path)); fs::write(&out,serde_json::to_string_pretty(&data).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?; Ok(out.to_string_lossy().to_string())
 }
 
 #[tauri::command]

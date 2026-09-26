@@ -1,8 +1,11 @@
 mod commands;
 mod db;
+mod importer;
+mod migrations;
 mod metadata;
 mod models;
 mod preview;
+mod sidecar;
 mod state;
 
 use state::AppState;
@@ -21,9 +24,9 @@ pub fn run() {
             commands::library_page,
             commands::library_facets,
             commands::get_asset,
-            commands::import_paths,
-            commands::import_folder,
-            commands::import_dropped_paths,
+            importer::import_paths,
+            importer::import_folder,
+            importer::import_dropped_paths,
             commands::update_prompt,
             commands::replace_tags,
             commands::batch_add_tags,
