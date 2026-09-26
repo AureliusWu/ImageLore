@@ -14,10 +14,13 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+
       - uses: dtolnay/rust-toolchain@stable
+
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: './src-tauri -> target'
@@ -25,14 +28,25 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
-      - name: Verify project
+      - name: Sync and verify version
         run: |
           npm run version:sync
           npm run version:check
-          python scripts/check_project.py
-          python scripts/test_schema.py
-          python scripts/test_scale.py
-          python scripts/test_contract.py
+
+      - name: Project integrity
+        run: python scripts/check_project.py
+
+      - name: Schema test
+        run: python scripts/test_schema.py
+
+      - name: 10k scale test
+        run: python scripts/test_scale.py
+
+      - name: Frontend/native command contract
+        run: python scripts/test_contract.py
+
+      - name: TypeScript check
+        run: npx tsc --noEmit
 
       - name: Build NSIS setup EXE
         run: npm run tauri:build

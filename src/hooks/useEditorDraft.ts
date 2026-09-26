@@ -37,10 +37,11 @@ export function useEditorDraft(
 
   const flush=useCallback(async()=>{
     const snapshot={...draft.current};
-    if(!snapshot.assetId)return;
+    const assetId=snapshot.assetId;
+    if(assetId===null)return;
     window.clearTimeout(timer.current);
     const base=baseline.current;
-    if(base.assetId!==snapshot.assetId)return;
+    if(base.assetId!==assetId)return;
 
     saving.current=saving.current.then(async()=>{
       let latest:AssetRecord|null=null;
@@ -48,10 +49,10 @@ export function useEditorDraft(
       const tags=parseTags(snapshot.tagsText),baseTags=parseTags(base.tagsText);
       if(textChanged){
         setStatus("正在保存提示词…");
-        latest=await api.updatePrompt(snapshot.assetId,{prompt:snapshot.prompt,negative_prompt:snapshot.negative,model:snapshot.model});
+        latest=await api.updatePrompt(assetId,{prompt:snapshot.prompt,negative_prompt:snapshot.negative,model:snapshot.model});
       }
       if(!sameTags(tags,baseTags)){
-        latest=await api.replaceTags(snapshot.assetId,tags);
+        latest=await api.replaceTags(assetId,tags);
         onTagsSaved();
       }
       if(latest){
