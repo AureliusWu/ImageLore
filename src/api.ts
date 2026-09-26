@@ -36,7 +36,7 @@ async function mockCall<T>(command:string,args:Record<string,unknown>):Promise<T
     case "update_prompt":{const id=Number(args.id),patch=args.patch as PromptPatch;mockAssets=mockAssets.map(x=>x.id===id?{...x,...patch,updated_at:Math.floor(Date.now()/1000)}:x);return mockAssets.find(x=>x.id===id) as T;}
     case "replace_tags":{const id=Number(args.id),tags=args.tags as string[];mockAssets=mockAssets.map(x=>x.id===id?{...x,tags}:x);return mockAssets.find(x=>x.id===id) as T;}
     case "toggle_favorite":{const a=mockAssets.find(x=>x.id===Number(args.id));if(a)a.favorite=a.favorite?0:1;return a as T;}
-    case "import_paths":case "import_folder":return {added:0,skipped:0,failed:0,last_id:null} as T;
+    case "import_paths":case "import_folder":case "import_dropped_paths":return {added:0,skipped:0,failed:0,last_id:null} as T;
     case "batch_add_tags":return true as T;
     case "delete_asset":{mockAssets=mockAssets.filter(x=>x.id!==Number(args.id));return true as T;}
     case "add_revision":return true as T;
@@ -65,6 +65,7 @@ export const api={
   preview:(id:number,maxEdge:number,thumbnail=false)=>call<string>("preview_data_url",{id,maxEdge,thumbnail}),
   importPaths:(paths:string[])=>call<ImportSummary>("import_paths",{paths}),
   importFolder:(path:string)=>call<ImportSummary>("import_folder",{path}),
+  importDroppedPaths:(paths:string[])=>call<ImportSummary>("import_dropped_paths",{paths}),
   updatePrompt:(id:number,patch:PromptPatch)=>call<AssetRecord>("update_prompt",{id,patch}),
   replaceTags:(id:number,tags:string[])=>call<AssetRecord>("replace_tags",{id,tags}),
   batchAddTags:(ids:number[],tags:string[])=>call<boolean>("batch_add_tags",{ids,tags}),

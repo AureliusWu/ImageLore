@@ -23,6 +23,7 @@ pub fn run() {
             commands::get_asset,
             commands::import_paths,
             commands::import_folder,
+            commands::import_dropped_paths,
             commands::update_prompt,
             commands::replace_tags,
             commands::batch_add_tags,
