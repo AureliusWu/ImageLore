@@ -109,6 +109,45 @@ pub fn import_folder(state: State<'_,AppState>, path:String) -> Result<ImportSum
 }
 
 #[tauri::command]
+pub fn import_dropped_paths(state: State<'_,AppState>, paths:Vec<String>) -> Result<ImportSummary,String> {
+    let mut conn = state.db.lock().map_err(|e|e.to_string())?;
+    let mut result = ImportSummary{added:0,skipped:0,failed:0,last_id:None};
+
+    for raw in paths {
+        let root = PathBuf::from(&raw);
+        if root.is_dir() {
+            for entry in WalkDir::new(&root).follow_links(false).into_iter().filter_map(Result::ok) {
+                if !entry.file_type().is_file() || !metadata::is_supported(entry.path()) { continue; }
+                let canonical = entry.path().canonicalize().unwrap_or_else(|_|entry.path().to_path_buf());
+                let existed = db::asset_exists_by_path(&conn,&canonical.to_string_lossy())?.is_some();
+                match add_one(&mut conn,entry.path()) {
+                    Ok(Some(id)) => {
+                        if existed { result.skipped+=1 } else { result.added+=1 }
+                        result.last_id=Some(id);
+                    },
+                    Ok(None) => result.skipped+=1,
+                    Err(_) => result.failed+=1,
+                }
+            }
+        } else if root.is_file() {
+            let canonical = root.canonicalize().unwrap_or_else(|_|root.clone());
+            let existed = db::asset_exists_by_path(&conn,&canonical.to_string_lossy())?.is_some();
+            match add_one(&mut conn,&root) {
+                Ok(Some(id)) => {
+                    if existed { result.skipped+=1 } else { result.added+=1 }
+                    result.last_id=Some(id);
+                },
+                Ok(None) => result.skipped+=1,
+                Err(_) => result.failed+=1,
+            }
+        } else {
+            result.failed+=1;
+        }
+    }
+    Ok(result)
+}
+
+#[tauri::command]
 pub fn update_prompt(state:State<'_,AppState>, id:i64, patch:PromptPatch) -> Result<AssetRecord,String> {
     let conn = state.db.lock().map_err(|e|e.to_string())?;
     let stamp=db::now();

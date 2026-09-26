@@ -27,6 +27,10 @@ The old single `images` table has been replaced with explicit domains:
 
 Original image files are never copied into SQLite.
 
+## 快速导入
+
+在 Windows 桌面版中，可以把图片、多个图片或整个文件夹直接拖进 ImageLore 窗口。文件夹会递归扫描，重复图片自动跳过。
+
 ## v0.10 user experience
 
 The Frutiger Aero inspired workspace remains intentionally light and readable:

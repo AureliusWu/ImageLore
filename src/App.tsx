@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 import { api, isTauri } from "./api";
 import { APP_VERSION } from "./version";
@@ -36,6 +37,7 @@ export default function App(){
   const[preview,setPreview]=useState("");const[previewMode,setPreviewMode]=useState<PreviewMode>(()=>(localStorage.getItem("imagelore.preview")||"fit") as PreviewMode);
   const[tab,setTab]=useState<InspectorTab>("prompt");const[lineage,setLineage]=useState<Lineage>(emptyLineage);const[compareRecord,setCompareRecord]=useState<AssetRecord|null>(null);
   const[prompt,setPrompt]=useState("");const[negative,setNegative]=useState("");const[model,setModel]=useState("");const[tagsText,setTagsText]=useState("");
+  const[dropActive,setDropActive]=useState(false);const[dropCount,setDropCount]=useState(0);
   const[status,setStatus]=useState("就绪");const[modal,setModal]=useState<ModalState>(null);const[dialogText,setDialogText]=useState("");const[dialogChoice,setDialogChoice]=useState("");
   const[leftWidth,setLeftWidth]=useState(Number(localStorage.getItem("imagelore.left")||348));const[rightWidth,setRightWidth]=useState(Number(localStorage.getItem("imagelore.right")||510));
   const promptRef=useRef<HTMLTextAreaElement>(null);
@@ -70,6 +72,36 @@ export default function App(){
   useDebouncedEffect(()=>{if(!current)return;setStatus("正在保存提示词…");api.updatePrompt(current.id,{prompt,negative_prompt:negative,model}).then(a=>{setCurrent(a);setAssets(xs=>xs.map(x=>x.id===a.id?a:x));setStatus("已保存")}).catch(e=>setStatus(`保存失败：${String(e)}`))},[prompt,negative,model,current?.id],650);
   useDebouncedEffect(()=>{if(!current)return;const tags=parseTags(tagsText);if(JSON.stringify(tags)===JSON.stringify(current.tags))return;api.replaceTags(current.id,tags).then(a=>{setCurrent(a);setAssets(xs=>xs.map(x=>x.id===a.id?a:x));refreshFacets();setStatus("标签已保存")}).catch(e=>setStatus(`标签保存失败：${String(e)}`))},[tagsText,current?.id],800);
 
+  useEffect(()=>{
+    if(!isTauri)return;
+    let disposed=false;let unlisten:(()=>void)|undefined;
+    getCurrentWebview().onDragDropEvent(async event=>{
+      const payload=event.payload;
+      if(payload.type==="enter"){
+        setDropActive(true);setDropCount(payload.paths.length);setStatus(`检测到 ${payload.paths.length} 个拖入项目`);
+      }else if(payload.type==="over"){
+        setDropActive(true);
+      }else if(payload.type==="leave"){
+        setDropActive(false);setDropCount(0);setStatus("就绪");
+      }else if(payload.type==="drop"){
+        setDropActive(false);setDropCount(payload.paths.length);
+        if(!payload.paths.length){setStatus("没有可导入的项目");return}
+        try{
+          setStatus("正在导入拖入的文件…");
+          const result=await api.importDroppedPaths(payload.paths);
+          setStatus(`拖拽导入完成：新增 ${result.added} 张，跳过 ${result.skipped} 张，失败 ${result.failed} 张`);
+          await refreshFacets();
+          await refresh(result.last_id??undefined);
+        }catch(e){
+          setStatus(`拖拽导入失败：${String(e)}`);
+        }finally{
+          setDropCount(0);
+        }
+      }
+    }).then(fn=>{if(disposed)fn();else unlisten=fn}).catch(e=>setStatus(`拖拽监听启动失败：${String(e)}`));
+    return()=>{disposed=true;unlisten?.()};
+  },[refresh,refreshFacets]);
+
   const chooseImages=async()=>{if(!isTauri){setStatus("文件选择器仅在桌面版中可用");return}const picked=await open({multiple:true,filters:[{name:"图片",extensions:["png","jpg","jpeg","webp","bmp","gif"]}]});if(!picked)return;const paths=Array.isArray(picked)?picked:[picked];setStatus("正在导入…");const result=await api.importPaths(paths);setStatus(`已导入 ${result.added} 张；跳过 ${result.skipped} 张；失败 ${result.failed} 张`);await refreshFacets();await refresh(result.last_id??undefined)};
   const chooseFolder=async()=>{if(!isTauri){setStatus("文件夹选择器仅在桌面版中可用");return}const picked=await open({directory:true,multiple:false});if(!picked||Array.isArray(picked))return;setStatus("正在扫描文件夹…");const result=await api.importFolder(picked);setStatus(`已导入 ${result.added} 张；跳过 ${result.skipped} 张；失败 ${result.failed} 张`);await refreshFacets();await refresh(result.last_id??undefined)};
   const importDerivative=async()=>{if(!current)return;if(!isTauri){setStatus("此功能仅在桌面版中可用");return}const picked=await open({multiple:false,filters:[{name:"图片",extensions:["png","jpg","jpeg","webp","bmp","gif"]}]});if(!picked||Array.isArray(picked))return;const result=await api.importPaths([picked]);if(result.last_id){await api.addRelation(current.id,result.last_id,"derived_from","");await refresh(result.last_id);setTab("lineage");setStatus("派生图已关联")}};
@@ -102,6 +134,7 @@ export default function App(){
   const drag=(side:"left"|"right")=>(e:React.PointerEvent)=>{e.currentTarget.setPointerCapture(e.pointerId);const start=e.clientX,initial=side==="left"?leftWidth:rightWidth;const move=(ev:PointerEvent)=>{const delta=ev.clientX-start;if(side==="left")setLeftWidth(Math.min(590,Math.max(280,initial+delta)));else setRightWidth(Math.min(780,Math.max(410,initial-delta)))};const up=()=>{window.removeEventListener("pointermove",move);window.removeEventListener("pointerup",up)};window.addEventListener("pointermove",move);window.addEventListener("pointerup",up)};
 
   return <div className="app-shell"><div className="aero-background" aria-hidden="true"><i className="cloud a"/><i className="cloud b"/><i className="bubble a"/><i className="bubble b"/></div>
+    {dropActive?<div className="drop-overlay" aria-live="polite"><div className="drop-card"><span className="drop-orb">⇩</span><strong>松开鼠标即可导入</strong><p>{dropCount>0?`检测到 ${dropCount} 个项目`:"正在识别拖入内容"} · 支持图片和文件夹</p><small>文件夹会递归扫描；已存在的图片会自动跳过</small></div></div>:null}
     <AppHeader version={version} query={filter.query} onQuery={query=>setFilter(f=>({...f,query}))} onImport={chooseImages} onFolder={chooseFolder}/>
     <main className="workspace" style={{gridTemplateColumns:`${leftWidth}px 8px minmax(360px,1fr) 8px ${rightWidth}px`}}>
       <LibraryPane assets={assets} total={total} currentId={current?.id} selected={selected} loading={loading} filter={filter} facets={facets} onFilter={setFilter} onAsset={onAsset} onLoadMore={loadMore} onBatchTags={openBatchTags} onCollection={openCollection} onClearSelection={()=>setSelected(new Set())} onRefreshMissing={refreshMissing}/>

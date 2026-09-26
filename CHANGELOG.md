@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.12.0
+
+- Added native drag-and-drop import across the whole ImageLore window.
+- Supports dropping multiple images, folders, or a mixed selection.
+- Dropped folders are scanned recursively for supported image formats.
+- Added a Frutiger Aero drag target overlay with clear Chinese feedback.
+- Duplicate files reuse the existing skip behavior and are not added twice.
+- No database schema change; v0.11 data remains compatible.
+
+# Changelog
+
 ## 0.11.0
 
 - Windows release binary now uses the GUI subsystem, so launching ImageLore no longer opens a console window.
