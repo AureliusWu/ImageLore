@@ -275,7 +275,7 @@ pub fn preview_data_url(state:State<'_,AppState>,id:i64,max_edge:u32,thumbnail:b
 #[tauri::command]
 pub fn refresh_missing(state:State<'_,AppState>)->Result<i64,String>{
     let conn=state.db.lock().map_err(|e|e.to_string())?;
-    let rows:Vec<(i64,String,i64)>={let mut st=conn.prepare("SELECT id,path,missing FROM assets").map_err(|e|e.to_string())?;st.query_map([],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(|e|e.to_string())?.filter_map(Result::ok).collect()};
+    let rows:Vec<(i64,String,i64)>={let mut st=conn.prepare("SELECT id,path,missing FROM assets").map_err(|e|e.to_string())?;let rows=st.query_map([],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(|e|e.to_string())?.filter_map(Result::ok).collect();rows};
     let mut missing_count=0;
     for(id,path,old)in rows{let missing=if Path::new(&path).exists(){0}else{1};if missing==1{missing_count+=1}if missing!=old{conn.execute("UPDATE assets SET missing=?1 WHERE id=?2",params![missing,id]).map_err(|e|e.to_string())?;}}
     Ok(missing_count)
@@ -284,7 +284,7 @@ pub fn refresh_missing(state:State<'_,AppState>)->Result<i64,String>{
 #[tauri::command]
 pub fn relocate_missing(state:State<'_,AppState>,root:String)->Result<i64,String>{
     let conn=state.db.lock().map_err(|e|e.to_string())?;
-    let wanted:Vec<(i64,String)>={let mut st=conn.prepare("SELECT id,fingerprint FROM assets WHERE missing=1 AND fingerprint<>''").map_err(|e|e.to_string())?;st.query_map([],|r|Ok((r.get(0)?,r.get(1)?))).map_err(|e|e.to_string())?.filter_map(Result::ok).collect()};
+    let wanted:Vec<(i64,String)>={let mut st=conn.prepare("SELECT id,fingerprint FROM assets WHERE missing=1 AND fingerprint<>''").map_err(|e|e.to_string())?;let rows=st.query_map([],|r|Ok((r.get(0)?,r.get(1)?))).map_err(|e|e.to_string())?.filter_map(Result::ok).collect();rows};
     let fingerprints=wanted.iter().map(|x|x.1.clone()).collect::<HashSet<_>>(); let mut found=HashMap::<String,PathBuf>::new();
     for entry in WalkDir::new(root).follow_links(false).into_iter().filter_map(Result::ok){if !entry.file_type().is_file()||!metadata::is_supported(entry.path()){continue}let fp=metadata::fingerprint(entry.path());if fingerprints.contains(&fp){found.insert(fp,entry.path().to_path_buf());if found.len()==fingerprints.len(){break}}}
     let mut fixed=0;
