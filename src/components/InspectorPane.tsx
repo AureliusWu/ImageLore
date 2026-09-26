@@ -1,0 +1,31 @@
+import { useMemo } from "react";
+import type { AssetRecord, GenerationInfo, Lineage } from "../types";
+import { ComparePanel } from "./ComparePanel";
+
+export type InspectorTab="prompt"|"info"|"lineage";
+
+function InfoRow({label,value}:{label:string;value:unknown}){return <div className="info-row"><span>{label}</span><strong>{value===undefined||value===null||value===""?"—":String(value)}</strong></div>}
+
+export function InspectorPane({asset,tab,onTab,prompt,onPrompt,negative,onNegative,model,onModel,tagsText,onTagsText,lineage,compareRecord,onCompare,onCopy,onSaveRevision,onHistory,onFavorite,onRescan,onSidecar,onCollection,onRemove,onImportDerivative,onLinkParent,promptRef}:{
+  asset:AssetRecord|null;tab:InspectorTab;onTab:(t:InspectorTab)=>void;prompt:string;onPrompt:(v:string)=>void;negative:string;onNegative:(v:string)=>void;model:string;onModel:(v:string)=>void;tagsText:string;onTagsText:(v:string)=>void;
+  lineage:Lineage;compareRecord:AssetRecord|null;onCompare:(id:number)=>void;onCopy:()=>void;onSaveRevision:()=>void;onHistory:()=>void;onFavorite:()=>void;onRescan:()=>void;onSidecar:()=>void;onCollection:()=>void;onRemove:()=>void;onImportDerivative:()=>void;onLinkParent:()=>void;promptRef:React.RefObject<HTMLTextAreaElement|null>;
+}){
+  const generation=useMemo<GenerationInfo>(()=>{try{return asset?JSON.parse(asset.generation_json||"{}"):{} }catch{return{}}},[asset?.generation_json]);
+  return <aside className="inspector-pane panel glass-surface">
+    <div className="record-head"><div><span className="eyebrow">GENERATION RECORD</span><strong>{asset?.name||"Prompt & context"}</strong></div><button className={`favorite-button ${asset?.favorite?"on":""}`} disabled={!asset} onClick={onFavorite}>{asset?.favorite?"★":"☆"}</button></div>
+    <nav className="inspector-tabs"><button className={tab==="prompt"?"active":""} onClick={()=>onTab("prompt")}>✎ <span>Prompt</span></button><button className={tab==="info"?"active":""} onClick={()=>onTab("info")}>ⓘ <span>Info</span></button><button className={tab==="lineage"?"active":""} onClick={()=>onTab("lineage")}>⑂ <span>Lineage</span><b>{lineage.parents.length+lineage.children.length}</b></button></nav>
+    <div className="inspector-body">
+      {tab==="prompt"?<>
+        <div className="field-head"><div><label>Prompt</label><span>Main generation instruction</span></div><div className="field-actions"><button disabled={!asset} onClick={onCopy}>Copy</button><button disabled={!asset} onClick={onHistory}>History</button><button className="save-button" disabled={!asset} onClick={onSaveRevision}>Save version</button></div></div>
+        <textarea ref={promptRef} className="prompt-box" disabled={!asset} value={prompt} onChange={e=>onPrompt(e.target.value)} placeholder="Write or paste the generation prompt…" spellCheck={false}/>
+        <label className="field"><span>Negative Prompt <small>Exclusions</small></span><textarea className="small-area" disabled={!asset} value={negative} onChange={e=>onNegative(e.target.value)} placeholder="Optional exclusions" spellCheck={false}/></label>
+        <div className="two-col"><label className="field"><span>Tags <small>comma separated</small></span><input disabled={!asset} value={tagsText} onChange={e=>onTagsText(e.target.value)} placeholder="character, bedroom, study"/></label><label className="field"><span>Model <small>generation source</small></span><input disabled={!asset} value={model} onChange={e=>onModel(e.target.value)} placeholder="GPT Image / Flux…"/></label></div>
+        {asset?.tags.length?<div className="tag-preview">{asset.tags.map(tag=><span key={tag}>{tag}</span>)}</div>:null}
+        <div className="tool-card"><div><strong>Record tools</strong><span>Keep low-frequency actions out of the main editor.</span></div><div><button disabled={!asset} onClick={onRescan}>Rescan metadata</button><button disabled={!asset} onClick={onSidecar}>Export sidecar</button><button disabled={!asset} onClick={onCollection}>Collection</button></div></div>
+        <button className="danger-link" disabled={!asset} onClick={onRemove}>Remove this record from ImageLore</button>
+      </>:null}
+      {tab==="info"?<div className="info-list"><div className="info-hero"><span>i</span><div><strong>Reproducible context</strong><p>Image metadata and ImageLore state are kept together without copying the original file.</p></div></div><InfoRow label="Metadata" value={asset?.metadata_type}/><InfoRow label="Model" value={asset?.model}/><InfoRow label="Dimensions" value={asset?.width&&asset.height?`${asset.width} × ${asset.height}`:"—"}/><InfoRow label="Format" value={asset?.format}/><InfoRow label="Seed" value={generation.seed}/><InfoRow label="Steps" value={generation.steps}/><InfoRow label="Sampler" value={generation.sampler}/><InfoRow label="CFG" value={generation.cfg_scale}/><InfoRow label="Fingerprint" value={asset?.fingerprint?asset.fingerprint.slice(0,24)+"…":"—"}/><details><summary>Raw generation JSON</summary><pre>{asset?.generation_json||"{}"}</pre></details></div>:null}
+      {tab==="lineage"?<div className="lineage-panel"><div className="lineage-hero"><span>⑂</span><div><strong>Generation lineage</strong><p>Keep reference, edit and variation relationships explicit.</p></div></div><div className="lineage-actions"><button className="button primary" disabled={!asset} onClick={onImportDerivative}>＋ Import derivative</button><button className="button secondary" disabled={!asset} onClick={onLinkParent}>Link parent</button></div><h4>Parents <b>{lineage.parents.length}</b></h4>{lineage.parents.length?lineage.parents.map(x=><button className={`edge-card ${compareRecord?.id===x.other_id?"active":""}`} key={x.id} onClick={()=>onCompare(x.other_id)}><span>{x.relation_type}</span><strong>{x.other_name}</strong><small>{x.note||"Click to compare"}</small></button>):<p className="muted">No parent record. This can be the root of a lineage.</p>}{asset&&compareRecord?<ComparePanel parent={compareRecord} current={asset}/>:null}<h4>Children <b>{lineage.children.length}</b></h4>{lineage.children.length?lineage.children.map(x=><div className="edge-card child" key={x.id}><span>{x.relation_type}</span><strong>{x.other_name}</strong><small>{x.note}</small></div>):<p className="muted">No derivative records yet.</p>}</div>:null}
+    </div>
+  </aside>
+}

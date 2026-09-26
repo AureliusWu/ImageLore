@@ -1,0 +1,33 @@
+{
+  "name": "imagelore",
+  "private": true,
+  "version": "0.10.0",
+  "type": "module",
+  "scripts": {
+    "version:sync": "node scripts/sync_version.mjs",
+    "version:check": "node scripts/check_version.mjs",
+    "version:patch": "node scripts/bump_version.mjs patch",
+    "version:minor": "node scripts/bump_version.mjs minor",
+    "version:major": "node scripts/bump_version.mjs major",
+    "dev": "node scripts/sync_version.mjs && vite",
+    "build": "node scripts/sync_version.mjs && tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "tauri:dev": "node scripts/sync_version.mjs && tauri dev",
+    "tauri:build": "node scripts/sync_version.mjs && tauri build --bundles nsis"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.11.1",
+    "@tauri-apps/plugin-dialog": "2.7.3",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.11.5",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "typescript": "^5.8.0",
+    "vite": "^7.0.0"
+  }
+}

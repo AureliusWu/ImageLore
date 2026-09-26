@@ -1,0 +1,87 @@
+import { invoke } from "@tauri-apps/api/core";
+import type { AssetRecord, CollectionRecord, ImportSummary, LibraryFacets, LibraryFilter, LibraryPage, Lineage, PromptPatch, Revision } from "./types";
+
+export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+const demoSvg = (title:string, a:string, b:string) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="${a}"/><stop offset="1" stop-color="${b}"/></linearGradient></defs><rect width="100%" height="100%" fill="url(#g)"/><circle cx="880" cy="180" r="180" fill="rgba(255,255,255,.22)"/><circle cx="260" cy="690" r="260" fill="rgba(255,255,255,.12)"/><text x="70" y="110" font-family="Segoe UI" font-size="54" font-weight="700" fill="white">${title}</text><text x="72" y="165" font-family="Segoe UI" font-size="24" fill="rgba(255,255,255,.78)">ImageLore Generation Record</text></svg>`)}`;
+
+let mockAssets:AssetRecord[] = [
+  {id:1,path:"D:/AI/character-origin.png",name:"Character Origin.png",prompt:"adult blue-haired marine fantasy character, calm expression, clean character design, pearl ornaments",negative_prompt:"low quality, extra fingers",model:"GPT Image",tags:["character","blue hair","origin"],favorite:1,width:1536,height:2048,file_size:2840000,format:"PNG",mime_type:"image/png",metadata_type:"manual",generation_json:'{"size":"1536x2048"}',fingerprint:"demo-01",file_mtime:0,missing:0,created_at:1760000000,updated_at:1760000500},
+  {id:2,path:"D:/AI/bedroom-variation.png",name:"Bedroom Variation.png",prompt:"adult blue-haired marine fantasy character, sitting beside a bed at night, warm bedside lamp, quiet mood",negative_prompt:"low quality",model:"GPT Image",tags:["character","bedroom","variation"],favorite:0,width:1536,height:2048,file_size:2310000,format:"PNG",mime_type:"image/png",metadata_type:"manual",generation_json:'{"size":"1536x2048"}',fingerprint:"demo-02",file_mtime:0,missing:0,created_at:1760000100,updated_at:1760000600},
+  {id:3,path:"D:/AI/photo-study.png",name:"Photoreal Study.png",prompt:"photorealistic adult East Asian woman, blue hair, marine inspired jewelry, editorial portrait",negative_prompt:"plastic skin",model:"Flux",tags:["photoreal","study"],favorite:0,width:1024,height:1536,file_size:1900000,format:"PNG",mime_type:"image/png",metadata_type:"a1111",generation_json:'{"steps":"28","sampler":"DPM++ 2M","cfg_scale":"5","seed":"4120039"}',fingerprint:"demo-03",file_mtime:0,missing:0,created_at:1760000200,updated_at:1760000400},
+  {id:4,path:"D:/AI/poster.png",name:"Aero Poster.png",prompt:"frutiger aero inspired poster, blue sky, clear water, lush green hills, glossy bubbles",negative_prompt:"dark UI, gray background",model:"Flux",tags:["poster","aero"],favorite:1,width:1400,height:1800,file_size:2100000,format:"PNG",mime_type:"image/png",metadata_type:"manual",generation_json:'{}',fingerprint:"demo-04",file_mtime:0,missing:0,created_at:1760000300,updated_at:1760000700},
+  {id:5,path:"D:/AI/closeup.png",name:"Close-up Test.png",prompt:"close-up character portrait, clean light, glassy blue eyes",negative_prompt:"blur",model:"GPT Image",tags:["portrait","test"],favorite:0,width:1200,height:1200,file_size:1200000,format:"PNG",mime_type:"image/png",metadata_type:"manual",generation_json:'{}',fingerprint:"demo-05",file_mtime:0,missing:0,created_at:1760000400,updated_at:1760000300},
+  {id:6,path:"D:/AI/missing.png",name:"Moved Reference.png",prompt:"reference image",negative_prompt:"",model:"",tags:["reference"],favorite:0,width:1024,height:1024,file_size:900000,format:"PNG",mime_type:"image/png",metadata_type:"manual",generation_json:'{}',fingerprint:"demo-06",file_mtime:0,missing:1,created_at:1760000500,updated_at:1760000200}
+];
+const demoImages = new Map<number,string>([
+  [1,demoSvg("Origin","#5ac8eb","#78be70")],[2,demoSvg("Variation","#4fbbe4","#96ca71")],[3,demoSvg("Photo Study","#74b6d8","#5e8ea6")],
+  [4,demoSvg("Aero Poster","#45c8e8","#72c359")],[5,demoSvg("Close-up","#71d0e3","#6a9fc4")],[6,demoSvg("Missing","#b7c9d0","#9aadb4")]
+]);
+let mockCollections:CollectionRecord[]=[{id:1,name:"Character Study",description:"Main character experiments",created_at:0,updated_at:0,count:3}];
+
+function filtered(filter:LibraryFilter){
+  const q=filter.query.trim().toLowerCase();
+  return mockAssets.filter(a=>(!q||[a.name,a.prompt,a.negative_prompt,a.model,...a.tags].join(" ").toLowerCase().includes(q))
+    &&(filter.view!=="favorites"||!!a.favorite)&&(filter.view!=="missing"||!!a.missing)
+    &&(!filter.tag||a.tags.includes(filter.tag))&&(!filter.model||a.model===filter.model));
+}
+
+async function mockCall<T>(command:string,args:Record<string,unknown>):Promise<T>{
+  await new Promise(r=>setTimeout(r,20));
+  switch(command){
+    case "library_page":{const filter=args.filter as LibraryFilter;const offset=Number(args.offset||0),limit=Number(args.limit||200);const all=filtered(filter);return {items:all.slice(offset,offset+limit),total:all.length,offset,limit} as T;}
+    case "library_facets":return {tags:[{name:"character",count:2},{name:"aero",count:1},{name:"study",count:1}],models:[{name:"GPT Image",count:3},{name:"Flux",count:2}],collections:mockCollections} as T;
+    case "get_asset":return mockAssets.find(x=>x.id===Number(args.id)) as T;
+    case "preview_data_url":return (demoImages.get(Number(args.id))||demoSvg("Preview","#73c7e5","#71bb6a")) as T;
+    case "update_prompt":{const id=Number(args.id),patch=args.patch as PromptPatch;mockAssets=mockAssets.map(x=>x.id===id?{...x,...patch,updated_at:Math.floor(Date.now()/1000)}:x);return mockAssets.find(x=>x.id===id) as T;}
+    case "replace_tags":{const id=Number(args.id),tags=args.tags as string[];mockAssets=mockAssets.map(x=>x.id===id?{...x,tags}:x);return mockAssets.find(x=>x.id===id) as T;}
+    case "toggle_favorite":{const a=mockAssets.find(x=>x.id===Number(args.id));if(a)a.favorite=a.favorite?0:1;return a as T;}
+    case "import_paths":case "import_folder":return {added:0,skipped:0,failed:0,last_id:null} as T;
+    case "batch_add_tags":return true as T;
+    case "delete_asset":{mockAssets=mockAssets.filter(x=>x.id!==Number(args.id));return true as T;}
+    case "add_revision":return true as T;
+    case "list_revisions":return [] as T;
+    case "restore_revision":return mockAssets[0] as T;
+    case "lineage":return {parents:[],children:[]} as T;
+    case "add_relation":return true as T;
+    case "collections":return mockCollections as T;
+    case "create_collection":{const c={id:mockCollections.length+1,name:String(args.name),description:String(args.description||""),created_at:0,updated_at:0,count:0};mockCollections=[...mockCollections,c];return c as T;}
+    case "add_to_collection":return true as T;
+    case "rescan_metadata":return mockAssets.find(x=>x.id===Number(args.id)) as T;
+    case "export_sidecar":return "demo.png.imagelore.json" as T;
+    case "refresh_missing":return mockAssets.filter(x=>x.missing).length as T;
+    case "relocate_missing":return 0 as T;
+    case "open_external":case "open_containing_folder":return true as T;
+    default:throw new Error(`Unknown mock command: ${command}`);
+  }
+}
+
+async function call<T>(command:string,args:Record<string,unknown>={}):Promise<T>{return isTauri?invoke<T>(command,args):mockCall<T>(command,args)}
+
+export const api={
+  page:(filter:LibraryFilter,offset=0,limit=240)=>call<LibraryPage>("library_page",{filter,offset,limit}),
+  facets:()=>call<LibraryFacets>("library_facets"),
+  get:(id:number)=>call<AssetRecord>("get_asset",{id}),
+  preview:(id:number,maxEdge:number,thumbnail=false)=>call<string>("preview_data_url",{id,maxEdge,thumbnail}),
+  importPaths:(paths:string[])=>call<ImportSummary>("import_paths",{paths}),
+  importFolder:(path:string)=>call<ImportSummary>("import_folder",{path}),
+  updatePrompt:(id:number,patch:PromptPatch)=>call<AssetRecord>("update_prompt",{id,patch}),
+  replaceTags:(id:number,tags:string[])=>call<AssetRecord>("replace_tags",{id,tags}),
+  batchAddTags:(ids:number[],tags:string[])=>call<boolean>("batch_add_tags",{ids,tags}),
+  toggleFavorite:(id:number)=>call<AssetRecord>("toggle_favorite",{id}),
+  deleteAsset:(id:number)=>call<boolean>("delete_asset",{id}),
+  addRevision:(id:number,note="")=>call<boolean>("add_revision",{id,note}),
+  revisions:(id:number)=>call<Revision[]>("list_revisions",{id}),
+  restoreRevision:(revisionId:number)=>call<AssetRecord>("restore_revision",{revisionId}),
+  lineage:(id:number)=>call<Lineage>("lineage",{id}),
+  addRelation:(parentId:number,childId:number,relationType:string,note="")=>call<boolean>("add_relation",{parentId,childId,relationType,note}),
+  collections:()=>call<CollectionRecord[]>("collections"),
+  createCollection:(name:string,description="")=>call<CollectionRecord>("create_collection",{name,description}),
+  addToCollection:(collectionId:number,assetIds:number[])=>call<boolean>("add_to_collection",{collectionId,assetIds}),
+  rescan:(id:number)=>call<AssetRecord>("rescan_metadata",{id}),
+  exportSidecar:(id:number)=>call<string>("export_sidecar",{id}),
+  refreshMissing:()=>call<number>("refresh_missing"),
+  relocateMissing:(root:string)=>call<number>("relocate_missing",{root}),
+  openExternal:(id:number)=>call<boolean>("open_external",{id}),
+  openFolder:(id:number)=>call<boolean>("open_containing_folder",{id})
+};

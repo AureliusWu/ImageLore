@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+<defs>
+ <radialGradient id="orb" cx="34%" cy="24%" r="74%"><stop offset="0" stop-color="#ffffff"/><stop offset=".08" stop-color="#a9f5ff"/><stop offset=".48" stop-color="#4bc6e5"/><stop offset=".75" stop-color="#168fca"/><stop offset="1" stop-color="#0b6fa8"/></radialGradient>
+ <linearGradient id="leaf" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#8bd86d"/><stop offset="1" stop-color="#3c9744"/></linearGradient>
+ <filter id="s"><feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#1f6e92" flood-opacity=".28"/></filter>
+</defs>
+<rect width="512" height="512" rx="118" fill="#e8f8fb"/>
+<circle cx="256" cy="240" r="155" fill="url(#orb)" stroke="#fff" stroke-width="15" filter="url(#s)"/>
+<path d="M315 347c58-10 97-48 109-105-61 2-110 35-127 91 2 5 9 11 18 14z" fill="url(#leaf)" stroke="#fff" stroke-width="8"/>
+<path d="M205 151h64c52 0 87 31 87 76 0 47-37 79-91 79h-24v64h-36V151zm36 33v89h25c33 0 53-16 53-45 0-28-20-44-52-44h-26z" fill="#fff" opacity=".94"/>
+<ellipse cx="205" cy="150" rx="46" ry="22" fill="#fff" opacity=".42" transform="rotate(-25 205 150)"/>
+</svg>
