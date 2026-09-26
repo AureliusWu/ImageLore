@@ -14,4 +14,5 @@ with tempfile.TemporaryDirectory() as td:
     con.commit()
     t=time.perf_counter(); page=con.execute("SELECT asset_id FROM asset_search WHERE asset_search MATCH ? LIMIT 240 OFFSET 4800",('"blue"*',)).fetchall(); elapsed=time.perf_counter()-t
     assert len(page)==240
-    print(f'ImageLore 10k FTS/page smoke test: PASS ({elapsed:.4f}s)')
+    con.close()
+print(f'ImageLore 10k FTS/page smoke test: PASS ({elapsed:.4f}s)')
