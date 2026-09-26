@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.0
+
+- Windows release binary now uses the GUI subsystem, so launching ImageLore no longer opens a console window.
+- Main application UI is now Simplified Chinese while keeping the ImageLore brand name.
+- Localized search, library filters, Prompt editor, generation info, lineage, compare, dialogs, status messages and empty states.
+- No database schema change; existing v0.10 data remains compatible.
+
 ## 0.10.0 — Clean Core
 
 ### Breaking / reset
