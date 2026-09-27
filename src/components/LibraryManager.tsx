@@ -3,10 +3,10 @@ import type { BackupRecord,CollectionRecord,DuplicateGroup,FacetCount } from "..
 
 const bytes=(n:number)=>n<1024?n+" B":n<1024*1024?(n/1024).toFixed(1)+" KB":(n/1024/1024).toFixed(1)+" MB";
 
-export function LibraryManager({open,backups,tags,collections,duplicates,onClose,onBackup,onRestore,onRenameTag,onMergeTag,onDeleteTag,onRenameCollection,onDeleteCollection}:{
+export function LibraryManager({open,backups,tags,collections,duplicates,onClose,onBackup,onRestore,onRenameTag,onDeleteTag,onRenameCollection,onDeleteCollection}:{
   open:boolean;backups:BackupRecord[];tags:FacetCount[];collections:CollectionRecord[];duplicates:DuplicateGroup[];
   onClose:()=>void;onBackup:()=>void;onRestore:(name:string)=>void;
-  onRenameTag:(oldName:string,newName:string)=>void;onMergeTag:(source:string,target:string)=>void;onDeleteTag:(name:string)=>void;
+  onRenameTag:(oldName:string,newName:string)=>void;onDeleteTag:(name:string)=>void;
   onRenameCollection:(id:number,name:string)=>void;onDeleteCollection:(id:number)=>void;
 }){
   const[tab,setTab]=useState<"safety"|"tags"|"collections"|"duplicates">("safety");
