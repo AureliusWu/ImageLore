@@ -4,8 +4,6 @@ on:
   workflow_dispatch:
   push:
     tags: ['v*']
-    branches: [main]
-    paths: ['.github/release-trigger']
 
 concurrency:
   group: imagelore-release-${{ github.ref }}
