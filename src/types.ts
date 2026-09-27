@@ -10,7 +10,7 @@ export interface AssetSummary {
 }
 export interface AssetRecord extends AssetSummary {
   prompt:string;negative_prompt:string;model:string;tags:string[];file_size:number|null;mime_type:string;
-  generation_json:string;created_at:number;
+  generation_json:string;portable_id:string;created_at:number;
 }
 export interface LibraryPage { items:AssetSummary[];total:number;offset:number;limit:number; }
 export interface FacetCount { name:string;count:number; }
@@ -27,3 +27,12 @@ export interface Revision { id:number;asset_id:number;prompt:string;negative_pro
 export interface RelationRecord { id:number;parent_id:number;child_id:number;relation_type:string;note:string;created_at:number;other_id:number;other_name:string; }
 export interface Lineage { parents:RelationRecord[];children:RelationRecord[]; }
 export interface GenerationInfo { seed?:string;steps?:string;sampler?:string;cfg_scale?:string;size?:string;model?:string;scheduler?:string;denoise?:string;[key:string]:unknown; }
+
+export interface GenerationSession { id:number;name:string;note:string;count:number;created_at:number;updated_at:number; }
+export interface AssetSession { session_id:number;session_name:string;session_note:string;asset_note:string; }
+export interface ModelAlias { alias:string;canonical:string; }
+export interface SavedFilter { id:number;name:string;filter:LibraryFilter;created_at:number;updated_at:number; }
+export interface LibraryHealth {
+  total:number;missing:number;duplicate_groups:number;without_metadata:number;without_fingerprint:number;
+  pending_relations:number;unassigned_session:number;cache_bytes:number;
+}
