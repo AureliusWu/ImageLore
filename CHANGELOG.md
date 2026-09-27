@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.15.1 — Consistency Hardening
+
+- Fixed an autosave race where rapid edit → save → revert sequences could leave the database on an intermediate Prompt / Model / Tag state while the editor showed the reverted value.
+- Prevented exact-content duplicate imports from creating misleading derivative lineage links.
+- Made preview cache temporary files process-unique so concurrent preview generation cannot clobber another writer.
+
+
 ## 0.15.0 — Generation Intelligence
 
 - Added Migration v3 with stable Portable IDs for generation records.
