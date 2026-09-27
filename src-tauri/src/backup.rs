@@ -98,8 +98,21 @@ pub fn apply_pending_restore(database_path:&Path,data_dir:&Path,backups_dir:&Pat
 
     let safety=if database_path.exists(){
         let path=unique_path(backups_dir,"pre-restore");
-        vacuum_snapshot(database_path,&path)?;
-        Some(path)
+        match vacuum_snapshot(database_path,&path){
+            Ok(())=>Some(path),
+            Err(_)=>{
+                // A damaged active DB must never block recovery from a validated backup.
+                // Preserve best-effort forensic copies outside the normal backup list.
+                let token=now_nanos();
+                let raw=backups_dir.join(format!("pre-restore-corrupt-{}.sqlite3.raw",token));
+                let _=fs::copy(database_path,&raw);
+                let wal=database_path.with_extension("sqlite3-wal");
+                if wal.exists(){let _=fs::copy(&wal,backups_dir.join(format!("pre-restore-corrupt-{}.wal.raw",token)));}
+                let shm=database_path.with_extension("sqlite3-shm");
+                if shm.exists(){let _=fs::copy(&shm,backups_dir.join(format!("pre-restore-corrupt-{}.shm.raw",token)));}
+                None
+            }
+        }
     }else{None};
 
     let staged=data_dir.join("restore.next.sqlite3");
@@ -113,9 +126,14 @@ pub fn apply_pending_restore(database_path:&Path,data_dir:&Path,backups_dir:&Pat
     let _=fs::remove_file(&shm);
     if database_path.exists(){fs::remove_file(database_path).map_err(|e|e.to_string())?;}
 
-    if let Err(error)=fs::rename(&staged,database_path){
-        if let Some(safety)=safety.as_ref(){let _=fs::copy(safety,database_path);}
-        return Err(format!("应用恢复备份失败：{}",error))
+    if let Err(rename_error)=fs::rename(&staged,database_path){
+        // Same-directory rename is preferred, but a validated pending backup is still
+        // a safe fallback if Windows or antivirus software briefly blocks rename.
+        if let Err(copy_error)=fs::copy(&pending,database_path){
+            if let Some(safety)=safety.as_ref(){let _=fs::copy(safety,database_path);}
+            return Err(format!("应用恢复备份失败：{}；回退复制也失败：{}",rename_error,copy_error))
+        }
+        let _=fs::remove_file(&staged);
     }
 
     validate(database_path)?;
@@ -173,5 +191,30 @@ mod tests{
     #[test]
     fn sql_path_escapes_single_quotes(){
         assert_eq!(sql_path(Path::new("C:/O'Brien/library.sqlite3")),"C:/O''Brien/library.sqlite3");
+    }
+
+
+    #[test]
+    fn valid_pending_backup_restores_over_corrupt_active_db(){
+        let root=std::env::temp_dir().join(format!("imagelore-restore-test-{}",now_nanos()));
+        let backups=root.join("backups");
+        fs::create_dir_all(&backups).unwrap();
+        let database=root.join("library.sqlite3");
+        let pending=root.join("restore.pending.sqlite3");
+
+        {
+            let conn=Connection::open(&pending).unwrap();
+            conn.execute_batch("CREATE TABLE marker(value TEXT); INSERT INTO marker(value) VALUES('restored');").unwrap();
+        }
+        fs::write(&database,b"this is not a sqlite database").unwrap();
+
+        apply_pending_restore(&database,&root,&backups).unwrap();
+
+        let conn=Connection::open(&database).unwrap();
+        let value:String=conn.query_row("SELECT value FROM marker",[],|r|r.get(0)).unwrap();
+        assert_eq!(value,"restored");
+        assert!(!pending.exists());
+        assert!(fs::read_dir(&backups).unwrap().filter_map(Result::ok).any(|e|e.path().extension().and_then(|x|x.to_str())==Some("raw")));
+        let _=fs::remove_dir_all(root);
     }
 }
