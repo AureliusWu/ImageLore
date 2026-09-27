@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.13.1 — Build Hygiene
+
+- Split fast CI from Windows release packaging.
+- Added concurrency cancellation so superseded branch builds stop automatically.
+- Locked repository version metadata to 0.13.1 across VERSION, npm, Tauri and Cargo sources.
+- Prepared reproducible npm/Cargo dependency locking and npm CI caching.
+- Normalized the changelog to one document heading.
+- Kept the release installer workflow focused on manual or version-tag builds.
+
 ## 0.13.0 — Reliability & Flow
 
 - Prevents unsaved Prompt/Negative Prompt/Model/Tags edits from being lost when switching records.
@@ -11,11 +20,9 @@
 - Added schema migration foundation without resetting schema_version on startup.
 - Added CJK substring search fallback for Chinese/Japanese/Korean queries.
 - Split editor, drag-drop, workspace layout and dialogs into focused modules.
-- CI now runs schema, scale, command-contract and project-integrity tests before the Windows build.
+- CI now runs schema, scale, command-contract and project-integrity tests before Windows release builds.
 
-# Changelog
-
-## 0.12.0
+## 0.12.0 — Native Drag & Drop
 
 - Added native drag-and-drop import across the whole ImageLore window.
 - Supports dropping multiple images, folders, or a mixed selection.
@@ -24,9 +31,7 @@
 - Duplicate files reuse the existing skip behavior and are not added twice.
 - No database schema change; v0.11 data remains compatible.
 
-# Changelog
-
-## 0.11.0
+## 0.11.0 — Chinese Desktop
 
 - Windows release binary now uses the GUI subsystem, so launching ImageLore no longer opens a console window.
 - Main application UI is now Simplified Chinese while keeping the ImageLore brand name.
@@ -56,4 +61,3 @@
 
 ### Data safety
 - Original image files remain external and are never deleted by record removal.
-- `CLEAN_LEGACY_DATA.bat` performs optional cleanup of prototype-only data and leaves the v0.10 database untouched.

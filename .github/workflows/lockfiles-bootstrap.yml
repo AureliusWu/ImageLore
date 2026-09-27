@@ -1,0 +1,48 @@
+name: Bootstrap dependency lockfiles
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'package.json'
+      - 'src-tauri/Cargo.toml'
+      - '.github/workflows/lockfiles-bootstrap.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: imagelore-lockfiles
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  lockfiles:
+    if: github.event.head_commit.message != 'Commit reproducible dependency lockfiles'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Generate npm lockfile
+        run: npm install --package-lock-only --ignore-scripts
+
+      - name: Generate Cargo lockfile
+        run: cargo generate-lockfile --manifest-path src-tauri/Cargo.toml
+
+      - name: Commit lockfiles
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json src-tauri/Cargo.lock
+          if (git diff --cached --quiet) { exit 0 }
+          git commit -m "Commit reproducible dependency lockfiles"
+          git push
