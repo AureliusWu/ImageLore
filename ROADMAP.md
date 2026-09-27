@@ -35,13 +35,14 @@
 - Fast CI / Native CI 完全分离
 - Rust regression tests
 
-## v0.15.0 — Generation Intelligence
-- 更多生成器 Metadata Adapter
-- Sidecar v3 与基于 fingerprint/UUID 的跨库谱系恢复
-- 图片并排 Compare
+## v0.15.0 — Generation Intelligence ✅
+- A1111 / ComfyUI / NovelAI / InvokeAI / 通用 JSON Metadata Adapter
+- Sidecar v3 与 Portable ID + fingerprint 跨库谱系恢复
+- 图片并排 Compare + Prompt Diff
 - Generation Session / Branch Notes
 - Model alias / normalization
-- 保存筛选与 Library Health 深化
+- 保存筛选与 Library Health
+- Migration v3
 
 ## v1.0.0 — Stable Local Library
 - Windows 代码签名与自动更新
