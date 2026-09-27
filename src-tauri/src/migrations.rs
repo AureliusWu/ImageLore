@@ -18,10 +18,23 @@ fn legacy_portable_id(id:i64,path:&str,fingerprint:&str,created_at:i64)->String{
     format!("il-{}",&hex[..32])
 }
 
+fn has_column(conn:&Connection,table:&str,column:&str)->Result<bool,String>{
+    let sql=format!("PRAGMA table_info({})",table);
+    let mut st=conn.prepare(&sql).map_err(|e|e.to_string())?;
+    let mut rows=st.query([]).map_err(|e|e.to_string())?;
+    while let Some(row)=rows.next().map_err(|e|e.to_string())?{
+        let name:String=row.get(1).map_err(|e|e.to_string())?;
+        if name==column{return Ok(true)}
+    }
+    Ok(false)
+}
+
 fn migrate_v3(conn:&Connection)->Result<(),String>{
+    if !has_column(conn,"assets","portable_id")?{
+        conn.execute("ALTER TABLE assets ADD COLUMN portable_id TEXT NOT NULL DEFAULT ''",[]).map_err(|e|e.to_string())?;
+    }
     conn.execute_batch(
-        "ALTER TABLE assets ADD COLUMN portable_id TEXT NOT NULL DEFAULT '';
-         CREATE TABLE IF NOT EXISTS generation_sessions (
+        "CREATE TABLE IF NOT EXISTS generation_sessions (
            id INTEGER PRIMARY KEY AUTOINCREMENT,
            name TEXT NOT NULL UNIQUE COLLATE NOCASE,
            note TEXT NOT NULL DEFAULT '',
@@ -112,6 +125,21 @@ pub fn apply(conn:&Connection)->Result<(),String>{
 #[cfg(test)]
 mod tests{
     use super::*;
+
+    #[test]
+    fn migration_v3_is_rerunnable_after_column_exists(){
+        let conn=Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE app_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+             INSERT INTO app_meta VALUES('schema_version','2');
+             CREATE TABLE assets(id INTEGER PRIMARY KEY,path TEXT NOT NULL,fingerprint TEXT NOT NULL DEFAULT '',portable_id TEXT NOT NULL DEFAULT '',created_at INTEGER NOT NULL);
+             INSERT INTO assets(id,path,fingerprint,portable_id,created_at) VALUES(1,'x.png','abc','',10);"
+        ).unwrap();
+        migrate_v3(&conn).unwrap();
+        migrate_v3(&conn).unwrap();
+        let value:String=conn.query_row("SELECT portable_id FROM assets WHERE id=1",[],|r|r.get(0)).unwrap();
+        assert!(value.starts_with("il-"));
+    }
 
     #[test]
     fn migrates_v2_assets_to_portable_ids(){

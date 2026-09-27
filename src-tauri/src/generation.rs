@@ -30,10 +30,10 @@ pub(crate) fn resolve_pending_relations(conn:&Connection)->Result<usize,String>{
     let mut resolved=0;
     for(rowid,child_portable,parent_portable,parent_fingerprint,relation_type,note)in rows{
         let child=db::asset_by_portable_id(conn,&child_portable)?;
-        let parent=if !parent_portable.is_empty(){
-            db::asset_by_portable_id(conn,&parent_portable)?
-        }else{
-            db::asset_exists_by_fingerprint(conn,&parent_fingerprint)?
+        let by_portable=if parent_portable.is_empty(){None}else{db::asset_by_portable_id(conn,&parent_portable)?};
+        let parent=match by_portable{
+            Some(id)=>Some(id),
+            None=>db::asset_exists_by_fingerprint(conn,&parent_fingerprint)?,
         };
         let(Some(child_id),Some(parent_id))=(child,parent)else{continue};
         if child_id!=parent_id&&!path_exists(conn,child_id,parent_id){
@@ -219,4 +219,44 @@ pub fn library_health(state:State<'_,AppState>)->Result<LibraryHealth,String>{
         total,missing,duplicate_groups,without_metadata,without_fingerprint,pending_relations,unassigned_session,
         cache_bytes:dir_size(&state.cache_dir),
     })
+}
+
+
+#[cfg(test)]
+mod tests{
+    use super::*;
+
+    fn conn()->Connection{
+        let conn=Connection::open_in_memory().unwrap();
+        conn.execute_batch(include_str!("../schema.sql")).unwrap();
+        conn
+    }
+
+    #[test]
+    fn pending_relation_recovers_by_fingerprint(){
+        let conn=conn();
+        let stamp=db::now();
+        conn.execute(
+            "INSERT INTO assets(path,name,fingerprint,portable_id,created_at,updated_at) VALUES('parent.png','parent','same-fingerprint','il-local-parent',?1,?1)",
+            params![stamp]
+        ).unwrap();
+        let parent_id=conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO assets(path,name,fingerprint,portable_id,created_at,updated_at) VALUES('child.png','child','child-fingerprint','il-child',?1,?1)",
+            params![stamp]
+        ).unwrap();
+        let child_id=conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO pending_relations(child_portable_id,parent_portable_id,parent_fingerprint,relation_type,note,created_at) VALUES('il-child','il-foreign-parent','same-fingerprint','reference','portable fallback',?1)",
+            params![stamp]
+        ).unwrap();
+
+        assert_eq!(resolve_pending_relations(&conn).unwrap(),1);
+        let relation:(i64,i64,String)=conn.query_row(
+            "SELECT parent_id,child_id,note FROM relations LIMIT 1",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))
+        ).unwrap();
+        assert_eq!(relation,(parent_id,child_id,"portable fallback".into()));
+        let pending:i64=conn.query_row("SELECT COUNT(*) FROM pending_relations",[],|r|r.get(0)).unwrap();
+        assert_eq!(pending,0);
+    }
 }

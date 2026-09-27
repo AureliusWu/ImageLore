@@ -1,4 +1,4 @@
-# ImageLore v0.14.1
+# ImageLore v0.15.0
 
 ImageLore 是一个 local-first 的 AI 视觉生成记忆库，用来保存图片背后的 Prompt、模型、参数、历史版本、集合与生成谱系，并让这些信息在几个月以后仍然可以继续使用。
 
@@ -19,10 +19,15 @@ ImageLore 是一个 local-first 的 AI 视觉生成记忆库，用来保存图�
 - 虚拟化图库 + 持久化 WebP 缓存
 - 本地 asset protocol 图片传输，不再通过 Base64 IPC 搬运大图
 - 1 GB 缓存治理
-- A1111 与 ComfyUI Metadata Adapter
+- A1111 / ComfyUI / NovelAI / InvokeAI / 通用 JSON Metadata Adapter
 - ComfyUI Prompt / Negative / Model / Seed / Steps / CFG / Sampler 等提取
 - 每 24 小时自动数据库备份、手动备份、完整性验证与安全恢复
 - 缺失文件重定位
+- Sidecar v3：Portable ID + fingerprint 跨库谱系恢复
+- Generation Session 与 Branch Notes
+- 父子图片并排 Compare + Prompt Diff
+- Model Alias / normalization
+- 保存筛选视图与 Library Health
 - .imagelore.json Sidecar
 - Windows NSIS 一键安装包
 

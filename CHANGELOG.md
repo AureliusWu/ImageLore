@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.15.0 — Generation Intelligence
+
+- Added Migration v3 with stable Portable IDs for generation records.
+- Added Sidecar v3 with portable parent references, fingerprint fallback and import-order-independent lineage recovery.
+- Exact-content duplicates can merge imported Sidecar session/lineage context into the existing record.
+- Added Generation Sessions with per-session and per-asset notes; derivative imports inherit the active session.
+- Added editable Branch Notes on parent and child lineage edges.
+- Added side-by-side parent/current image Compare while preserving Prompt, Negative Prompt, model and tag diffs.
+- Added model alias/normalization without rewriting original model metadata.
+- Added saved Library filter views and Library Health diagnostics.
+- Added NovelAI, InvokeAI and generic JSON metadata adapters alongside A1111 and ComfyUI.
+- Added Portable ID display to reproducibility information.
+- Made Migration v3 re-runnable after a partially completed schema change and added regression coverage for portable lineage recovery.
+
+
 ## 0.14.1 — Stability Fixes
 
 - Fixed a race where very fast background imports could finish before the frontend learned the job ID, leaving import progress stuck.
