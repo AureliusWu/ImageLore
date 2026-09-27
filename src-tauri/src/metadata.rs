@@ -102,7 +102,12 @@ impl MetadataAdapter for A1111Adapter{
 
 fn node<'a>(graph:&'a Value,id:&str)->Option<&'a Value>{graph.as_object()?.get(id)}
 fn input<'a>(node:&'a Value,name:&str)->Option<&'a Value>{node.get("inputs")?.get(name)}
-fn ref_id(value:&Value)->Option<String>{value.as_array()?.first()?.as_str().map(str::to_string)}
+fn ref_id(value:&Value)->Option<String>{
+    let first=value.as_array()?.first()?;
+    first.as_str().map(str::to_string)
+        .or_else(||first.as_i64().map(|x|x.to_string()))
+        .or_else(||first.as_u64().map(|x|x.to_string()))
+}
 fn scalar_string(value:Option<&Value>)->Option<String>{
     let value=value?;
     if let Some(s)=value.as_str(){return Some(s.to_string())}
@@ -178,4 +183,27 @@ pub fn extract_generation(path:&Path)->GenerationExtract{
     if let Some(value)=A1111Adapter::extract(&text){return value}
     if let Some(value)=ComfyUiAdapter::extract(&text){return value}
     GenerationExtract{metadata_type:"none".into(),generation_json:"{}".into(),..Default::default()}
+}
+
+
+#[cfg(test)]
+mod tests{
+    use super::*;
+
+    #[test]
+    fn a1111_parameters_are_split_correctly(){
+        let input="blue hair\nNegative prompt: blur\nSteps: 28, Sampler: Euler a, CFG scale: 6, Seed: 42, Model: flux";
+        let(prompt,negative,generation)=parse_a1111_parameters(input);
+        assert_eq!(prompt,"blue hair");
+        assert_eq!(negative,"blur");
+        assert_eq!(generation.get("steps").and_then(Value::as_str),Some("28"));
+        assert_eq!(generation.get("cfg_scale").and_then(Value::as_str),Some("6"));
+        assert_eq!(generation.get("seed").and_then(Value::as_str),Some("42"));
+    }
+
+    #[test]
+    fn comfy_reference_accepts_string_and_numeric_ids(){
+        assert_eq!(ref_id(&serde_json::json!(["12",0])).as_deref(),Some("12"));
+        assert_eq!(ref_id(&serde_json::json!([12,0])).as_deref(),Some("12"));
+    }
 }
