@@ -210,3 +210,14 @@ pub struct LibraryHealth {
     pub unassigned_session:i64,
     pub cache_bytes:u64,
 }
+
+#[derive(Debug,Clone,Serialize)]
+pub struct SourceFolder {
+    pub id:i64,
+    pub path:String,
+    pub name:String,
+    pub auto_sync:bool,
+    pub last_scan_at:i64,
+    pub created_at:i64,
+    pub updated_at:i64,
+}

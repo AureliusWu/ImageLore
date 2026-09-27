@@ -8,6 +8,7 @@ mod metadata;
 mod models;
 mod preview;
 mod sidecar;
+mod sources;
 mod state;
 
 use state::AppState;
@@ -116,7 +117,12 @@ pub fn run(){
             generation::saved_filters,
             generation::save_filter,
             generation::delete_saved_filter,
-            generation::library_health
+            generation::library_health,
+            sources::source_folders,
+            sources::add_source_folder,
+            sources::remove_source_folder,
+            sources::set_source_auto_sync,
+            sources::start_sync_sources
         ])
         .run(tauri::generate_context!())
         .expect("error while running ImageLore");

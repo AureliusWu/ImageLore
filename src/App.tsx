@@ -3,7 +3,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-dialog";
 import { api,isTauri } from "./api";
 import { APP_VERSION } from "./version";
-import type { AssetRecord,AssetSession,AssetSummary,BackupRecord,DuplicateGroup,GenerationSession,ImportSummary,LibraryFacets,LibraryFilter,LibraryHealth,Lineage,ModelAlias,SavedFilter } from "./types";
+import type { AssetRecord,AssetSession,AssetSummary,BackupRecord,DuplicateGroup,GenerationSession,ImportSummary,LibraryFacets,LibraryFilter,LibraryHealth,Lineage,ModelAlias,SavedFilter,SourceFolder } from "./types";
 import { useDebouncedValue } from "./hooks/useDebouncedValue";
 import { useEditorDraft } from "./hooks/useEditorDraft";
 import { useNativeDrop } from "./hooks/useNativeDrop";
@@ -46,6 +46,7 @@ export default function App(){
   const[assetSession,setAssetSession]=useState<AssetSession|null>(null);
   const[modelAliases,setModelAliases]=useState<ModelAlias[]>([]);
   const[savedFilters,setSavedFilters]=useState<SavedFilter[]>([]);
+  const[sourceFolders,setSourceFolders]=useState<SourceFolder[]>([]);
   const[health,setHealth]=useState<LibraryHealth|null>(null);
   const[managerOpen,setManagerOpen]=useState(false);
   const[backups,setBackups]=useState<BackupRecord[]>([]);
@@ -63,11 +64,13 @@ export default function App(){
   const promptRef=useRef<HTMLTextAreaElement>(null);
   const refreshSeq=useRef(0);
   const selectSeq=useRef(0);
+  const autoSyncStarted=useRef(false);
   const{previewMode,setPreviewMode,leftWidth,rightWidth,drag}=useWorkspaceLayout();
 
   const refreshFacets=useCallback(()=>api.facets().then(setFacets).catch(()=>setFacets(emptyFacets)),[]);
   const refreshSessions=useCallback(()=>api.sessions().then(setSessions).catch(()=>setSessions([])),[]);
   const refreshSavedFilters=useCallback(()=>api.savedFilters().then(setSavedFilters).catch(()=>setSavedFilters([])),[]);
+  const refreshSources=useCallback(()=>api.sourceFolders().then(setSourceFolders).catch(()=>setSourceFolders([])),[]);
   const onEditorSaved=useCallback((a:AssetRecord)=>setCurrent(prev=>prev?.id===a.id?a:prev),[]);
   const editor=useEditorDraft(current,onEditorSaved,refreshFacets,setStatus);
   const{prompt,negative,model,tagsText,setPrompt,setNegative,setModel,setTagsText,flush:flushEditor,load:loadEditor}=editor;
@@ -171,10 +174,19 @@ export default function App(){
   },[current?.id,compareRecord?.id]);
 
   const importDone=useCallback(async(result:ImportSummary)=>{
-    await refreshFacets();await refresh(result.last_id??undefined);
-  },[refreshFacets,refresh]);
+    await Promise.all([refreshFacets(),refreshSources()]);await refresh(result.last_id??undefined);
+  },[refreshFacets,refreshSources,refresh]);
   const importJob=useImportJob(importDone,setStatus);
   const{start:startImportJob,cancel:cancelImportJob,active:importActive,progress:importProgress}=importJob;
+  useEffect(()=>{
+    if(!isTauri||autoSyncStarted.current)return;
+    autoSyncStarted.current=true;
+    void api.sourceFolders().then(list=>{
+      setSourceFolders(list);
+      const ids=list.filter(x=>x.auto_sync).map(x=>x.id);
+      if(ids.length)void startImportJob("正在同步资料源目录…",()=>api.startSyncSources(ids));
+    }).catch(e=>setStatus("来源目录读取失败："+String(e)));
+  },[startImportJob]);
   useCloseGuard(flushEditor,importActive?cancelImportJob:undefined);
   const importImmediate=useCallback(async(label:string,task:()=>Promise<ImportSummary>)=>{
     await flushEditor();setStatus(label);
@@ -233,8 +245,8 @@ export default function App(){
   const repairMissing=async()=>{if(!isTauri){setStatus("此功能仅在桌面版中可用");return}const root=await open({directory:true,multiple:false});if(!root||Array.isArray(root))return;const n=await api.relocateMissing(root);setStatus(`已重新定位 ${n} 条记录`);await refresh()};
   const compare=async(id:number)=>setCompareRecord(await api.get(id).catch(()=>null));
   const refreshManager=useCallback(async()=>{
-    const[b,d,a,s,h]=await Promise.all([api.backups(),api.duplicateGroups(),api.modelAliases(),api.savedFilters(),api.libraryHealth()]);
-    setBackups(b);setDuplicates(d);setModelAliases(a);setSavedFilters(s);setHealth(h);await refreshFacets();
+    const[b,d,a,s,h,sources]=await Promise.all([api.backups(),api.duplicateGroups(),api.modelAliases(),api.savedFilters(),api.libraryHealth(),api.sourceFolders()]);
+    setBackups(b);setDuplicates(d);setModelAliases(a);setSavedFilters(s);setHealth(h);setSourceFolders(sources);await refreshFacets();
   },[refreshFacets]);
   const openManager=async()=>{try{await flushEditor();await refreshManager();setManagerOpen(true)}catch(e){setStatus("打开资料库管理失败："+String(e))}};
   const createBackup=async()=>{try{setStatus("正在备份资料库…");await api.createBackup();await refreshManager();setStatus("资料库备份完成")}catch(e){setStatus("资料库备份失败："+String(e))}};
@@ -248,6 +260,25 @@ export default function App(){
   const saveCurrentView=async()=>{const name=window.prompt("保存当前筛选为","");if(!name?.trim())return;try{await api.saveFilter(name.trim(),filter);await refreshSavedFilters();setStatus("筛选视图已保存")}catch(e){setStatus("保存筛选失败："+String(e))}};
   const applySavedView=(view:SavedFilter)=>{setFilter({...view.filter});setStatus("已应用保存视图："+view.name)};
   const deleteSavedView=async(id:number)=>{try{await api.deleteSavedFilter(id);await refreshSavedFilters();await refreshManager()}catch(e){setStatus("删除保存视图失败："+String(e))}};
+  const addSourceFolder=async()=>{
+    if(!isTauri){setStatus("来源目录仅在桌面版中可用");return}
+    const picked=await open({directory:true,multiple:false});if(!picked||Array.isArray(picked))return;
+    try{const item=await api.addSourceFolder(picked);await refreshSources();setStatus("已添加来源目录："+item.name)}catch(e){setStatus("添加来源目录失败："+String(e))}
+  };
+  const removeSourceFolder=async(id:number)=>{
+    const item=sourceFolders.find(x=>x.id===id);
+    if(!window.confirm("移除来源目录“"+(item?.name||"")+"”？不会删除其中任何图片。"))return;
+    try{await api.removeSourceFolder(id);await refreshSources();setStatus("来源目录已移除")}catch(e){setStatus("移除来源目录失败："+String(e))}
+  };
+  const toggleSourceAutoSync=async(id:number,enabled:boolean)=>{
+    try{await api.setSourceAutoSync(id,enabled);await refreshSources();setStatus(enabled?"已开启启动同步":"已关闭启动同步")}catch(e){setStatus("更新来源目录失败："+String(e))}
+  };
+  const syncSourceFolders=async(ids:number[])=>{
+    if(!isTauri){setStatus("来源目录同步仅在桌面版中可用");return}
+    if(!ids.length)return;
+    await flushEditor();
+    await startImportJob(ids.length===1?"正在同步来源目录…":"正在同步全部来源目录…",()=>api.startSyncSources(ids));
+  };
   const setSession=async(sessionId:number|null)=>{if(!current)return;try{await api.setAssetSession(current.id,sessionId,assetSession?.asset_note||"");setAssetSession(await api.assetSession(current.id));await refreshSessions();setStatus(sessionId?"已加入生成会话":"已移出生成会话")}catch(e){setStatus("生成会话更新失败："+String(e))}};
   const createSession=async()=>{if(!current)return;const name=window.prompt("新建 Generation Session","");if(!name?.trim())return;const note=window.prompt("会话说明（可留空）","")||"";try{const session=await api.createSession(name.trim(),note);await api.setAssetSession(current.id,session.id,"");await refreshSessions();setAssetSession(await api.assetSession(current.id));setStatus("Generation Session 已创建")}catch(e){setStatus("新建会话失败："+String(e))}};
   const editSessionNote=async()=>{if(!current||!assetSession)return;const note=window.prompt("当前图片在此会话中的备注",assetSession.asset_note||"");if(note===null)return;try{await api.setAssetSession(current.id,assetSession.session_id,note);setAssetSession(await api.assetSession(current.id));setStatus("会话备注已保存")}catch(e){setStatus("会话备注保存失败："+String(e))}};
@@ -293,7 +324,7 @@ export default function App(){
       <InspectorPane asset={current} tab={tab} onTab={setTab} prompt={prompt} onPrompt={setPrompt} negative={negative} onNegative={setNegative} model={model} onModel={setModel} tagsText={tagsText} onTagsText={setTagsText} lineage={lineage} compareRecord={compareRecord} compareParentSrc={compareParentSrc} compareCurrentSrc={compareCurrentSrc} sessions={sessions} assetSession={assetSession} onCompare={compare} onCopy={copyPrompt} onSaveRevision={saveRevision} onHistory={openHistory} onFavorite={toggleFavorite} onRescan={rescan} onSidecar={exportSidecar} onCollection={openCollection} onRemove={()=>setModal({kind:"remove"})} onImportDerivative={importDerivative} onLinkParent={openParentPicker} onSetSession={setSession} onCreateSession={createSession} onEditSessionNote={editSessionNote} onEditRelationNote={editRelationNote} promptRef={promptRef}/>
     </main>
     <footer className="statusbar glass-surface"><span className={`runtime-dot ${isTauri?"native":"preview"}`}/><strong>{isTauri?"桌面版":"浏览器预览"}</strong><span>v{version}</span><span className="status-message">{status}</span>{importActive?<><progress max={Math.max(1,importProgress.total)} value={importProgress.processed}/><button onClick={cancelImportJob}>取消导入</button></>:null}<span>已加载 {assets.length}/{total}</span><button onClick={repairMissing} title="根据文件指纹查找移动后的文件">修复缺失文件</button><span className="shortcut">F6 提示词 · F7 预览 · Ctrl+S 保存版本</span></footer>
-    <LibraryManager open={managerOpen} backups={backups} tags={facets.tags} collections={facets.collections} duplicates={duplicates} modelAliases={modelAliases} savedFilters={savedFilters} health={health} onClose={()=>setManagerOpen(false)} onBackup={createBackup} onRestore={restoreBackup} onRenameTag={renameTag} onDeleteTag={deleteTag} onRenameCollection={renameCollection} onDeleteCollection={deleteCollection} onUpsertModelAlias={upsertModelAlias} onDeleteModelAlias={deleteModelAlias} onDeleteSavedFilter={deleteSavedView}/>
+    <LibraryManager open={managerOpen} backups={backups} tags={facets.tags} collections={facets.collections} duplicates={duplicates} modelAliases={modelAliases} savedFilters={savedFilters} sourceFolders={sourceFolders} sourceSyncing={importActive} health={health} onClose={()=>setManagerOpen(false)} onBackup={createBackup} onRestore={restoreBackup} onRenameTag={renameTag} onDeleteTag={deleteTag} onRenameCollection={renameCollection} onDeleteCollection={deleteCollection} onUpsertModelAlias={upsertModelAlias} onDeleteModelAlias={deleteModelAlias} onDeleteSavedFilter={deleteSavedView} onAddSourceFolder={addSourceFolder} onRemoveSourceFolder={removeSourceFolder} onToggleSourceAutoSync={toggleSourceAutoSync} onSyncSourceFolders={syncSourceFolders}/>
     <ParentPicker open={parentOpen} query={parentQuery} results={parentResults} choice={parentChoice} loading={parentLoading} onQuery={setParentQuery} onChoice={setParentChoice} onClose={()=>setParentOpen(false)} onConfirm={confirmParent}/>
     <AppDialogs modal={modal} assets={assets} currentId={current?.id} text={dialogText} setText={setDialogText} choice={dialogChoice} setChoice={setDialogChoice} onClose={()=>setModal(null)} onConfirm={confirmModal}/>
   </div>

@@ -1,5 +1,5 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import type { AssetRecord, AssetSession, AssetSummary, BackupRecord, CollectionRecord, DuplicateGroup, GenerationSession, ImportSummary, LibraryFacets, LibraryFilter, LibraryHealth, LibraryPage, Lineage, ModelAlias, PromptPatch, Revision, SavedFilter } from "./types";
+import type { AssetRecord, AssetSession, AssetSummary, BackupRecord, CollectionRecord, DuplicateGroup, GenerationSession, ImportSummary, LibraryFacets, LibraryFilter, LibraryHealth, LibraryPage, Lineage, ModelAlias, PromptPatch, Revision, SavedFilter, SourceFolder } from "./types";
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -18,6 +18,7 @@ const demoImages = new Map<number,string>([
   [4,demoSvg("Aero Poster","#45c8e8","#72c359")],[5,demoSvg("Close-up","#71d0e3","#6a9fc4")],[6,demoSvg("Missing","#b7c9d0","#9aadb4")]
 ]);
 let mockCollections:CollectionRecord[]=[{id:1,name:"Character Study",description:"Main character experiments",created_at:0,updated_at:0,count:3}];
+let mockSources:SourceFolder[]=[{id:1,path:"D:/AI/outputs",name:"outputs",auto_sync:true,last_scan_at:0,created_at:0,updated_at:0}];
 
 const toSummary=(a:AssetRecord):AssetSummary=>({id:a.id,path:a.path,name:a.name,favorite:a.favorite,width:a.width,height:a.height,format:a.format,metadata_type:a.metadata_type,fingerprint:a.fingerprint,file_mtime:a.file_mtime,missing:a.missing,updated_at:a.updated_at});
 
@@ -71,6 +72,11 @@ async function mockCall<T>(command:string,args:Record<string,unknown>):Promise<T
     case "save_filter":return {id:1,name:String(args.name),filter:args.filter as LibraryFilter,created_at:0,updated_at:0} as T;
     case "delete_saved_filter":return true as T;
     case "library_health":return {total:mockAssets.length,missing:mockAssets.filter(x=>x.missing).length,duplicate_groups:0,without_metadata:1,without_fingerprint:0,pending_relations:0,unassigned_session:mockAssets.length,cache_bytes:10485760} as T;
+    case "source_folders":return mockSources as T;
+    case "add_source_folder":{const path=String(args.path);const existing=mockSources.find(x=>x.path===path);if(existing)return existing as T;const item={id:mockSources.length+1,path,name:path.split(/[\\/]/).filter(Boolean).at(-1)||path,auto_sync:true,last_scan_at:0,created_at:0,updated_at:0};mockSources=[...mockSources,item];return item as T;}
+    case "remove_source_folder":{mockSources=mockSources.filter(x=>x.id!==Number(args.id));return true as T;}
+    case "set_source_auto_sync":{const id=Number(args.id),enabled=Boolean(args.enabled);mockSources=mockSources.map(x=>x.id===id?{...x,auto_sync:enabled}:x);return mockSources.find(x=>x.id===id) as T;}
+    case "start_sync_sources":return 1 as T;
     case "open_external":case "open_containing_folder":return true as T;
     default:throw new Error(`Unknown mock command: ${command}`);
   }
@@ -115,6 +121,11 @@ export const api={
   saveFilter:(name:string,filter:LibraryFilter)=>call<SavedFilter>("save_filter",{name,filter}),
   deleteSavedFilter:(id:number)=>call<boolean>("delete_saved_filter",{id}),
   libraryHealth:()=>call<LibraryHealth>("library_health"),
+  sourceFolders:()=>call<SourceFolder[]>("source_folders"),
+  addSourceFolder:(path:string)=>call<SourceFolder>("add_source_folder",{path}),
+  removeSourceFolder:(id:number)=>call<boolean>("remove_source_folder",{id}),
+  setSourceAutoSync:(id:number,enabled:boolean)=>call<SourceFolder>("set_source_auto_sync",{id,enabled}),
+  startSyncSources:(ids:number[])=>call<number>("start_sync_sources",{ids}),
   collections:()=>call<CollectionRecord[]>("collections"),
   duplicateGroups:()=>call<DuplicateGroup[]>("duplicate_groups"),
   createBackup:()=>call<BackupRecord>("create_backup"),

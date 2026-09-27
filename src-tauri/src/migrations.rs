@@ -1,7 +1,7 @@
 use rusqlite::{params,Connection,OptionalExtension};
 use sha2::{Digest,Sha256};
 
-const LATEST:i64=3;
+const LATEST:i64=4;
 
 fn set_version(conn:&Connection,version:i64)->Result<(),String>{
     conn.execute(
@@ -90,6 +90,21 @@ fn migrate_v3(conn:&Connection)->Result<(),String>{
     Ok(())
 }
 
+fn migrate_v4(conn:&Connection)->Result<(),String>{
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS source_folders (
+           id INTEGER PRIMARY KEY AUTOINCREMENT,
+           path TEXT NOT NULL UNIQUE COLLATE NOCASE,
+           name TEXT NOT NULL,
+           auto_sync INTEGER NOT NULL DEFAULT 1 CHECK (auto_sync IN (0,1)),
+           last_scan_at INTEGER NOT NULL DEFAULT 0,
+           created_at INTEGER NOT NULL,
+           updated_at INTEGER NOT NULL
+         );
+         CREATE INDEX IF NOT EXISTS idx_source_folders_auto_sync ON source_folders(auto_sync,name COLLATE NOCASE);"
+    ).map_err(|e|e.to_string())
+}
+
 pub fn apply(conn:&Connection)->Result<(),String>{
     conn.execute_batch("CREATE TABLE IF NOT EXISTS app_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);").map_err(|e|e.to_string())?;
     let current:Option<String>=conn.query_row(
@@ -119,12 +134,35 @@ pub fn apply(conn:&Connection)->Result<(),String>{
         set_version(conn,version)?;
     }
 
+    if version<4{
+        migrate_v4(conn)?;
+        version=4;
+        set_version(conn,version)?;
+    }
+
     Ok(())
 }
 
 #[cfg(test)]
 mod tests{
     use super::*;
+
+    #[test]
+    fn migration_v4_adds_source_folders(){
+        let conn=Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE app_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+             INSERT INTO app_meta VALUES('schema_version','3');"
+        ).unwrap();
+        apply(&conn).unwrap();
+        let version:String=conn.query_row("SELECT value FROM app_meta WHERE key='schema_version'",[],|r|r.get(0)).unwrap();
+        assert_eq!(version,"4");
+        conn.execute(
+            "INSERT INTO source_folders(path,name,created_at,updated_at) VALUES('D:/AI','AI',1,1)",[]
+        ).unwrap();
+        let enabled:i64=conn.query_row("SELECT auto_sync FROM source_folders LIMIT 1",[],|r|r.get(0)).unwrap();
+        assert_eq!(enabled,1);
+    }
 
     #[test]
     fn migration_v3_is_rerunnable_after_column_exists(){

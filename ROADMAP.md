@@ -50,6 +50,13 @@
 - Reproducible 1280×640 OG renderer
 - Metadata source label polish
 
+## v0.16.0 — Source Sync ✅
+- 持久化资料源目录
+- 启动时自动同步 / 一键同步
+- 单目录同步、移除与自动同步开关
+- 复用后台导入进度、取消与重复检测
+- Migration v4
+
 ## v1.0.0 — Stable Local Library
 - Windows 代码签名与自动更新
 - 启动故障恢复与 rotating logs

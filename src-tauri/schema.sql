@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS app_meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
-INSERT OR IGNORE INTO app_meta(key,value) VALUES ('schema_version','3');
+INSERT OR IGNORE INTO app_meta(key,value) VALUES ('schema_version','4');
 
 CREATE TABLE IF NOT EXISTS assets (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -154,3 +154,14 @@ CREATE TABLE IF NOT EXISTS pending_relations (
   UNIQUE(child_portable_id,parent_portable_id,parent_fingerprint,relation_type)
 );
 CREATE INDEX IF NOT EXISTS idx_pending_relations_child ON pending_relations(child_portable_id);
+
+CREATE TABLE IF NOT EXISTS source_folders (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  path TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  name TEXT NOT NULL,
+  auto_sync INTEGER NOT NULL DEFAULT 1 CHECK (auto_sync IN (0,1)),
+  last_scan_at INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_source_folders_auto_sync ON source_folders(auto_sync,name COLLATE NOCASE);

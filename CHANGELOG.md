@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.16.0 — Source Sync
+
+- Added persistent Source Folders for frequently used AI output and image directories.
+- Source folders can be synchronized individually or together through the existing background import job with progress and cancellation.
+- Added per-folder “sync on startup” control; startup performs one scan only and does not install a resident filesystem watcher.
+- Added Library Manager controls for adding, removing and synchronizing source folders.
+- Added Migration v4 and regression coverage for Source Folder persistence.
+- Reused unchanged-file fast paths and duplicate detection so repeated syncs skip already indexed files efficiently.
+
+
+
 ## 0.15.2 — Showcase
 
 - Added a 1280×640 ImageLore OG / README preview source matching the current Frutiger Aero desktop UI.

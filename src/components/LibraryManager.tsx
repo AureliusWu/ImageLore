@@ -1,16 +1,17 @@
 import { useMemo,useState } from "react";
-import type { BackupRecord,CollectionRecord,DuplicateGroup,FacetCount,LibraryHealth,ModelAlias,SavedFilter } from "../types";
+import type { BackupRecord,CollectionRecord,DuplicateGroup,FacetCount,LibraryHealth,ModelAlias,SavedFilter,SourceFolder } from "../types";
 
 const bytes=(n:number)=>n<1024?n+" B":n<1024*1024?(n/1024).toFixed(1)+" KB":(n/1024/1024).toFixed(1)+" MB";
 
-export function LibraryManager({open,backups,tags,collections,duplicates,modelAliases,savedFilters,health,onClose,onBackup,onRestore,onRenameTag,onDeleteTag,onRenameCollection,onDeleteCollection,onUpsertModelAlias,onDeleteModelAlias,onDeleteSavedFilter}:{
-  open:boolean;backups:BackupRecord[];tags:FacetCount[];collections:CollectionRecord[];duplicates:DuplicateGroup[];modelAliases:ModelAlias[];savedFilters:SavedFilter[];health:LibraryHealth|null;
+export function LibraryManager({open,backups,tags,collections,duplicates,modelAliases,savedFilters,sourceFolders,sourceSyncing,health,onClose,onBackup,onRestore,onRenameTag,onDeleteTag,onRenameCollection,onDeleteCollection,onUpsertModelAlias,onDeleteModelAlias,onDeleteSavedFilter,onAddSourceFolder,onRemoveSourceFolder,onToggleSourceAutoSync,onSyncSourceFolders}:{
+  open:boolean;backups:BackupRecord[];tags:FacetCount[];collections:CollectionRecord[];duplicates:DuplicateGroup[];modelAliases:ModelAlias[];savedFilters:SavedFilter[];sourceFolders:SourceFolder[];sourceSyncing:boolean;health:LibraryHealth|null;
   onClose:()=>void;onBackup:()=>void;onRestore:(name:string)=>void;
   onRenameTag:(oldName:string,newName:string)=>void;onDeleteTag:(name:string)=>void;
   onRenameCollection:(id:number,name:string)=>void;onDeleteCollection:(id:number)=>void;
   onUpsertModelAlias:(alias:string,canonical:string)=>void;onDeleteModelAlias:(alias:string)=>void;onDeleteSavedFilter:(id:number)=>void;
+  onAddSourceFolder:()=>void;onRemoveSourceFolder:(id:number)=>void;onToggleSourceAutoSync:(id:number,enabled:boolean)=>void;onSyncSourceFolders:(ids:number[])=>void;
 }){
-  const[tab,setTab]=useState<"safety"|"tags"|"collections"|"intelligence"|"duplicates"|"health">("safety");
+  const[tab,setTab]=useState<"safety"|"sources"|"tags"|"collections"|"intelligence"|"duplicates"|"health">("safety");
   const[tagSource,setTagSource]=useState("");const[tagTarget,setTagTarget]=useState("");
   const[alias,setAlias]=useState("");const[canonical,setCanonical]=useState("");
   const collectionMap=useMemo(()=>new Map(collections.map(x=>[x.id,x])),[collections]);
@@ -19,6 +20,7 @@ export function LibraryManager({open,backups,tags,collections,duplicates,modelAl
     <div className="modal-head"><div><strong>资料库管理</strong><p>维护安全、命名规范、保存视图与资料库健康。</p></div><button className="icon-button" onClick={onClose}>×</button></div>
     <nav className="manager-tabs">
       <button className={tab==="safety"?"active":""} onClick={()=>setTab("safety")}>安全</button>
+      <button className={tab==="sources"?"active":""} onClick={()=>setTab("sources")}>来源目录</button>
       <button className={tab==="tags"?"active":""} onClick={()=>setTab("tags")}>标签</button>
       <button className={tab==="collections"?"active":""} onClick={()=>setTab("collections")}>集合</button>
       <button className={tab==="intelligence"?"active":""} onClick={()=>setTab("intelligence")}>模型/视图</button>
@@ -28,6 +30,15 @@ export function LibraryManager({open,backups,tags,collections,duplicates,modelAl
     <div className="manager-body">
       {tab==="safety"?<section><div className="manager-toolbar"><div><strong>资料库备份</strong><span>最多保留最近 10 份；恢复会在下次启动时生效。</span></div><button className="button primary" onClick={onBackup}>立即备份</button></div>
         <div className="manager-list">{backups.length?backups.map(b=><div className="manager-row" key={b.name}><div><strong>{new Date(b.created_at*1000).toLocaleString("zh-CN")}</strong><span>{b.name+" · "+bytes(b.size)}</span></div><button onClick={()=>onRestore(b.name)}>恢复到此版本</button></div>):<p className="muted">还没有备份。ImageLore 每 24 小时会自动生成一份。</p>}</div></section>:null}
+      {tab==="sources"?<section>
+        <div className="manager-toolbar"><div><strong>资料源目录</strong><span>登记常用出图目录；自动同步只在 ImageLore 启动时扫描一次，不常驻监听系统。</span></div><div className="manager-toolbar-actions"><button className="button secondary" disabled={sourceSyncing||!sourceFolders.length} onClick={()=>onSyncSourceFolders(sourceFolders.map(x=>x.id))}>同步全部</button><button className="button primary" onClick={onAddSourceFolder}>＋ 添加目录</button></div></div>
+        <div className="manager-list">{sourceFolders.length?sourceFolders.map(source=><div className="manager-row source-row" key={source.id}>
+          <div><strong>{source.name}</strong><span title={source.path}>{source.path}</span><small>{source.last_scan_at?"上次扫描："+new Date(source.last_scan_at*1000).toLocaleString("zh-CN"):"尚未扫描"}</small></div>
+          <label className="source-auto"><input type="checkbox" checked={source.auto_sync} onChange={e=>onToggleSourceAutoSync(source.id,e.target.checked)}/><span>启动时同步</span></label>
+          <button disabled={sourceSyncing} onClick={()=>onSyncSourceFolders([source.id])}>同步</button>
+          <button className="danger-compact" disabled={sourceSyncing} onClick={()=>onRemoveSourceFolder(source.id)}>移除</button>
+        </div>):<div className="source-empty"><strong>还没有资料源目录</strong><p>把 ComfyUI、Stable Diffusion、NovelAI 导出目录或你的整理目录加入这里，以后无需反复选择文件夹。</p><button className="button primary" onClick={onAddSourceFolder}>＋ 添加第一个目录</button></div>}</div>
+      </section>:null}
       {tab==="tags"?<section><div className="manager-toolbar"><div><strong>标签治理</strong><span>重命名到已有标签会自动合并。</span></div></div>
         <div className="manager-inline"><select value={tagSource} onChange={e=>setTagSource(e.target.value)}><option value="">选择标签</option>{tags.map(t=><option key={t.name} value={t.name}>{t.name+" ("+t.count+")"}</option>)}</select><input value={tagTarget} onChange={e=>setTagTarget(e.target.value)} placeholder="新名称或目标标签"/><button disabled={!tagSource||!tagTarget.trim()} onClick={()=>onRenameTag(tagSource,tagTarget)}>重命名/合并</button><button className="danger-compact" disabled={!tagSource} onClick={()=>onDeleteTag(tagSource)}>删除</button></div>
         <div className="chip-cloud">{tags.map(t=><span key={t.name}>{t.name}<b>{t.count}</b></span>)}</div></section>:null}
