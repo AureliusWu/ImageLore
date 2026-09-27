@@ -14,7 +14,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "node scripts/sync_version.mjs && tauri dev",
-    "tauri:build": "node scripts/sync_version.mjs && tauri build --bundles nsis",
+    "tauri:build": "node scripts/sync_version.mjs && tauri build --bundles nsis -- --locked",
     "check": "node scripts/check_version.mjs && python scripts/check_project.py && python scripts/test_schema.py && python scripts/test_scale.py && python scripts/test_contract.py && tsc --noEmit"
   },
   "dependencies": {
