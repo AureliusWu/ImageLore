@@ -18,13 +18,13 @@
     "check": "node scripts/check_version.mjs && python scripts/check_project.py && python scripts/test_schema.py && python scripts/test_scale.py && python scripts/test_contract.py && tsc --noEmit"
   },
   "dependencies": {
-    "@tauri-apps/api": "2.11.1",
-    "@tauri-apps/plugin-dialog": "2.7.3",
+    "@tauri-apps/api": "2.12.0",
+    "@tauri-apps/plugin-dialog": "2.8.0",
     "react": "19.3.0",
     "react-dom": "19.3.0"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "2.11.5",
+    "@tauri-apps/cli": "2.12.0",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^5.0.0",
