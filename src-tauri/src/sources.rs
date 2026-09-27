@@ -95,17 +95,18 @@ pub fn start_sync_sources(app:AppHandle,ids:Vec<i64>)->Result<u64,String>{
     };
     if roots.is_empty(){return Err("找不到要同步的来源目录".into())}
 
-    {
-        let conn=state.db.lock().map_err(|e|e.to_string())?;
-        let stamp=db::now();
-        for id in &matched_ids{
-            conn.execute(
-                "UPDATE source_folders SET last_scan_at=?1,updated_at=?1 WHERE id=?2",
-                params![stamp,id]
-            ).map_err(|e|e.to_string())?;
+    importer::start_job_with_finish(app,roots,true,move|state,_summary,cancelled|{
+        if cancelled{return}
+        if let Ok(conn)=state.db.lock(){
+            let stamp=db::now();
+            for id in matched_ids{
+                let _=conn.execute(
+                    "UPDATE source_folders SET last_scan_at=?1,updated_at=?1 WHERE id=?2",
+                    params![stamp,id]
+                );
+            }
         }
-    }
-    importer::start_job(app,roots,true)
+    })
 }
 
 #[cfg(test)]
