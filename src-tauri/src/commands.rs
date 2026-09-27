@@ -248,7 +248,7 @@ pub fn rename_tag(state:State<'_,AppState>,old_name:String,new_name:String)->Res
     let Some(source_id)=source else{return Err("找不到原标签".into())};
     let ids:Vec<i64>={
         let mut st=conn.prepare("SELECT asset_id FROM asset_tags WHERE tag_id=?1").map_err(|e|e.to_string())?;
-        st.query_map(params![source_id],|r|r.get(0)).map_err(|e|e.to_string())?.filter_map(Result::ok).collect()
+        let rows=st.query_map(params![source_id],|r|r.get(0)).map_err(|e|e.to_string())?.filter_map(Result::ok).collect();rows
     };
     let tx=conn.transaction().map_err(|e|e.to_string())?;
     if let Ok(target_id)=tx.query_row("SELECT id FROM tags WHERE name=?1 COLLATE NOCASE",params![new],|r|r.get::<_,i64>(0)){
@@ -278,7 +278,7 @@ pub fn delete_tag(state:State<'_,AppState>,name:String)->Result<bool,String>{
     let tag_id:i64=conn.query_row("SELECT id FROM tags WHERE name=?1 COLLATE NOCASE",params![name.trim()],|r|r.get(0)).map_err(|e|e.to_string())?;
     let ids:Vec<i64>={
         let mut st=conn.prepare("SELECT asset_id FROM asset_tags WHERE tag_id=?1").map_err(|e|e.to_string())?;
-        st.query_map(params![tag_id],|r|r.get(0)).map_err(|e|e.to_string())?.filter_map(Result::ok).collect()
+        let rows=st.query_map(params![tag_id],|r|r.get(0)).map_err(|e|e.to_string())?.filter_map(Result::ok).collect();rows
     };
     let tx=conn.transaction().map_err(|e|e.to_string())?;
     tx.execute("DELETE FROM tags WHERE id=?1",params![tag_id]).map_err(|e|e.to_string())?;

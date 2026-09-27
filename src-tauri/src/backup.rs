@@ -1,4 +1,4 @@
-use crate::{db,models::BackupRecord,state::AppState};
+use crate::{models::BackupRecord,state::AppState};
 use rusqlite::Connection;
 use std::{fs,path::{Path,PathBuf},time::{SystemTime,UNIX_EPOCH}};
 use tauri::State;
@@ -50,7 +50,7 @@ fn create(state:&AppState,prefix:&str)->Result<BackupRecord,String>{
     fs::create_dir_all(&state.backups_dir).map_err(|e|e.to_string())?;
     let stamp=now();
     let path=state.backups_dir.join(format!("{}-{}.sqlite3",prefix,stamp));
-    let escaped=path.to_string_lossy().replace(''',"''");
+    let escaped=path.to_string_lossy().replace('\'',"''");
     {
         let conn=state.db.lock().map_err(|e|e.to_string())?;
         conn.execute_batch("PRAGMA wal_checkpoint(FULL);").map_err(|e|e.to_string())?;
