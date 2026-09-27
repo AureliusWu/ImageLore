@@ -3,6 +3,7 @@ name: Build ImageLore Windows Installer
 on:
   workflow_dispatch:
   push:
+    branches: [main]
     tags: ['v*']
 
 concurrency:

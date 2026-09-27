@@ -15,30 +15,28 @@
 ## v0.13.1 — Build Hygiene ✅
 依赖锁定、快速 CI / Release 分离、并发取消、单次 NSIS 构建与可复现发布。
 
-## Current development — Runtime & Readability
-- 本地缓存 URI 取代 Base64 图片 IPC
-- 缓存容量治理
-- 正确的原始尺寸预览
-- 全局可读性与字号治理
-
-## v0.14.0 — Library Intelligence
-- 标签重命名 / 合并
-- Collection 管理页
-- 模型归一化
-- 排序与保存筛选
-- 重复图片 / Library Health
-- 可搜索的父图选择器
+## v0.14.0 — Library Continuity ✅
+- 自动 / 手动 Backup 与安全 Restore
+- SHA-256 重复内容检测
+- 后台导入进度与取消
+- Tag / Collection 管理
+- 全库可搜索 Parent Picker
+- 更完整的 ComfyUI Metadata Adapter
+- 本地 asset protocol 预览与缓存治理
+- Migration v2
 
 ## v0.15.0 — Generation Intelligence
-- 更完整的 ComfyUI 节点解析
-- 更多生成器元数据适配器
-- Sidecar v3
+- 更多生成器 Metadata Adapter
+- Sidecar v3 与基于 fingerprint/UUID 的跨库谱系恢复
 - 图片并排 Compare
 - Generation Session / Branch Notes
+- Model alias / normalization
+- 保存筛选与 Library Health 深化
 
 ## v1.0.0 — Stable Local Library
-- Backup / Restore
-- 签名安装器与自动更新
-- 缩略图缓存治理
-- 大图库性能验收
-- 稳定迁移策略
+- Windows 代码签名与自动更新
+- 启动故障恢复与 rotating logs
+- 大图库 50k+ 性能验收
+- CJK n-gram / trigram 搜索索引
+- 正式 Backup / Restore 灾难恢复验收
+- 稳定迁移兼容性测试矩阵
