@@ -22,6 +22,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -30,11 +32,11 @@ jobs:
           workspaces: './src-tauri -> target'
           cache-on-failure: true
 
-      - name: Install frontend dependencies
-        run: npm install
+      - name: Install locked frontend dependencies
+        run: npm ci
 
       - name: Verify project
         run: npm run check
 
       - name: Rust check
-        run: cargo check --manifest-path src-tauri/Cargo.toml
+        run: cargo check --locked --manifest-path src-tauri/Cargo.toml
