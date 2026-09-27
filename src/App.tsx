@@ -3,7 +3,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-dialog";
 import { api,isTauri } from "./api";
 import { APP_VERSION } from "./version";
-import type { AssetRecord,AssetSummary,BackupRecord,DuplicateGroup,ImportSummary,LibraryFacets,LibraryFilter,Lineage } from "./types";
+import type { AssetRecord,AssetSession,AssetSummary,BackupRecord,DuplicateGroup,GenerationSession,ImportSummary,LibraryFacets,LibraryFilter,LibraryHealth,Lineage,ModelAlias,SavedFilter } from "./types";
 import { useDebouncedValue } from "./hooks/useDebouncedValue";
 import { useEditorDraft } from "./hooks/useEditorDraft";
 import { useNativeDrop } from "./hooks/useNativeDrop";
@@ -40,6 +40,13 @@ export default function App(){
   const[tab,setTab]=useState<InspectorTab>("prompt");
   const[lineage,setLineage]=useState<Lineage>(emptyLineage);
   const[compareRecord,setCompareRecord]=useState<AssetRecord|null>(null);
+  const[compareParentSrc,setCompareParentSrc]=useState("");
+  const[compareCurrentSrc,setCompareCurrentSrc]=useState("");
+  const[sessions,setSessions]=useState<GenerationSession[]>([]);
+  const[assetSession,setAssetSession]=useState<AssetSession|null>(null);
+  const[modelAliases,setModelAliases]=useState<ModelAlias[]>([]);
+  const[savedFilters,setSavedFilters]=useState<SavedFilter[]>([]);
+  const[health,setHealth]=useState<LibraryHealth|null>(null);
   const[managerOpen,setManagerOpen]=useState(false);
   const[backups,setBackups]=useState<BackupRecord[]>([]);
   const[duplicates,setDuplicates]=useState<DuplicateGroup[]>([]);
@@ -59,6 +66,8 @@ export default function App(){
   const{previewMode,setPreviewMode,leftWidth,rightWidth,drag}=useWorkspaceLayout();
 
   const refreshFacets=useCallback(()=>api.facets().then(setFacets).catch(()=>setFacets(emptyFacets)),[]);
+  const refreshSessions=useCallback(()=>api.sessions().then(setSessions).catch(()=>setSessions([])),[]);
+  const refreshSavedFilters=useCallback(()=>api.savedFilters().then(setSavedFilters).catch(()=>setSavedFilters([])),[]);
   const onEditorSaved=useCallback((a:AssetRecord)=>setCurrent(prev=>prev?.id===a.id?a:prev),[]);
   const editor=useEditorDraft(current,onEditorSaved,refreshFacets,setStatus);
   const{prompt,negative,model,tagsText,setPrompt,setNegative,setModel,setTagsText,flush:flushEditor,load:loadEditor}=editor;
@@ -117,6 +126,7 @@ export default function App(){
   useEffect(()=>{if(isTauri)getVersion().then(setVersion).catch(()=>setVersion(APP_VERSION))},[]);
   useEffect(()=>{void refresh()},[debouncedQuery,filter.view,filter.tag,filter.model,filter.collection_id]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(()=>{void refreshFacets()},[refreshFacets]);
+  useEffect(()=>{void refreshSessions();void refreshSavedFilters()},[refreshSessions,refreshSavedFilters]);
   useEffect(()=>{if(isTauri)void api.ensureAutoBackup().catch(e=>setStatus("自动备份失败："+String(e)))},[]);
   useEffect(()=>{
     if(!parentOpen)return;
@@ -129,7 +139,7 @@ export default function App(){
     return()=>{cancelled=true};
   },[parentOpen,debouncedParentQuery,current?.id]);
   useEffect(()=>{
-    if(!current){setPreview("");setLineage(emptyLineage);setCompareRecord(null);return}
+    if(!current){setPreview("");setLineage(emptyLineage);setCompareRecord(null);setAssetSession(null);return}
     let cancelled=false;
     const assetId=current.id;
     setPreview("");
@@ -139,13 +149,26 @@ export default function App(){
     api.preview(assetId,previewMode==="fit"?2200:0,false)
       .then(src=>{if(!cancelled){setPreview(src);setStatus("就绪")}})
       .catch(e=>{if(!cancelled){setPreview("");setStatus(`预览失败：${String(e)}`)}});
-    void api.lineage(assetId).then(async x=>{
+    void Promise.all([
+      api.lineage(assetId),
+      api.assetSession(assetId).catch(()=>null)
+    ]).then(async([x,session])=>{
       const p=x.parents[0];
       const parent=p?await api.get(p.other_id).catch(()=>null):null;
-      if(!cancelled){setLineage(x);setCompareRecord(parent)}
-    }).catch(()=>{if(!cancelled)setLineage(emptyLineage)});
+      if(!cancelled){setLineage(x);setCompareRecord(parent);setAssetSession(session)}
+    }).catch(()=>{if(!cancelled){setLineage(emptyLineage);setAssetSession(null)}});
     return()=>{cancelled=true};
   },[current?.id,previewMode]);
+
+  useEffect(()=>{
+    if(!current||!compareRecord){setCompareParentSrc("");setCompareCurrentSrc("");return}
+    let cancelled=false;
+    setCompareParentSrc("");setCompareCurrentSrc("");
+    Promise.all([
+      api.preview(compareRecord.id,1200,false).catch(()=>""),api.preview(current.id,1200,false).catch(()=>"")
+    ]).then(([parentSrc,currentSrc])=>{if(!cancelled){setCompareParentSrc(parentSrc);setCompareCurrentSrc(currentSrc)}});
+    return()=>{cancelled=true};
+  },[current?.id,compareRecord?.id]);
 
   const importDone=useCallback(async(result:ImportSummary)=>{
     await refreshFacets();await refresh(result.last_id??undefined);
@@ -186,7 +209,11 @@ export default function App(){
     if(!picked||Array.isArray(picked))return;
     await flushEditor();const result=await api.importPaths([picked]);
     if(result.last_id===current.id){setStatus("所选图片与当前记录内容完全相同，未建立自引用关系");return}
-    if(result.last_id){await api.addRelation(current.id,result.last_id,"derived_from","");await refresh(result.last_id);setTab("lineage");setStatus("派生图已关联");return}
+    if(result.last_id){
+      await api.addRelation(current.id,result.last_id,"derived_from","");
+      if(assetSession)await api.setAssetSession(result.last_id,assetSession.session_id,"");
+      await refreshSessions();await refresh(result.last_id);setTab("lineage");setStatus("派生图已关联");return
+    }
     if(result.duplicates){setStatus("该派生图与资料库中的现有图片内容完全相同，未建立重复谱系")}
   };
 
@@ -206,8 +233,8 @@ export default function App(){
   const repairMissing=async()=>{if(!isTauri){setStatus("此功能仅在桌面版中可用");return}const root=await open({directory:true,multiple:false});if(!root||Array.isArray(root))return;const n=await api.relocateMissing(root);setStatus(`已重新定位 ${n} 条记录`);await refresh()};
   const compare=async(id:number)=>setCompareRecord(await api.get(id).catch(()=>null));
   const refreshManager=useCallback(async()=>{
-    const[b,d]=await Promise.all([api.backups(),api.duplicateGroups()]);
-    setBackups(b);setDuplicates(d);await refreshFacets();
+    const[b,d,a,s,h]=await Promise.all([api.backups(),api.duplicateGroups(),api.modelAliases(),api.savedFilters(),api.libraryHealth()]);
+    setBackups(b);setDuplicates(d);setModelAliases(a);setSavedFilters(s);setHealth(h);await refreshFacets();
   },[refreshFacets]);
   const openManager=async()=>{try{await flushEditor();await refreshManager();setManagerOpen(true)}catch(e){setStatus("打开资料库管理失败："+String(e))}};
   const createBackup=async()=>{try{setStatus("正在备份资料库…");await api.createBackup();await refreshManager();setStatus("资料库备份完成")}catch(e){setStatus("资料库备份失败："+String(e))}};
@@ -216,6 +243,15 @@ export default function App(){
   const deleteTag=async(name:string)=>{if(!window.confirm("删除标签“"+name+"”？图片记录本身不会被删除。"))return;try{await api.deleteTag(name);setFilter(f=>f.tag?.toLocaleLowerCase()===name.toLocaleLowerCase()?{...f,tag:null}:f);await refreshManager();await refresh(current?.id)}catch(e){setStatus("删除标签失败："+String(e))}};
   const renameCollection=async(id:number,name:string)=>{try{await api.renameCollection(id,name);await refreshManager()}catch(e){setStatus("集合重命名失败："+String(e))}};
   const deleteCollection=async(id:number)=>{if(!window.confirm("删除这个集合？集合内的图片记录不会被删除。"))return;try{await api.deleteCollection(id);await refreshManager();setFilter(f=>f.collection_id===id?{...f,collection_id:null}:f)}catch(e){setStatus("删除集合失败："+String(e))}};
+  const upsertModelAlias=async(alias:string,canonical:string)=>{try{await api.upsertModelAlias(alias,canonical);await refreshManager();await refreshFacets();await refresh(current?.id)}catch(e){setStatus("模型别名保存失败："+String(e))}};
+  const deleteModelAlias=async(alias:string)=>{try{await api.deleteModelAlias(alias);await refreshManager();await refreshFacets();await refresh(current?.id)}catch(e){setStatus("模型别名删除失败："+String(e))}};
+  const saveCurrentView=async()=>{const name=window.prompt("保存当前筛选为","");if(!name?.trim())return;try{await api.saveFilter(name.trim(),filter);await refreshSavedFilters();setStatus("筛选视图已保存")}catch(e){setStatus("保存筛选失败："+String(e))}};
+  const applySavedView=(view:SavedFilter)=>{setFilter({...view.filter});setStatus("已应用保存视图："+view.name)};
+  const deleteSavedView=async(id:number)=>{try{await api.deleteSavedFilter(id);await refreshSavedFilters();await refreshManager()}catch(e){setStatus("删除保存视图失败："+String(e))}};
+  const setSession=async(sessionId:number|null)=>{if(!current)return;try{await api.setAssetSession(current.id,sessionId,assetSession?.asset_note||"");setAssetSession(await api.assetSession(current.id));await refreshSessions();setStatus(sessionId?"已加入生成会话":"已移出生成会话")}catch(e){setStatus("生成会话更新失败："+String(e))}};
+  const createSession=async()=>{if(!current)return;const name=window.prompt("新建 Generation Session","");if(!name?.trim())return;const note=window.prompt("会话说明（可留空）","")||"";try{const session=await api.createSession(name.trim(),note);await api.setAssetSession(current.id,session.id,"");await refreshSessions();setAssetSession(await api.assetSession(current.id));setStatus("Generation Session 已创建")}catch(e){setStatus("新建会话失败："+String(e))}};
+  const editSessionNote=async()=>{if(!current||!assetSession)return;const note=window.prompt("当前图片在此会话中的备注",assetSession.asset_note||"");if(note===null)return;try{await api.setAssetSession(current.id,assetSession.session_id,note);setAssetSession(await api.assetSession(current.id));setStatus("会话备注已保存")}catch(e){setStatus("会话备注保存失败："+String(e))}};
+  const editRelationNote=async(relationId:number,currentNote:string)=>{const note=window.prompt("Branch Note",currentNote);if(note===null||!current)return;try{await api.updateRelationNote(relationId,note);setLineage(await api.lineage(current.id));setStatus("分支备注已保存")}catch(e){setStatus("分支备注保存失败："+String(e))}};
   const openParentPicker=()=>{setParentQuery("");setParentChoice(null);setParentOpen(true)};
   const confirmParent=async()=>{if(!current||!parentChoice)return;try{await api.addRelation(parentChoice,current.id,"reference","");setParentOpen(false);setLineage(await api.lineage(current.id));setCompareRecord(await api.get(parentChoice));setStatus("父图已关联")}catch(e){setStatus("关联父图失败："+String(e))}};
 
@@ -250,14 +286,14 @@ export default function App(){
     {drop.active?<div className="drop-overlay" aria-live="polite"><div className="drop-card"><span className="drop-orb">⇩</span><strong>松开鼠标即可导入</strong><p>{drop.count?`检测到 ${drop.count} 个项目`:"正在识别拖入内容"} · 支持图片和文件夹</p><small>文件夹会递归扫描；已存在的图片会自动跳过</small></div></div>:null}
     <AppHeader version={version} query={filter.query} onQuery={query=>setFilter(f=>({...f,query}))} onImport={chooseImages} onFolder={chooseFolder}/>
     <main className="workspace" style={{gridTemplateColumns:`${leftWidth}px 8px minmax(360px,1fr) 8px ${rightWidth}px`}}>
-      <LibraryPane assets={assets} total={total} currentId={current?.id} selected={selected} loading={loading} filter={filter} facets={facets} onFilter={setFilter} onAsset={onAsset} onLoadMore={loadMore} onBatchTags={()=>{setDialogText("");setModal({kind:"batch-tags"})}} onCollection={openCollection} onClearSelection={()=>setSelected(new Set())} onRefreshMissing={refreshMissing} onManage={openManager}/>
+      <LibraryPane assets={assets} total={total} currentId={current?.id} selected={selected} loading={loading} filter={filter} facets={facets} savedFilters={savedFilters} onFilter={setFilter} onAsset={onAsset} onLoadMore={loadMore} onBatchTags={()=>{setDialogText("");setModal({kind:"batch-tags"})}} onCollection={openCollection} onClearSelection={()=>setSelected(new Set())} onRefreshMissing={refreshMissing} onManage={openManager} onSaveView={saveCurrentView} onApplySavedView={applySavedView}/>
       <div className="splitter" onPointerDown={drag("left")}/>
       <PreviewPane asset={current} src={preview} mode={previewMode} onMode={setPreviewMode} onImport={chooseImages} onOpen={()=>current&&api.openExternal(current.id)} onFolder={()=>current&&api.openFolder(current.id)}/>
       <div className="splitter" onPointerDown={drag("right")}/>
-      <InspectorPane asset={current} tab={tab} onTab={setTab} prompt={prompt} onPrompt={setPrompt} negative={negative} onNegative={setNegative} model={model} onModel={setModel} tagsText={tagsText} onTagsText={setTagsText} lineage={lineage} compareRecord={compareRecord} onCompare={compare} onCopy={copyPrompt} onSaveRevision={saveRevision} onHistory={openHistory} onFavorite={toggleFavorite} onRescan={rescan} onSidecar={exportSidecar} onCollection={openCollection} onRemove={()=>setModal({kind:"remove"})} onImportDerivative={importDerivative} onLinkParent={openParentPicker} promptRef={promptRef}/>
+      <InspectorPane asset={current} tab={tab} onTab={setTab} prompt={prompt} onPrompt={setPrompt} negative={negative} onNegative={setNegative} model={model} onModel={setModel} tagsText={tagsText} onTagsText={setTagsText} lineage={lineage} compareRecord={compareRecord} compareParentSrc={compareParentSrc} compareCurrentSrc={compareCurrentSrc} sessions={sessions} assetSession={assetSession} onCompare={compare} onCopy={copyPrompt} onSaveRevision={saveRevision} onHistory={openHistory} onFavorite={toggleFavorite} onRescan={rescan} onSidecar={exportSidecar} onCollection={openCollection} onRemove={()=>setModal({kind:"remove"})} onImportDerivative={importDerivative} onLinkParent={openParentPicker} onSetSession={setSession} onCreateSession={createSession} onEditSessionNote={editSessionNote} onEditRelationNote={editRelationNote} promptRef={promptRef}/>
     </main>
     <footer className="statusbar glass-surface"><span className={`runtime-dot ${isTauri?"native":"preview"}`}/><strong>{isTauri?"桌面版":"浏览器预览"}</strong><span>v{version}</span><span className="status-message">{status}</span>{importActive?<><progress max={Math.max(1,importProgress.total)} value={importProgress.processed}/><button onClick={cancelImportJob}>取消导入</button></>:null}<span>已加载 {assets.length}/{total}</span><button onClick={repairMissing} title="根据文件指纹查找移动后的文件">修复缺失文件</button><span className="shortcut">F6 提示词 · F7 预览 · Ctrl+S 保存版本</span></footer>
-    <LibraryManager open={managerOpen} backups={backups} tags={facets.tags} collections={facets.collections} duplicates={duplicates} onClose={()=>setManagerOpen(false)} onBackup={createBackup} onRestore={restoreBackup} onRenameTag={renameTag} onDeleteTag={deleteTag} onRenameCollection={renameCollection} onDeleteCollection={deleteCollection}/>
+    <LibraryManager open={managerOpen} backups={backups} tags={facets.tags} collections={facets.collections} duplicates={duplicates} modelAliases={modelAliases} savedFilters={savedFilters} health={health} onClose={()=>setManagerOpen(false)} onBackup={createBackup} onRestore={restoreBackup} onRenameTag={renameTag} onDeleteTag={deleteTag} onRenameCollection={renameCollection} onDeleteCollection={deleteCollection} onUpsertModelAlias={upsertModelAlias} onDeleteModelAlias={deleteModelAlias} onDeleteSavedFilter={deleteSavedView}/>
     <ParentPicker open={parentOpen} query={parentQuery} results={parentResults} choice={parentChoice} loading={parentLoading} onQuery={setParentQuery} onChoice={setParentChoice} onClose={()=>setParentOpen(false)} onConfirm={confirmParent}/>
     <AppDialogs modal={modal} assets={assets} currentId={current?.id} text={dialogText} setText={setDialogText} choice={dialogChoice} setChoice={setDialogChoice} onClose={()=>setModal(null)} onConfirm={confirmModal}/>
   </div>
