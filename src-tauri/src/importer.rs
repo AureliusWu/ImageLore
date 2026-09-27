@@ -1,4 +1,4 @@
-use crate::{db,metadata,models::{ImportProgress,ImportSummary},sidecar,state::AppState};
+use crate::{db,metadata,models::{ImportProgress,ImportSummary},preview,sidecar,state::AppState};
 use rusqlite::params;
 use std::{
     path::{Path,PathBuf},
@@ -25,7 +25,7 @@ struct PreparedAsset{
     tags:Vec<String>,
 }
 
-enum InsertOutcome{Added(i64),Existing(i64),Duplicate(i64)}
+enum InsertOutcome{Added(i64),Existing(i64),Duplicate}
 
 fn supported_files(roots:Vec<String>,recursive_dirs:bool)->Vec<PathBuf>{
     let mut out=Vec::new();
@@ -64,14 +64,37 @@ fn prepare(path:&Path)->Option<PreparedAsset>{
     })
 }
 
-fn insert(state:&AppState,item:PreparedAsset)->Result<InsertOutcome,String>{
+fn refresh_existing(state:&AppState,id:i64,item:PreparedAsset)->Result<InsertOutcome,String>{
+    let mut conn=state.db.lock().map_err(|e|e.to_string())?;
+    let old=db::get_asset(&conn,id)?;
+    let stamp=db::now();
+    let tx=conn.transaction().map_err(|e|e.to_string())?;
+    tx.execute(
+        "UPDATE assets SET name=?1,width=?2,height=?3,file_size=?4,format=?5,mime_type=?6,metadata_type=?7,generation_json=?8,fingerprint=?9,file_mtime=?10,missing=0,updated_at=?11 WHERE id=?12",
+        params![item.name,item.width,item.height,item.file_size,item.format,item.mime_type,item.metadata_type,item.generation_json,item.fingerprint,item.file_mtime,stamp,id]
+    ).map_err(|e|e.to_string())?;
+    if old.prompt.is_empty()&&old.negative_prompt.is_empty()&&old.model.is_empty(){
+        tx.execute(
+            "UPDATE prompt_state SET prompt=?1,negative_prompt=?2,model=?3,updated_at=?4 WHERE asset_id=?5",
+            params![item.prompt,item.negative_prompt,item.model,stamp,id]
+        ).map_err(|e|e.to_string())?;
+    }
+    if old.tags.is_empty()&&!item.tags.is_empty(){db::replace_tags_raw(&tx,id,&item.tags)?;}
+    db::reindex_asset(&tx,id)?;
+    tx.commit().map_err(|e|e.to_string())?;
+    drop(conn);
+    preview::purge_asset_cache(&state.cache_dir,&old.fingerprint);
+    Ok(InsertOutcome::Existing(id))
+}
+
+fn insert_new(state:&AppState,item:PreparedAsset)->Result<InsertOutcome,String>{
     let mut conn=state.db.lock().map_err(|e|e.to_string())?;
     if let Some(id)=db::asset_exists_by_path(&conn,&item.path)?{
-        conn.execute("UPDATE assets SET missing=0,updated_at=?1 WHERE id=?2",params![db::now(),id]).map_err(|e|e.to_string())?;
-        return Ok(InsertOutcome::Existing(id))
+        drop(conn);
+        return refresh_existing(state,id,item)
     }
-    if let Some(id)=db::asset_exists_by_fingerprint(&conn,&item.fingerprint)?{
-        return Ok(InsertOutcome::Duplicate(id))
+    if db::asset_exists_by_fingerprint(&conn,&item.fingerprint)?.is_some(){
+        return Ok(InsertOutcome::Duplicate)
     }
 
     let stamp=db::now();
@@ -106,9 +129,14 @@ where F:FnMut(ImportProgress){
         let path_text=canonical.to_string_lossy().to_string();
         let name=canonical.file_name().and_then(|x|x.to_str()).unwrap_or("image").to_string();
 
-        {
+        let existing={
             let conn=state.db.lock().map_err(|e|e.to_string())?;
-            if let Some(id)=db::asset_exists_by_path(&conn,&path_text)?{
+            db::asset_file_state_by_path(&conn,&path_text)?
+        };
+        if let Some((id,stored_mtime,stored_size))=existing{
+            let(current_size,current_mtime)=metadata::file_stamp(&canonical);
+            if stored_mtime==current_mtime&&stored_size==current_size{
+                let conn=state.db.lock().map_err(|e|e.to_string())?;
                 conn.execute("UPDATE assets SET missing=0 WHERE id=?1",params![id]).map_err(|e|e.to_string())?;
                 result.skipped+=1;result.last_id=Some(id);
                 progress(ImportProgress{
@@ -119,10 +147,12 @@ where F:FnMut(ImportProgress){
             }
         }
 
-        match prepare(&canonical).map(|item|insert(state,item)){
+        match prepare(&canonical).map(|item|{
+            if let Some((id,_,_))=existing{refresh_existing(state,id,item)}else{insert_new(state,item)}
+        }){
             Some(Ok(InsertOutcome::Added(id)))=>{result.added+=1;result.last_id=Some(id)}
             Some(Ok(InsertOutcome::Existing(id)))=>{result.skipped+=1;result.last_id=Some(id)}
-            Some(Ok(InsertOutcome::Duplicate(id)))=>{result.duplicates+=1;result.last_id=Some(id)}
+            Some(Ok(InsertOutcome::Duplicate))=>{result.duplicates+=1}
             Some(Err(_))=>result.failed+=1,
             None=>result.skipped+=1,
         }
