@@ -1,4 +1,4 @@
-# ImageLore v0.14.0
+# ImageLore v0.14.1
 
 ImageLore 是一个 local-first 的 AI 视觉生成记忆库，用来保存图片背后的 Prompt、模型、参数、历史版本、集合与生成谱系，并让这些信息在几个月以后仍然可以继续使用。
 

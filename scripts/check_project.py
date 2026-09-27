@@ -5,7 +5,7 @@ required=[
  'VERSION','package.json','package-lock.json','src/App.tsx','src/api.ts','src/styles.css','src/hooks/useEditorDraft.ts','src/hooks/useNativeDrop.ts',
  'src-tauri/Cargo.toml','src-tauri/Cargo.lock','src-tauri/schema.sql','src-tauri/src/lib.rs','src-tauri/src/db.rs','src-tauri/src/importer.rs','src-tauri/src/migrations.rs',
  'src-tauri/src/backup.rs','src-tauri/src/commands.rs','src-tauri/src/metadata.rs','src-tauri/tauri.conf.json',
- 'src/hooks/useImportJob.ts','src/components/LibraryManager.tsx','src/components/ParentPicker.tsx','.github/workflows/ci.yml','.github/workflows/windows-release.yml'
+ 'src/hooks/useImportJob.ts','src/hooks/useCloseGuard.ts','src/components/LibraryManager.tsx','src/components/ParentPicker.tsx','.github/workflows/ci.yml','.github/workflows/native-ci.yml','.github/workflows/windows-release.yml'
 ]
 missing=[x for x in required if not (root/x).exists()]
 assert not missing,f'missing: {missing}'

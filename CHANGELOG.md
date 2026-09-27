@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.14.1 — Stability Fixes
+
+- Fixed a race where very fast background imports could finish before the frontend learned the job ID, leaving import progress stuck.
+- Buffered all early import events and made drag/drop listeners stable across React renders.
+- Added close-time editor flush and import cancellation so the final Prompt/Tag edits are preserved when the window closes.
+- Fixed stale async results overwriting newer image selections, previews, lineage data and Parent Picker searches.
+- Fixed stale pagination results being appended after filters changed.
+- Fixed hidden-item selection after importing while a Library filter is active.
+- Kept active Tag filters coherent after tag rename/merge/delete.
+- Fixed stale preview cache reuse when an original image is externally replaced at the same path.
+- Fixed cache cleanup for records whose fingerprint is unavailable.
+- Fixed CJK multi-term search so whitespace-separated Chinese/Japanese/Korean terms are matched independently with AND semantics.
+- Folder import scanning now responds to cancellation while walking large directory trees.
+- Removed long filesystem hashing/metadata work from the SQLite mutex in metadata rescan and missing-file relocation paths.
+- Made delete, Collection membership writes, metadata rescan, missing-file updates and relocation updates atomic where multi-step writes are involved.
+- Made pre-restore safety backups WAL-aware, staged restores atomic, and backup filenames collision-safe.
+- A corrupt active database no longer prevents restoring a previously validated backup; startup failures now surface through a native error dialog and startup-error.log.
+- Added backend validation for empty/duplicate Collection names and clearer UI error reporting for Library Manager operations.
+- Added ComfyUI numeric node-ID compatibility and regression tests for A1111 / ComfyUI metadata parsing.
+- Split Fast CI and Native CI so a later frontend-only commit can no longer cancel and accidentally skip Rust validation.
+- Native CI now runs both cargo check and Rust unit tests.
+
+
 ## 0.14.0 — Library Continuity
 
 - Replaced Base64 image IPC with scoped local WebP cache files served through Tauri asset protocol.

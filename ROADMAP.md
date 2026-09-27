@@ -25,6 +25,16 @@
 - 本地 asset protocol 预览与缓存治理
 - Migration v2
 
+## v0.14.1 — Stability Fixes ✅
+- 导入 / 拖拽 / 切图异步竞态修复
+- 关闭窗口前自动 flush
+- WAL-safe Backup / Restore
+- SQLite 长耗时锁释放与事务补全
+- CJK 多关键词搜索修复
+- Preview 缓存失效修复
+- Fast CI / Native CI 完全分离
+- Rust regression tests
+
 ## v0.15.0 — Generation Intelligence
 - 更多生成器 Metadata Adapter
 - Sidecar v3 与基于 fingerprint/UUID 的跨库谱系恢复
