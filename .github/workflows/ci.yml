@@ -28,5 +28,14 @@ jobs:
       - name: Install locked frontend dependencies
         run: npm ci
 
+      - name: Verify version sync is idempotent
+        shell: pwsh
+        run: |
+          npm run version:sync
+          if (git status --porcelain) {
+            git status --short
+            throw "Version targets are not synchronized with VERSION"
+          }
+
       - name: Verify project
         run: npm run check
