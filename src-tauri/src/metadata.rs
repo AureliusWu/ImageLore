@@ -113,7 +113,7 @@ fn text_from_node(graph:&Value,id:&str)->String{
     node(graph,id).and_then(|n|input(n,"text")).and_then(Value::as_str).unwrap_or("").to_string()
 }
 fn model_from_chain(graph:&Value,start:&str,depth:u8)->String{
-    if depth>8{return String::new()}
+    if depth>MAX_COMFY_CHAIN_DEPTH{return String::new()}
     let Some(n)=node(graph,start)else{return String::new()};
     for key in ["ckpt_name","model_name","unet_name"]{
         if let Some(v)=input(n,key).and_then(Value::as_str){return v.to_string()}
@@ -121,6 +121,8 @@ fn model_from_chain(graph:&Value,start:&str,depth:u8)->String{
     if let Some(next)=input(n,"model").and_then(ref_id){return model_from_chain(graph,&next,depth+1)}
     String::new()
 }
+
+const MAX_COMFY_CHAIN_DEPTH:u8=8;
 
 struct ComfyUiAdapter;
 impl MetadataAdapter for ComfyUiAdapter{
