@@ -32,7 +32,7 @@ pub fn file_stamp(path:&Path)->(Option<i64>,i64){
     let meta=fs::metadata(path).ok();
     let file_size=meta.as_ref().map(|m|m.len() as i64);
     let file_mtime=meta.and_then(|m|m.modified().ok())
-        .and_then(|t|t.duration_since(UNIX_EPOCH).ok()).map(|x|x.as_secs() as i64).unwrap_or(0);
+        .and_then(|t|t.duration_since(UNIX_EPOCH).ok()).map(|x|x.as_millis() as i64).unwrap_or(0);
     (file_size,file_mtime)
 }
 

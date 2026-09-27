@@ -10,8 +10,26 @@ fn now()->i64{
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64
 }
 
-fn now_ms()->u128{
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis()
+fn now_nanos()->u128{
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos()
+}
+
+fn sql_path(path:&Path)->String{
+    path.to_string_lossy().replace("'","''")
+}
+
+fn unique_path(dir:&Path,prefix:&str)->PathBuf{
+    for suffix in 0..1000u16{
+        let token=now_nanos();
+        let name=if suffix==0{
+            format!("{}-{}.sqlite3",prefix,token)
+        }else{
+            format!("{}-{}-{}.sqlite3",prefix,token,suffix)
+        };
+        let candidate=dir.join(name);
+        if !candidate.exists(){return candidate}
+    }
+    dir.join(format!("{}-{}-fallback.sqlite3",prefix,now_nanos()))
 }
 
 fn validate(path:&Path)->Result<(),String>{
@@ -48,16 +66,11 @@ fn rotate(dir:&Path)->Result<(),String>{
     Ok(())
 }
 
-fn unique_path(dir:&Path,prefix:&str)->PathBuf{
-    dir.join(format!("{}-{}.sqlite3",prefix,now_ms()))
-}
-
 fn vacuum_snapshot(source:&Path,target:&Path)->Result<(),String>{
     if target.exists(){fs::remove_file(target).map_err(|e|e.to_string())?;}
     let conn=Connection::open(source).map_err(|e|e.to_string())?;
     conn.execute_batch("PRAGMA wal_checkpoint(FULL);").map_err(|e|e.to_string())?;
-    let escaped=target.to_string_lossy().replace(''',"''");
-    conn.execute_batch(&format!("VACUUM INTO '{}';",escaped)).map_err(|e|e.to_string())?;
+    conn.execute_batch(&format!("VACUUM INTO '{}';",sql_path(target))).map_err(|e|e.to_string())?;
     drop(conn);
     validate(target)
 }
@@ -68,12 +81,13 @@ fn create(state:&AppState,prefix:&str)->Result<BackupRecord,String>{
     {
         let conn=state.db.lock().map_err(|e|e.to_string())?;
         conn.execute_batch("PRAGMA wal_checkpoint(FULL);").map_err(|e|e.to_string())?;
-        let escaped=path.to_string_lossy().replace(''',"''");
-        conn.execute_batch(&format!("VACUUM INTO '{}';",escaped)).map_err(|e|e.to_string())?;
+        conn.execute_batch(&format!("VACUUM INTO '{}';",sql_path(&path))).map_err(|e|e.to_string())?;
     }
     validate(&path)?;
     rotate(&state.backups_dir)?;
-    records(&state.backups_dir)?.into_iter().find(|x|x.path==path.to_string_lossy()).ok_or("无法读取刚创建的备份".into())
+    records(&state.backups_dir)?.into_iter()
+        .find(|x|Path::new(&x.path)==path)
+        .ok_or("无法读取刚创建的备份".into())
 }
 
 pub fn apply_pending_restore(database_path:&Path,data_dir:&Path,backups_dir:&Path)->Result<(),String>{
@@ -89,7 +103,7 @@ pub fn apply_pending_restore(database_path:&Path,data_dir:&Path,backups_dir:&Pat
     }else{None};
 
     let staged=data_dir.join("restore.next.sqlite3");
-    if staged.exists(){fs::remove_file(&staged).map_err(|e|e.to_string())?;}
+    let _=fs::remove_file(&staged);
     fs::copy(&pending,&staged).map_err(|e|e.to_string())?;
     validate(&staged)?;
 
@@ -130,8 +144,34 @@ pub fn stage_restore(state:State<'_,AppState>,name:String)->Result<bool,String>{
     let source=state.backups_dir.join(base);
     if !source.exists(){return Err("找不到该备份".into())}
     validate(&source)?;
+
     let pending=state.data_dir.join("restore.pending.sqlite3");
-    fs::copy(source,pending).map_err(|e|e.to_string())?;
-    validate(&pending)?;
+    let temp=state.data_dir.join("restore.pending.tmp");
+    let _=fs::remove_file(&temp);
+    fs::copy(&source,&temp).map_err(|e|e.to_string())?;
+    validate(&temp)?;
+    let _=fs::remove_file(&pending);
+    fs::rename(&temp,&pending).map_err(|e|e.to_string())?;
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests{
+    use super::*;
+
+    #[test]
+    fn backup_names_do_not_collide(){
+        let root=std::env::temp_dir().join(format!("imagelore-backup-test-{}",now_nanos()));
+        fs::create_dir_all(&root).unwrap();
+        let first=unique_path(&root,"test");
+        fs::write(&first,b"x").unwrap();
+        let second=unique_path(&root,"test");
+        assert_ne!(first,second);
+        let _=fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sql_path_escapes_single_quotes(){
+        assert_eq!(sql_path(Path::new("C:/O'Brien/library.sqlite3")),"C:/O''Brien/library.sqlite3");
+    }
 }
