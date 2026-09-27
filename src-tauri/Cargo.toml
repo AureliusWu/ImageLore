@@ -13,6 +13,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2" }
 
 [dependencies]
+# Serves only ImageLore-managed cache files to the WebView, avoiding Base64 image IPC.
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-dialog = "2.7.3"
 serde = { version = "1", features = ["derive"] }
