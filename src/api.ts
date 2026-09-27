@@ -1,5 +1,5 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import type { AssetRecord, AssetSummary, CollectionRecord, ImportSummary, LibraryFacets, LibraryFilter, LibraryPage, Lineage, PromptPatch, Revision } from "./types";
+import type { AssetRecord, AssetSummary, BackupRecord, CollectionRecord, DuplicateGroup, ImportSummary, LibraryFacets, LibraryFilter, LibraryPage, Lineage, PromptPatch, Revision } from "./types";
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -38,7 +38,9 @@ async function mockCall<T>(command:string,args:Record<string,unknown>):Promise<T
     case "update_prompt":{const id=Number(args.id),patch=args.patch as PromptPatch;mockAssets=mockAssets.map(x=>x.id===id?{...x,...patch,updated_at:Math.floor(Date.now()/1000)}:x);return mockAssets.find(x=>x.id===id) as T;}
     case "replace_tags":{const id=Number(args.id),tags=args.tags as string[];mockAssets=mockAssets.map(x=>x.id===id?{...x,tags}:x);return mockAssets.find(x=>x.id===id) as T;}
     case "toggle_favorite":{const a=mockAssets.find(x=>x.id===Number(args.id));if(a)a.favorite=a.favorite?0:1;return a as T;}
-    case "import_paths":case "import_folder":case "import_dropped_paths":return {added:0,skipped:0,failed:0,last_id:null} as T;
+    case "import_paths":case "import_folder":case "import_dropped_paths":return {added:0,skipped:0,duplicates:0,failed:0,last_id:null} as T;
+    case "start_import_paths":case "start_import_folder":case "start_import_dropped_paths":return 1 as T;
+    case "cancel_import":return true as T;
     case "batch_add_tags":return true as T;
     case "delete_asset":{mockAssets=mockAssets.filter(x=>x.id!==Number(args.id));return true as T;}
     case "add_revision":return true as T;
@@ -47,6 +49,12 @@ async function mockCall<T>(command:string,args:Record<string,unknown>):Promise<T
     case "lineage":return {parents:[],children:[]} as T;
     case "add_relation":return true as T;
     case "collections":return mockCollections as T;
+    case "duplicate_groups":return [] as T;
+    case "create_backup":return {name:"demo-backup.sqlite3",path:"demo",size:123456,created_at:Math.floor(Date.now()/1000)} as T;
+    case "ensure_auto_backup":return null as T;
+    case "list_backups":return [] as T;
+    case "stage_restore":return true as T;
+    case "rename_tag":case "merge_tags":case "delete_tag":case "rename_collection":case "delete_collection":return true as T;
     case "create_collection":{const c={id:mockCollections.length+1,name:String(args.name),description:String(args.description||""),created_at:0,updated_at:0,count:0};mockCollections=[...mockCollections,c];return c as T;}
     case "add_to_collection":return true as T;
     case "rescan_metadata":return mockAssets.find(x=>x.id===Number(args.id)) as T;
@@ -71,6 +79,10 @@ export const api={
   importPaths:(paths:string[])=>call<ImportSummary>("import_paths",{paths}),
   importFolder:(path:string)=>call<ImportSummary>("import_folder",{path}),
   importDroppedPaths:(paths:string[])=>call<ImportSummary>("import_dropped_paths",{paths}),
+  startImportPaths:(paths:string[])=>call<number>("start_import_paths",{paths}),
+  startImportFolder:(path:string)=>call<number>("start_import_folder",{path}),
+  startImportDroppedPaths:(paths:string[])=>call<number>("start_import_dropped_paths",{paths}),
+  cancelImport:(jobId:number)=>call<boolean>("cancel_import",{jobId}),
   updatePrompt:(id:number,patch:PromptPatch)=>call<AssetRecord>("update_prompt",{id,patch}),
   replaceTags:(id:number,tags:string[])=>call<AssetRecord>("replace_tags",{id,tags}),
   batchAddTags:(ids:number[],tags:string[])=>call<boolean>("batch_add_tags",{ids,tags}),
@@ -82,6 +94,16 @@ export const api={
   lineage:(id:number)=>call<Lineage>("lineage",{id}),
   addRelation:(parentId:number,childId:number,relationType:string,note="")=>call<boolean>("add_relation",{parentId,childId,relationType,note}),
   collections:()=>call<CollectionRecord[]>("collections"),
+  duplicateGroups:()=>call<DuplicateGroup[]>("duplicate_groups"),
+  createBackup:()=>call<BackupRecord>("create_backup"),
+  ensureAutoBackup:()=>call<BackupRecord|null>("ensure_auto_backup"),
+  backups:()=>call<BackupRecord[]>("list_backups"),
+  stageRestore:(name:string)=>call<boolean>("stage_restore",{name}),
+  renameTag:(oldName:string,newName:string)=>call<boolean>("rename_tag",{oldName,newName}),
+  mergeTags:(sourceName:string,targetName:string)=>call<boolean>("merge_tags",{sourceName,targetName}),
+  deleteTag:(name:string)=>call<boolean>("delete_tag",{name}),
+  renameCollection:(id:number,name:string)=>call<boolean>("rename_collection",{id,name}),
+  deleteCollection:(id:number)=>call<boolean>("delete_collection",{id}),
   createCollection:(name:string,description="")=>call<CollectionRecord>("create_collection",{name,description}),
   addToCollection:(collectionId:number,assetIds:number[])=>call<boolean>("add_to_collection",{collectionId,assetIds}),
   rescan:(id:number)=>call<AssetRecord>("rescan_metadata",{id}),

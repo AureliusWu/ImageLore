@@ -1,15 +1,16 @@
 import { AssetGrid } from "./AssetGrid";
-import type { AssetSummary, LibraryFacets, LibraryFilter, LibraryView } from "../types";
+import type { AssetSummary,LibraryFacets,LibraryFilter,LibraryView } from "../types";
 
 const views:Array<[LibraryView,string,string]>=[["all","全部","▦"],["favorites","收藏","★"],["recent","最近","◷"],["missing","缺失","!"]];
 
-export function LibraryPane({assets,total,currentId,selected,loading,filter,facets,onFilter,onAsset,onLoadMore,onBatchTags,onCollection,onClearSelection,onRefreshMissing}:{
+export function LibraryPane({assets,total,currentId,selected,loading,filter,facets,onFilter,onAsset,onLoadMore,onBatchTags,onCollection,onClearSelection,onRefreshMissing,onManage}:{
   assets:AssetSummary[];total:number;currentId?:number;selected:Set<number>;loading:boolean;filter:LibraryFilter;facets:LibraryFacets;
-  onFilter:(next:LibraryFilter)=>void;onAsset:(asset:AssetSummary,e:React.MouseEvent)=>void;onLoadMore:()=>void;onBatchTags:()=>void;onCollection:()=>void;onClearSelection:()=>void;onRefreshMissing:()=>void;
+  onFilter:(next:LibraryFilter)=>void;onAsset:(asset:AssetSummary,e:React.MouseEvent)=>void;onLoadMore:()=>void;
+  onBatchTags:()=>void;onCollection:()=>void;onClearSelection:()=>void;onRefreshMissing:()=>void;onManage:()=>void;
 }){
   const activeFilters=Number(!!filter.tag)+Number(!!filter.model)+Number(!!filter.collection_id);
   return <aside className="library-pane panel glass-surface">
-    <div className="pane-heading"><div><span className="eyebrow">图库</span><div className="heading-line"><strong>生成记录</strong><span className="count-pill">{total}</span></div></div><button className="icon-button" title="刷新缺失文件状态" onClick={onRefreshMissing}>↻</button></div>
+    <div className="pane-heading"><div><span className="eyebrow">图库</span><div className="heading-line"><strong>生成记录</strong><span className="count-pill">{total}</span></div></div><div className="pane-actions"><button className="icon-button" title="资料库管理" onClick={onManage}>⚙</button><button className="icon-button" title="刷新缺失文件状态" onClick={onRefreshMissing}>↻</button></div></div>
     <div className="view-switch" role="tablist">{views.map(([value,label,icon])=><button key={value} className={filter.view===value?"active":""} onClick={()=>onFilter({...filter,view:value})}><span>{icon}</span>{label}</button>)}</div>
     <div className="filter-strip">
       <label><span>集合</span><select value={filter.collection_id??""} onChange={e=>onFilter({...filter,collection_id:e.target.value?Number(e.target.value):null})}><option value="">全部集合</option>{facets.collections.map(c=><option key={c.id} value={c.id}>{c.name} ({c.count})</option>)}</select></label>
