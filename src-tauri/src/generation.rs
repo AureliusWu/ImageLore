@@ -199,17 +199,21 @@ fn dir_size(path:&std::path::Path)->u64{
 
 #[tauri::command]
 pub fn library_health(state:State<'_,AppState>)->Result<LibraryHealth,String>{
-    let conn=state.db.lock().map_err(|e|e.to_string())?;
-    let scalar=|sql:&str|conn.query_row(sql,[],|r|r.get::<_,i64>(0)).unwrap_or(0);
-    let health=LibraryHealth{
-        total:scalar("SELECT COUNT(*) FROM assets"),
-        missing:scalar("SELECT COUNT(*) FROM assets WHERE missing=1"),
-        duplicate_groups:scalar("SELECT COUNT(*) FROM (SELECT fingerprint FROM assets WHERE fingerprint<>'' GROUP BY fingerprint HAVING COUNT(*)>1)"),
-        without_metadata:scalar("SELECT COUNT(*) FROM assets WHERE metadata_type='none'"),
-        without_fingerprint:scalar("SELECT COUNT(*) FROM assets WHERE fingerprint=''"),
-        pending_relations:scalar("SELECT COUNT(*) FROM pending_relations"),
-        unassigned_session:scalar("SELECT COUNT(*) FROM assets a LEFT JOIN asset_sessions s ON s.asset_id=a.id WHERE s.asset_id IS NULL"),
-        cache_bytes:dir_size(&state.cache_dir),
+    let(total,missing,duplicate_groups,without_metadata,without_fingerprint,pending_relations,unassigned_session)={
+        let conn=state.db.lock().map_err(|e|e.to_string())?;
+        let scalar=|sql:&str|conn.query_row(sql,[],|r|r.get::<_,i64>(0)).unwrap_or(0);
+        (
+            scalar("SELECT COUNT(*) FROM assets"),
+            scalar("SELECT COUNT(*) FROM assets WHERE missing=1"),
+            scalar("SELECT COUNT(*) FROM (SELECT fingerprint FROM assets WHERE fingerprint<>'' GROUP BY fingerprint HAVING COUNT(*)>1)"),
+            scalar("SELECT COUNT(*) FROM assets WHERE metadata_type='none'"),
+            scalar("SELECT COUNT(*) FROM assets WHERE fingerprint=''"),
+            scalar("SELECT COUNT(*) FROM pending_relations"),
+            scalar("SELECT COUNT(*) FROM assets a LEFT JOIN asset_sessions s ON s.asset_id=a.id WHERE s.asset_id IS NULL")
+        )
     };
-    Ok(health)
+    Ok(LibraryHealth{
+        total,missing,duplicate_groups,without_metadata,without_fingerprint,pending_relations,unassigned_session,
+        cache_bytes:dir_size(&state.cache_dir),
+    })
 }
