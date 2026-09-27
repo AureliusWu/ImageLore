@@ -2,6 +2,7 @@ mod backup;
 mod commands;
 mod db;
 mod importer;
+mod generation;
 mod migrations;
 mod metadata;
 mod models;
@@ -103,7 +104,19 @@ pub fn run(){
             commands::refresh_missing,
             commands::relocate_missing,
             commands::open_external,
-            commands::open_containing_folder
+            commands::open_containing_folder,
+            generation::generation_sessions,
+            generation::create_generation_session,
+            generation::asset_session,
+            generation::set_asset_session,
+            generation::update_relation_note,
+            generation::model_aliases,
+            generation::upsert_model_alias,
+            generation::delete_model_alias,
+            generation::saved_filters,
+            generation::save_filter,
+            generation::delete_saved_filter,
+            generation::library_health
         ])
         .run(tauri::generate_context!())
         .expect("error while running ImageLore");
