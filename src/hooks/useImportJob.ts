@@ -46,6 +46,8 @@ export function useImportJob(onDone:(summary:ImportSummary,cancelled:boolean)=>v
     return()=>{disposed=true;unlisten?.()};
   },[applyProgress]);
 
+  const takeBuffered=useCallback(()=>{const value=bufferedRef.current;bufferedRef.current=null;return value},[]);
+
   const start=useCallback(async(label:string,starter:()=>Promise<number>)=>{
     if(jobRef.current||startingRef.current)return;
     startingRef.current=true;
@@ -57,9 +59,8 @@ export function useImportJob(onDone:(summary:ImportSummary,cancelled:boolean)=>v
       const id=await starter();
       jobRef.current=id;
       setProgress(p=>({...p,job_id:id}));
-      const buffered=bufferedRef.current;
-      bufferedRef.current=null;
-      if(buffered?.job_id===id)applyProgress(buffered);
+      const buffered=takeBuffered();
+      if(buffered&&buffered.job_id===id)applyProgress(buffered);
     }catch(e){
       jobRef.current=0;
       setProgress(empty);
@@ -68,7 +69,7 @@ export function useImportJob(onDone:(summary:ImportSummary,cancelled:boolean)=>v
       startingRef.current=false;
       setStarting(false);
     }
-  },[applyProgress]);
+  },[applyProgress,takeBuffered]);
 
   const cancel=useCallback(async()=>{
     const id=jobRef.current;
