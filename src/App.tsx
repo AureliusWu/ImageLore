@@ -166,12 +166,12 @@ export default function App(){
   },[refreshFacets]);
   const openManager=async()=>{await flushEditor();await refreshManager();setManagerOpen(true)};
   const createBackup=async()=>{setStatus("正在备份资料库…");await api.createBackup();await refreshManager();setStatus("资料库备份完成")};
-  const restoreBackup=async(name:string)=>{await api.stageRestore(name);setStatus("恢复已准备完成，请重启 ImageLore 后生效")};
+  const restoreBackup=async(name:string)=>{if(!window.confirm("确定恢复到这份备份吗？当前资料库会在重启时先自动保留一份安全副本。"))return;await api.stageRestore(name);setStatus("恢复已准备完成，请重启 ImageLore 后生效")};
   const renameTag=async(oldName:string,newName:string)=>{await api.renameTag(oldName,newName);await refreshManager();await refresh(current?.id)};
   const mergeTag=async(source:string,target:string)=>{await api.mergeTags(source,target);await refreshManager();await refresh(current?.id)};
-  const deleteTag=async(name:string)=>{await api.deleteTag(name);await refreshManager();await refresh(current?.id)};
+  const deleteTag=async(name:string)=>{if(!window.confirm("删除标签“"+name+"”？图片记录本身不会被删除。"))return;await api.deleteTag(name);await refreshManager();await refresh(current?.id)};
   const renameCollection=async(id:number,name:string)=>{await api.renameCollection(id,name);await refreshManager()};
-  const deleteCollection=async(id:number)=>{await api.deleteCollection(id);await refreshManager();setFilter(f=>f.collection_id===id?{...f,collection_id:null}:f)};
+  const deleteCollection=async(id:number)=>{if(!window.confirm("删除这个集合？集合内的图片记录不会被删除。"))return;await api.deleteCollection(id);await refreshManager();setFilter(f=>f.collection_id===id?{...f,collection_id:null}:f)};
   const openParentPicker=()=>{setParentQuery("");setParentChoice(null);setParentOpen(true)};
   const confirmParent=async()=>{if(!current||!parentChoice)return;await api.addRelation(parentChoice,current.id,"reference","");setParentOpen(false);setLineage(await api.lineage(current.id));setCompareRecord(await api.get(parentChoice));setStatus("父图已关联")};
 
@@ -213,7 +213,7 @@ export default function App(){
       <InspectorPane asset={current} tab={tab} onTab={setTab} prompt={prompt} onPrompt={setPrompt} negative={negative} onNegative={setNegative} model={model} onModel={setModel} tagsText={tagsText} onTagsText={setTagsText} lineage={lineage} compareRecord={compareRecord} onCompare={compare} onCopy={copyPrompt} onSaveRevision={saveRevision} onHistory={openHistory} onFavorite={toggleFavorite} onRescan={rescan} onSidecar={exportSidecar} onCollection={openCollection} onRemove={()=>setModal({kind:"remove"})} onImportDerivative={importDerivative} onLinkParent={openParentPicker} promptRef={promptRef}/>
     </main>
     <footer className="statusbar glass-surface"><span className={`runtime-dot ${isTauri?"native":"preview"}`}/><strong>{isTauri?"桌面版":"浏览器预览"}</strong><span>v{version}</span><span className="status-message">{status}</span>{importJob.active?<><progress max={Math.max(1,importJob.progress.total)} value={importJob.progress.processed}/><button onClick={importJob.cancel}>取消导入</button></>:null}<span>已加载 {assets.length}/{total}</span><button onClick={repairMissing} title="根据文件指纹查找移动后的文件">修复缺失文件</button><span className="shortcut">F6 提示词 · F7 预览 · Ctrl+S 保存版本</span></footer>
-    <LibraryManager open={managerOpen} backups={backups} tags={facets.tags} collections={facets.collections} duplicates={duplicates} onClose={()=>setManagerOpen(false)} onBackup={createBackup} onRestore={restoreBackup} onRenameTag={renameTag} onMergeTag={mergeTag} onDeleteTag={deleteTag} onRenameCollection={renameCollection} onDeleteCollection={deleteCollection}/>
+    <LibraryManager open={managerOpen} backups={backups} tags={facets.tags} collections={facets.collections} duplicates={duplicates} onClose={()=>setManagerOpen(false)} onBackup={createBackup} onRestore={restoreBackup} onRenameTag={renameTag} onDeleteTag={deleteTag} onRenameCollection={renameCollection} onDeleteCollection={deleteCollection}/>
     <ParentPicker open={parentOpen} query={parentQuery} results={parentResults} choice={parentChoice} loading={parentLoading} onQuery={setParentQuery} onChoice={setParentChoice} onClose={()=>setParentOpen(false)} onConfirm={confirmParent}/>
     <AppDialogs modal={modal} assets={assets} currentId={current?.id} text={dialogText} setText={setDialogText} choice={dialogChoice} setChoice={setDialogChoice} onClose={()=>setModal(null)} onConfirm={confirmModal}/>
   </div>

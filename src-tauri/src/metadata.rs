@@ -159,13 +159,11 @@ impl MetadataAdapter for ComfyUiAdapter{
             }
         }
 
-        let payload=serde_json::json!({
-            "extracted":generation,
-            "prompt_graph":prompt_json,
-            "workflow":workflow_json
-        });
+        let mut payload=generation;
+        payload.insert("prompt_graph".into(),prompt_json.unwrap_or(Value::Null));
+        payload.insert("workflow".into(),workflow_json.unwrap_or(Value::Null));
         Some(GenerationExtract{
-            prompt,negative_prompt:negative,model,metadata_type:"comfyui".into(),generation_json:payload.to_string()
+            prompt,negative_prompt:negative,model,metadata_type:"comfyui".into(),generation_json:Value::Object(payload).to_string()
         })
     }
 }
