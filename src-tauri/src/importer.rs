@@ -1,4 +1,4 @@
-use crate::{db,metadata,models::{ImportProgress,ImportSummary},preview,sidecar,state::AppState};
+use crate::{db,generation,metadata,models::{ImportProgress,ImportSummary},preview,sidecar,state::AppState};
 use rusqlite::params;
 use std::{
     path::{Path,PathBuf},
@@ -18,14 +18,17 @@ struct PreparedAsset{
     metadata_type:String,
     generation_json:String,
     fingerprint:String,
+    portable_id:String,
     file_mtime:i64,
     prompt:String,
     negative_prompt:String,
     model:String,
     tags:Vec<String>,
+    parents:Vec<sidecar::ParentRef>,
+    session:Option<sidecar::SessionRef>,
 }
 
-enum InsertOutcome{Added(i64),Existing(i64),Duplicate}
+enum InsertOutcome{Added(i64),Existing(i64),Duplicate(i64)}
 
 fn supported_files(roots:Vec<String>,recursive_dirs:bool,cancel:&AtomicBool)->Vec<PathBuf>{
     let mut out=Vec::new();
@@ -54,14 +57,27 @@ fn prepare(path:&Path)->Option<PreparedAsset>{
     let negative_prompt=saved.as_ref().map(|x|sidecar::text(x,"negative_prompt")).filter(|x|!x.is_empty()).unwrap_or(extract.negative_prompt);
     let model=saved.as_ref().map(|x|sidecar::text(x,"model")).filter(|x|!x.is_empty()).unwrap_or(extract.model);
     let tags=saved.as_ref().map(sidecar::tags).unwrap_or_default();
+    let parents=saved.as_ref().map(sidecar::parents).unwrap_or_default();
+    let session=saved.as_ref().and_then(sidecar::session);
     let fingerprint=metadata::fingerprint(&canonical);
+    let requested_portable=saved.as_ref().map(sidecar::portable_id).unwrap_or_default();
+    let portable_id=if requested_portable.is_empty(){
+        db::make_portable_id(&format!("{}:{}:{}:{}",fingerprint,canonical.to_string_lossy(),info.file_mtime,info.file_size.unwrap_or(0)))
+    }else{requested_portable};
     let name=canonical.file_name().and_then(|x|x.to_str()).unwrap_or("image").to_string();
     Some(PreparedAsset{
         path:canonical.to_string_lossy().to_string(),name,width:info.width,height:info.height,
         file_size:info.file_size,format:info.format,mime_type:info.mime_type,
         metadata_type:extract.metadata_type,generation_json:extract.generation_json,
-        fingerprint,file_mtime:info.file_mtime,prompt,negative_prompt,model,tags,
+        fingerprint,portable_id,file_mtime:info.file_mtime,prompt,negative_prompt,model,tags,parents,session,
     })
+}
+
+fn merge_context(conn:&rusqlite::Connection,id:i64,item:&PreparedAsset)->Result<(),String>{
+    let portable_id:String=conn.query_row("SELECT portable_id FROM assets WHERE id=?1",params![id],|r|r.get(0)).map_err(|e|e.to_string())?;
+    generation::assign_session_by_name(conn,id,item.session.as_ref())?;
+    generation::queue_parent_refs(conn,&portable_id,&item.parents)?;
+    Ok(())
 }
 
 fn refresh_existing(state:&AppState,id:i64,item:PreparedAsset)->Result<InsertOutcome,String>{
@@ -80,6 +96,7 @@ fn refresh_existing(state:&AppState,id:i64,item:PreparedAsset)->Result<InsertOut
         ).map_err(|e|e.to_string())?;
     }
     if old.tags.is_empty()&&!item.tags.is_empty(){db::replace_tags_raw(&tx,id,&item.tags)?;}
+    merge_context(&tx,id,&item)?;
     db::reindex_asset(&tx,id)?;
     tx.commit().map_err(|e|e.to_string())?;
     drop(conn);
@@ -93,19 +110,26 @@ fn insert_new(state:&AppState,item:PreparedAsset)->Result<InsertOutcome,String>{
         drop(conn);
         return refresh_existing(state,id,item)
     }
-    if db::asset_exists_by_fingerprint(&conn,&item.fingerprint)?.is_some(){
-        return Ok(InsertOutcome::Duplicate)
+    if let Some(id)=db::asset_exists_by_fingerprint(&conn,&item.fingerprint)?{
+        let tx=conn.transaction().map_err(|e|e.to_string())?;
+        merge_context(&tx,id,&item)?;
+        tx.commit().map_err(|e|e.to_string())?;
+        return Ok(InsertOutcome::Duplicate(id))
     }
 
+    let portable_id=if db::asset_by_portable_id(&conn,&item.portable_id)?.is_some(){
+        db::make_portable_id(&format!("{}:{}:{}",item.portable_id,item.path,db::now()))
+    }else{item.portable_id.clone()};
     let stamp=db::now();
     let tx=conn.transaction().map_err(|e|e.to_string())?;
     tx.execute(
-        "INSERT INTO assets(path,name,favorite,width,height,file_size,format,mime_type,metadata_type,generation_json,fingerprint,file_mtime,missing,created_at,updated_at) VALUES(?1,?2,0,?3,?4,?5,?6,?7,?8,?9,?10,?11,0,?12,?12)",
-        params![item.path,item.name,item.width,item.height,item.file_size,item.format,item.mime_type,item.metadata_type,item.generation_json,item.fingerprint,item.file_mtime,stamp]
+        "INSERT INTO assets(path,name,favorite,width,height,file_size,format,mime_type,metadata_type,generation_json,fingerprint,portable_id,file_mtime,missing,created_at,updated_at) VALUES(?1,?2,0,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,0,?13,?13)",
+        params![item.path,item.name,item.width,item.height,item.file_size,item.format,item.mime_type,item.metadata_type,item.generation_json,item.fingerprint,portable_id,item.file_mtime,stamp]
     ).map_err(|e|e.to_string())?;
     let id=tx.last_insert_rowid();
     tx.execute("INSERT INTO prompt_state(asset_id,prompt,negative_prompt,model,updated_at) VALUES(?1,?2,?3,?4,?5)",params![id,item.prompt,item.negative_prompt,item.model,stamp]).map_err(|e|e.to_string())?;
     db::replace_tags_raw(&tx,id,&item.tags)?;
+    merge_context(&tx,id,&item)?;
     db::reindex_asset(&tx,id)?;
     tx.commit().map_err(|e|e.to_string())?;
     Ok(InsertOutcome::Added(id))
@@ -135,7 +159,8 @@ where F:FnMut(ImportProgress){
         };
         if let Some((id,stored_mtime,stored_size))=existing{
             let(current_size,current_mtime)=metadata::file_stamp(&canonical);
-            if stored_mtime==current_mtime&&stored_size==current_size{
+            let sidecar_present=sidecar::path_for(&canonical).exists();
+            if stored_mtime==current_mtime&&stored_size==current_size&&!sidecar_present{
                 let conn=state.db.lock().map_err(|e|e.to_string())?;
                 conn.execute("UPDATE assets SET missing=0 WHERE id=?1",params![id]).map_err(|e|e.to_string())?;
                 result.skipped+=1;result.last_id=Some(id);
@@ -152,7 +177,7 @@ where F:FnMut(ImportProgress){
         }){
             Some(Ok(InsertOutcome::Added(id)))=>{result.added+=1;result.last_id=Some(id)}
             Some(Ok(InsertOutcome::Existing(id)))=>{result.skipped+=1;result.last_id=Some(id)}
-            Some(Ok(InsertOutcome::Duplicate))=>{result.duplicates+=1}
+            Some(Ok(InsertOutcome::Duplicate(id)))=>{result.duplicates+=1;result.last_id=Some(id)}
             Some(Err(_))=>result.failed+=1,
             None=>result.skipped+=1,
         }
@@ -208,7 +233,6 @@ pub fn cancel_import(state:State<'_,AppState>,job_id:u64)->Result<bool,String>{
     Ok(false)
 }
 
-// Kept for single-image derivative imports and API compatibility.
 fn immediate(state:&AppState,roots:Vec<String>,recursive_dirs:bool)->Result<ImportSummary,String>{
     let cancel=AtomicBool::new(false);
     run_import(state,roots,recursive_dirs,&cancel,|_|{})

@@ -64,12 +64,12 @@ pub(crate) fn assign_session_by_name(conn:&Connection,asset_id:i64,session:Optio
     let stamp=db::now();
     conn.execute(
         "INSERT INTO generation_sessions(name,note,created_at,updated_at) VALUES(?1,?2,?3,?3) ON CONFLICT(name) DO UPDATE SET note=CASE WHEN generation_sessions.note='' THEN excluded.note ELSE generation_sessions.note END,updated_at=excluded.updated_at",
-        params![session.name,session.note,stamp]
+        params![session.name,session.session_note,stamp]
     ).map_err(|e|e.to_string())?;
     let session_id:i64=conn.query_row("SELECT id FROM generation_sessions WHERE name=?1 COLLATE NOCASE",params![session.name],|r|r.get(0)).map_err(|e|e.to_string())?;
     conn.execute(
-        "INSERT INTO asset_sessions(asset_id,session_id,note,created_at,updated_at) VALUES(?1,?2,'',?3,?3) ON CONFLICT(asset_id) DO UPDATE SET session_id=excluded.session_id,updated_at=excluded.updated_at",
-        params![asset_id,session_id,stamp]
+        "INSERT INTO asset_sessions(asset_id,session_id,note,created_at,updated_at) VALUES(?1,?2,?3,?4,?4) ON CONFLICT(asset_id) DO UPDATE SET session_id=excluded.session_id,note=CASE WHEN asset_sessions.note='' THEN excluded.note ELSE asset_sessions.note END,updated_at=excluded.updated_at",
+        params![asset_id,session_id,session.asset_note,stamp]
     ).map_err(|e|e.to_string())?;
     Ok(())
 }
