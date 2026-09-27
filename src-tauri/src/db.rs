@@ -1,5 +1,6 @@
 use crate::models::{AssetRecord, AssetSummary, CollectionRecord, FacetCount, LibraryFacets, LibraryFilter, LibraryPage};
 use rusqlite::{params, params_from_iter, types::Value as SqlValue, Connection, OptionalExtension, Row};
+use sha2::{Digest,Sha256};
 use std::{fs, path::{Path, PathBuf}, time::{SystemTime, UNIX_EPOCH}};
 
 pub fn now() -> i64 {
@@ -25,15 +26,15 @@ pub fn init_db(path: &Path) -> Result<Connection, String> {
 }
 
 fn row_asset(row: &Row<'_>) -> rusqlite::Result<AssetRecord> {
-    let tag_blob: String = row.get(20)?;
+    let tag_blob: String = row.get(21)?;
     let tags = if tag_blob.is_empty() { Vec::new() } else { tag_blob.split('\u{1f}').map(str::to_string).collect() };
     Ok(AssetRecord {
         id: row.get(0)?, path: row.get(1)?, name: row.get(2)?,
         prompt: row.get(3)?, negative_prompt: row.get(4)?, model: row.get(5)?,
         favorite: row.get(6)?, width: row.get(7)?, height: row.get(8)?, file_size: row.get(9)?,
         format: row.get(10)?, mime_type: row.get(11)?, metadata_type: row.get(12)?, generation_json: row.get(13)?,
-        fingerprint: row.get(14)?, file_mtime: row.get(15)?, missing: row.get(16)?,
-        created_at: row.get(17)?, updated_at: row.get(18)?,
+        fingerprint: row.get(14)?, portable_id:row.get(15)?, file_mtime: row.get(16)?, missing: row.get(17)?,
+        created_at: row.get(18)?, updated_at: row.get(19)?,
         tags,
     })
 }
@@ -42,7 +43,7 @@ const SELECT_ASSET: &str = r#"
 SELECT a.id,a.path,a.name,
        COALESCE(ps.prompt,''),COALESCE(ps.negative_prompt,''),COALESCE(ps.model,''),
        a.favorite,a.width,a.height,a.file_size,a.format,a.mime_type,a.metadata_type,a.generation_json,
-       a.fingerprint,a.file_mtime,a.missing,a.created_at,a.updated_at,
+       a.fingerprint,a.portable_id,a.file_mtime,a.missing,a.created_at,a.updated_at,
        a.id AS asset_marker,
        COALESCE(GROUP_CONCAT(t.name, char(31)),'') AS tags
 FROM assets a
@@ -166,7 +167,7 @@ fn filter_parts(filter: &LibraryFilter) -> (String, String, Vec<SqlValue>) {
         args.push(SqlValue::Text(tag.clone()));
     }
     if let Some(model) = filter.model.as_ref().filter(|x| !x.trim().is_empty()) {
-        where_parts.push("COALESCE(ps.model,'')=?".into());
+        where_parts.push("COALESCE((SELECT ma.canonical FROM model_aliases ma WHERE ma.alias=ps.model COLLATE NOCASE LIMIT 1),COALESCE(ps.model,''))=? COLLATE NOCASE".into());
         args.push(SqlValue::Text(model.clone()));
     }
     if let Some(collection_id) = filter.collection_id {
@@ -206,8 +207,13 @@ pub fn facets(conn: &Connection) -> Result<LibraryFacets, String> {
     let mut tag_st = conn.prepare("SELECT t.name,COUNT(at.asset_id) FROM tags t JOIN asset_tags at ON at.tag_id=t.id GROUP BY t.id ORDER BY COUNT(at.asset_id) DESC,t.name COLLATE NOCASE LIMIT 100").map_err(|e| e.to_string())?;
     let tags = tag_st.query_map([], |r| Ok(FacetCount{name:r.get(0)?,count:r.get(1)?})).map_err(|e| e.to_string())?.filter_map(Result::ok).collect();
 
-    let mut model_st = conn.prepare("SELECT model,COUNT(*) FROM prompt_state WHERE model<>'' GROUP BY model ORDER BY COUNT(*) DESC,model COLLATE NOCASE LIMIT 100").map_err(|e| e.to_string())?;
-    let models = model_st.query_map([], |r| Ok(FacetCount{name:r.get(0)?,count:r.get(1)?})).map_err(|e| e.to_string())?.filter_map(Result::ok).collect();
+    let mut model_st=conn.prepare(
+        "SELECT normalized,COUNT(*) FROM (
+           SELECT COALESCE((SELECT ma.canonical FROM model_aliases ma WHERE ma.alias=ps.model COLLATE NOCASE LIMIT 1),ps.model) AS normalized
+           FROM prompt_state ps WHERE ps.model<>''
+         ) GROUP BY normalized ORDER BY COUNT(*) DESC,normalized COLLATE NOCASE LIMIT 100"
+    ).map_err(|e|e.to_string())?;
+    let models=model_st.query_map([],|r|Ok(FacetCount{name:r.get(0)?,count:r.get(1)?})).map_err(|e|e.to_string())?.filter_map(Result::ok).collect();
 
     Ok(LibraryFacets { tags, models, collections: collections(conn)? })
 }
@@ -277,4 +283,17 @@ mod tests{
         let page=library_page(&conn,&filter,0,20).unwrap();
         assert_eq!(page.total,1);
     }
+}
+
+
+pub fn make_portable_id(seed:&str)->String{
+    let mut hash=Sha256::new();
+    hash.update(seed.as_bytes());
+    let hex=format!("{:x}",hash.finalize());
+    format!("il-{}",&hex[..32])
+}
+
+pub fn asset_by_portable_id(conn:&Connection,portable_id:&str)->Result<Option<i64>,String>{
+    if portable_id.trim().is_empty(){return Ok(None)}
+    conn.query_row("SELECT id FROM assets WHERE portable_id=?1",params![portable_id],|r|r.get(0)).optional().map_err(|e|e.to_string())
 }
