@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Replaced Base64 image IPC with local WebP cache files served through Tauri's scoped asset protocol.
+- Full-size preview mode now preserves source dimensions instead of silently capping at 4200px.
+- Added background cache pruning with a 1 GB ceiling.
+- Increased micro-text sizes across the library, preview, inspector, dialogs and status bar for better long-session readability.
+- Reduced the preview checkerboard contrast so the image remains visually dominant.
+
 ## 0.13.1 — Build Hygiene
 
 - Split fast CI from Windows release packaging.

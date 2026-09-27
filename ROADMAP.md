@@ -15,6 +15,12 @@
 ## v0.13.1 — Build Hygiene ✅
 依赖锁定、快速 CI / Release 分离、并发取消、单次 NSIS 构建与可复现发布。
 
+## Current development — Runtime & Readability
+- 本地缓存 URI 取代 Base64 图片 IPC
+- 缓存容量治理
+- 正确的原始尺寸预览
+- 全局可读性与字号治理
+
 ## v0.14.0 — Library Intelligence
 - 标签重命名 / 合并
 - Collection 管理页

@@ -9,8 +9,9 @@ pub fn now() -> i64 {
 pub fn data_root() -> Result<(PathBuf, PathBuf), String> {
     let base = dirs::data_local_dir().ok_or("无法定位本地应用数据目录")?;
     let root = base.join("ImageLore");
-    let cache = root.join("cache").join("thumbnails");
-    fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
+    let cache = root.join("cache");
+    fs::create_dir_all(cache.join("thumbnails")).map_err(|e| e.to_string())?;
+    fs::create_dir_all(cache.join("previews")).map_err(|e| e.to_string())?;
     Ok((root, cache))
 }
 
