@@ -1,12 +1,18 @@
 # Changelog
 
-## Unreleased
+## 0.14.0 — Library Continuity
 
-- Replaced Base64 image IPC with local WebP cache files served through Tauri's scoped asset protocol.
-- Full-size preview mode now preserves source dimensions instead of silently capping at 4200px.
-- Added background cache pruning with a 1 GB ceiling.
-- Increased micro-text sizes across the library, preview, inspector, dialogs and status bar for better long-session readability.
-- Reduced the preview checkerboard contrast so the image remains visually dominant.
+- Replaced Base64 image IPC with scoped local WebP cache files served through Tauri asset protocol.
+- Full-size preview now preserves source dimensions, with 1 GB background cache pruning and improved long-session readability.
+- Added automatic daily SQLite backups, manual backup creation, rotating retention, integrity validation and restart-safe staged restore.
+- Restore operations preserve a pre-restore safety copy before replacing the active library.
+- Added SHA-256 content duplicate detection: exact copies imported from different paths are skipped and reported separately.
+- Added a Library Manager for backup history, duplicate reports, tag rename/merge/delete and Collection rename/delete.
+- Added background image/folder/drag-drop import jobs with live progress and cancellation.
+- Added a metadata adapter layer and deeper ComfyUI extraction for Prompt, Negative Prompt, model, seed, steps, CFG, sampler, scheduler and denoise.
+- Added a searchable full-library Parent Picker for lineage/reference relationships.
+- Added database migration v2 and a partial fingerprint index for duplicate-aware library operations.
+- Preserved atomic prompt/tag/revision writes, CJK search, lightweight library records and reproducible locked builds.
 
 ## 0.13.1 — Build Hygiene
 
