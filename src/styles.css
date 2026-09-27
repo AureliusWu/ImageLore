@@ -27,3 +27,25 @@
 .drop-orb{width:66px;height:66px;margin:0 auto 14px;display:grid;place-items:center;border-radius:50%;font-size:32px;font-weight:800;color:white;background:radial-gradient(circle at 34% 25%,#fff 0 7%,#89ebf3 12%,#38bbd1 46%,#2d9ab9 68%,#68b958 70%,#58aa4d 100%);box-shadow:0 10px 24px rgba(38,146,169,.24),inset 0 1px 2px rgba(255,255,255,.9)}
 .drop-card strong{display:block;font-size:20px;color:#1d536b}.drop-card p{margin:8px 0 4px;font-size:12px;color:#4c7c8e}.drop-card small{font-size:10px;color:#78939e}
 @keyframes dropIn{from{opacity:0;transform:scale(.99)}to{opacity:1;transform:scale(1)}}
+
+
+/* Readability pass — keep Aero lightness without micro-text */
+.view-switch button{font-size:12px}.view-switch button span{font-size:15px}
+.filter-strip label span{font-size:10px;letter-spacing:.55px}.filter-strip select{height:34px;font-size:12px}.clear-filter{font-size:11px}
+.selection-bar{font-size:11px}.selection-bar button{font-size:11px;padding:5px 8px}
+.asset-copy{padding:7px 8px}.asset-copy strong{font-size:12px}.asset-copy span{font-size:10px}.asset-missing{font-size:10px}.asset-star{font-size:12px}.load-marker{font-size:11px}
+.library-empty strong{font-size:14px}.library-empty p{font-size:11px}
+.file-title strong{font-size:13px}.file-title small{font-size:11px}.segmented button{font-size:11px;padding:6px 9px}
+.empty-state strong{font-size:16px}.empty-state span{font-size:12px}.preview-foot{font-size:11px}.preview-foot button{font-size:11px}
+.record-head strong{font-size:13px}.inspector-tabs button{font-size:12px}.inspector-tabs b{font-size:10px}
+.field-head label{font-size:13px}.field-head>div>span{font-size:11px}.field-actions button,.tool-card button{font-size:11px}
+.prompt-box,.small-area,.field input{font-size:13px}.field>span{font-size:12px}.field small{font-size:10px}.tag-preview span{font-size:10px}
+.tool-card strong{font-size:12px}.tool-card span{font-size:10px}.danger-link{font-size:11px}
+.info-hero strong,.lineage-hero strong{font-size:12px}.info-hero p,.lineage-hero p{font-size:11px}
+.info-row{font-size:11px}.info-list summary,.compare-panel summary{font-size:11px}.info-list pre{font-size:11px}
+.lineage-panel h4{font-size:12px}.lineage-panel h4 b{font-size:10px}.edge-card>span{font-size:10px}.edge-card strong{font-size:12px}.edge-card small,.muted{font-size:10px}
+.compare-head span:first-child{font-size:9px}.compare-head strong{font-size:11px}.compare-badge{font-size:10px}
+.diff-text,.diff-unchanged{font-size:11px}.scalar-diff{font-size:11px}
+.statusbar{font-size:11px}.statusbar button{font-size:11px}
+.modal-head p{font-size:11px}.modal-field>span{font-size:12px}.choice-list strong,.choice-grid strong{font-size:12px}.choice-list span,.choice-grid span{font-size:10px}.choice-list p{font-size:11px}.warning-card strong{font-size:12px}.warning-card p{font-size:11px}
+.image-stage:before{opacity:.07}

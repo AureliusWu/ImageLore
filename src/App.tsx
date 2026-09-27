@@ -81,7 +81,7 @@ export default function App(){
   useEffect(()=>{
     if(!current){setPreview("");setLineage(emptyLineage);setCompareRecord(null);return}
     setStatus("正在加载预览…");
-    api.preview(current.id,previewMode==="fit"?2200:4200,false).then(src=>{setPreview(src);setStatus("就绪")}).catch(e=>{setPreview("");setStatus(`预览失败：${String(e)}`)});
+    api.preview(current.id,previewMode==="fit"?2200:0,false).then(src=>{setPreview(src);setStatus("就绪")}).catch(e=>{setPreview("");setStatus(`预览失败：${String(e)}`)});
     api.lineage(current.id).then(async x=>{setLineage(x);const p=x.parents[0];setCompareRecord(p?await api.get(p.other_id).catch(()=>null):null)}).catch(()=>setLineage(emptyLineage));
   },[current?.id,previewMode]);
 

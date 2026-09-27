@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type { AssetRecord, AssetSummary, CollectionRecord, ImportSummary, LibraryFacets, LibraryFilter, LibraryPage, Lineage, PromptPatch, Revision } from "./types";
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -34,7 +34,7 @@ async function mockCall<T>(command:string,args:Record<string,unknown>):Promise<T
     case "library_page":{const filter=args.filter as LibraryFilter;const offset=Number(args.offset||0),limit=Number(args.limit||200);const all=filtered(filter);return {items:all.slice(offset,offset+limit).map(toSummary),total:all.length,offset,limit} as T;}
     case "library_facets":return {tags:[{name:"character",count:2},{name:"aero",count:1},{name:"study",count:1}],models:[{name:"GPT Image",count:3},{name:"Flux",count:2}],collections:mockCollections} as T;
     case "get_asset":return mockAssets.find(x=>x.id===Number(args.id)) as T;
-    case "preview_data_url":return (demoImages.get(Number(args.id))||demoSvg("Preview","#73c7e5","#71bb6a")) as T;
+    case "preview_cache_path":return (demoImages.get(Number(args.id))||demoSvg("Preview","#73c7e5","#71bb6a")) as T;
     case "update_prompt":{const id=Number(args.id),patch=args.patch as PromptPatch;mockAssets=mockAssets.map(x=>x.id===id?{...x,...patch,updated_at:Math.floor(Date.now()/1000)}:x);return mockAssets.find(x=>x.id===id) as T;}
     case "replace_tags":{const id=Number(args.id),tags=args.tags as string[];mockAssets=mockAssets.map(x=>x.id===id?{...x,tags}:x);return mockAssets.find(x=>x.id===id) as T;}
     case "toggle_favorite":{const a=mockAssets.find(x=>x.id===Number(args.id));if(a)a.favorite=a.favorite?0:1;return a as T;}
@@ -64,7 +64,10 @@ export const api={
   page:(filter:LibraryFilter,offset=0,limit=240)=>call<LibraryPage>("library_page",{filter,offset,limit}),
   facets:()=>call<LibraryFacets>("library_facets"),
   get:(id:number)=>call<AssetRecord>("get_asset",{id}),
-  preview:(id:number,maxEdge:number,thumbnail=false)=>call<string>("preview_data_url",{id,maxEdge,thumbnail}),
+  preview:async(id:number,maxEdge:number,thumbnail=false)=>{
+    const source=await call<string>("preview_cache_path",{id,maxEdge,thumbnail});
+    return isTauri?convertFileSrc(source):source;
+  },
   importPaths:(paths:string[])=>call<ImportSummary>("import_paths",{paths}),
   importFolder:(path:string)=>call<ImportSummary>("import_folder",{path}),
   importDroppedPaths:(paths:string[])=>call<ImportSummary>("import_dropped_paths",{paths}),

@@ -185,11 +185,14 @@ pub fn export_sidecar(state:State<'_,AppState>,id:i64)->Result<String,String>{
 }
 
 #[tauri::command]
-pub fn preview_data_url(state:State<'_,AppState>,id:i64,max_edge:u32,thumbnail:bool)->Result<String,String>{
-    let conn=state.db.lock().map_err(|e|e.to_string())?; let asset=db::get_asset(&conn,id)?; drop(conn);
-    let path=Path::new(&asset.path); if !path.exists(){return Err("原图片文件不存在".into())}
+pub fn preview_cache_path(state:State<'_,AppState>,id:i64,max_edge:u32,thumbnail:bool)->Result<String,String>{
+    let conn=state.db.lock().map_err(|e|e.to_string())?;
+    let asset=db::get_asset(&conn,id)?;
+    drop(conn);
+    let path=Path::new(&asset.path);
+    if !path.exists(){return Err("原图片文件不存在".into())}
     let key=if asset.fingerprint.is_empty(){format!("{}-{}",asset.id,asset.file_mtime)}else{asset.fingerprint.clone()};
-    preview::preview_data_url(path,&state.cache_dir,&key,max_edge,thumbnail)
+    preview::cached_preview_path(path,&state.cache_dir,&key,max_edge,thumbnail)
 }
 
 #[tauri::command]

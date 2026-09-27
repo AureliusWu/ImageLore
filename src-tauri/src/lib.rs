@@ -16,6 +16,8 @@ pub fn run() {
     let (data_dir, cache_dir) = db::data_root().expect("failed to prepare ImageLore data directory");
     let database_path = data_dir.join("library.sqlite3");
     let connection = db::init_db(&database_path).expect("failed to initialize ImageLore database");
+    let cache_cleanup = cache_dir.clone();
+    std::thread::spawn(move || preview::prune_cache(&cache_cleanup, 1024 * 1024 * 1024));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -42,7 +44,7 @@ pub fn run() {
             commands::add_to_collection,
             commands::rescan_metadata,
             commands::export_sidecar,
-            commands::preview_data_url,
+            commands::preview_cache_path,
             commands::refresh_missing,
             commands::relocate_missing,
             commands::open_external,
