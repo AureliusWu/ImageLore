@@ -209,12 +209,15 @@ impl MetadataAdapter for NovelAiAdapter{
         let comment=text.get("Comment").or_else(||text.get("comment"));
         if !software.to_ascii_lowercase().contains("novelai")&&comment.is_none(){return None}
         let parsed=comment.and_then(|x|serde_json::from_str::<Value>(x).ok()).unwrap_or(Value::Null);
+        let explicit=software.to_ascii_lowercase().contains("novelai");
+        let looks_nai=parsed.get("uc").is_some()&&(parsed.get("sampler").is_some()||parsed.get("noise_schedule").is_some());
+        if !explicit&&!looks_nai{return None}
         let prompt=text.get("Description").or_else(||text.get("description")).cloned().unwrap_or_else(||object_string(&parsed,&["prompt"]));
         let negative=object_string(&parsed,&["uc","negative_prompt","negative"]);
         let model=object_string(&parsed,&["model","model_name"]);
         if prompt.is_empty()&&negative.is_empty()&&model.is_empty()&&!software.to_ascii_lowercase().contains("novelai"){return None}
         let mut generation=Map::new();
-        copy_generation_fields(&parsed,&[
+        copy_generation_fields(&parsed,&mut generation,&[
             ("seed","seed"),("steps","steps"),("scale","cfg_scale"),("cfg_scale","cfg_scale"),
             ("sampler","sampler"),("sampler_name","sampler"),("noise_schedule","scheduler")
         ]);
@@ -235,7 +238,7 @@ impl MetadataAdapter for InvokeAiAdapter{
         let negative=object_string(&parsed,&["negative_prompt","negative"]);
         let model=object_string(&parsed,&["model","model_name","model_name_or_path"]);
         let mut generation=Map::new();
-        copy_generation_fields(&parsed,&[
+        copy_generation_fields(&parsed,&mut generation,&[
             ("seed","seed"),("steps","steps"),("cfg_scale","cfg_scale"),("cfg","cfg_scale"),
             ("sampler","sampler"),("sampler_name","sampler"),("scheduler","scheduler"),("strength","denoise")
         ]);
@@ -256,7 +259,7 @@ impl MetadataAdapter for GenericJsonAdapter{
             let model=object_string(&parsed,&["model","model_name"]);
             if prompt.is_empty()&&negative.is_empty()&&model.is_empty(){continue}
             let mut generation=Map::new();
-            copy_generation_fields(&parsed,&[
+            copy_generation_fields(&parsed,&mut generation,&[
                 ("seed","seed"),("steps","steps"),("cfg_scale","cfg_scale"),("cfg","cfg_scale"),
                 ("sampler","sampler"),("sampler_name","sampler"),("scheduler","scheduler"),("denoise","denoise")
             ]);

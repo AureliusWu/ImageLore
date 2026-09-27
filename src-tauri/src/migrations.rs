@@ -65,8 +65,9 @@ fn migrate_v3(conn:&Connection)->Result<(),String>{
 
     let rows:Vec<(i64,String,String,i64)>={
         let mut st=conn.prepare("SELECT id,path,fingerprint,created_at FROM assets WHERE portable_id=''").map_err(|e|e.to_string())?;
-        st.query_map([],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))
-            .map_err(|e|e.to_string())?.filter_map(Result::ok).collect()
+        let mapped=st.query_map([],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).map_err(|e|e.to_string())?;
+        let collected=mapped.filter_map(Result::ok).collect();
+        collected
     };
     for(id,path,fingerprint,created_at)in rows{
         let portable_id=legacy_portable_id(id,&path,&fingerprint,created_at);
