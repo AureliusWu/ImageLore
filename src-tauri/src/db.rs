@@ -213,3 +213,33 @@ pub fn facets(conn: &Connection) -> Result<LibraryFacets, String> {
 pub fn asset_exists_by_path(conn: &Connection, path: &str) -> Result<Option<i64>, String> {
     conn.query_row("SELECT id FROM assets WHERE path=?1", params![path], |r| r.get(0)).optional().map_err(|e| e.to_string())
 }
+
+
+pub fn asset_exists_by_fingerprint(conn:&Connection,fingerprint:&str)->Result<Option<i64>,String>{
+    if fingerprint.is_empty(){return Ok(None)}
+    conn.query_row(
+        "SELECT id FROM assets WHERE fingerprint=?1 ORDER BY id LIMIT 1",
+        params![fingerprint],|r|r.get(0)
+    ).optional().map_err(|e|e.to_string())
+}
+
+pub fn duplicate_groups(conn:&Connection)->Result<Vec<crate::models::DuplicateGroup>,String>{
+    let mut st=conn.prepare(
+        "SELECT fingerprint,COUNT(*) FROM assets WHERE fingerprint<>'' GROUP BY fingerprint HAVING COUNT(*)>1 ORDER BY COUNT(*) DESC"
+    ).map_err(|e|e.to_string())?;
+    let fingerprints:Vec<(String,i64)>=st.query_map([],|r|Ok((r.get(0)?,r.get(1)?)))
+        .map_err(|e|e.to_string())?.filter_map(Result::ok).collect();
+    let mut groups=Vec::new();
+    for(fingerprint,count)in fingerprints{
+        let mut item_st=conn.prepare("SELECT id,name FROM assets WHERE fingerprint=?1 ORDER BY id").map_err(|e|e.to_string())?;
+        let items:Vec<(i64,String)>=item_st.query_map(params![fingerprint.clone()],|r|Ok((r.get(0)?,r.get(1)?)))
+            .map_err(|e|e.to_string())?.filter_map(Result::ok).collect();
+        groups.push(crate::models::DuplicateGroup{
+            fingerprint,
+            count,
+            asset_ids:items.iter().map(|x|x.0).collect(),
+            names:items.into_iter().map(|x|x.1).collect(),
+        });
+    }
+    Ok(groups)
+}

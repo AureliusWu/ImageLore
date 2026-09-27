@@ -226,3 +226,78 @@ fn open_path(path:&Path,select:bool)->Result<(),String>{
 pub fn open_external(state:State<'_,AppState>,id:i64)->Result<bool,String>{let conn=state.db.lock().map_err(|e|e.to_string())?;let asset=db::get_asset(&conn,id)?;open_path(Path::new(&asset.path),false)?;Ok(true)}
 #[tauri::command]
 pub fn open_containing_folder(state:State<'_,AppState>,id:i64)->Result<bool,String>{let conn=state.db.lock().map_err(|e|e.to_string())?;let asset=db::get_asset(&conn,id)?;open_path(Path::new(&asset.path),true)?;Ok(true)}
+
+
+#[tauri::command]
+pub fn duplicate_groups(state:State<'_,AppState>)->Result<Vec<DuplicateGroup>,String>{
+    let conn=state.db.lock().map_err(|e|e.to_string())?;
+    db::duplicate_groups(&conn)
+}
+
+fn reindex_many(conn:&Connection,ids:&[i64])->Result<(),String>{
+    for id in ids{db::reindex_asset(conn,*id)?}
+    Ok(())
+}
+
+#[tauri::command]
+pub fn rename_tag(state:State<'_,AppState>,old_name:String,new_name:String)->Result<bool,String>{
+    let old=old_name.trim();let new=new_name.trim();
+    if old.is_empty()||new.is_empty(){return Err("标签名称不能为空".into())}
+    let mut conn=state.db.lock().map_err(|e|e.to_string())?;
+    let source:Option<i64>=conn.query_row("SELECT id FROM tags WHERE name=?1 COLLATE NOCASE",params![old],|r|r.get(0)).ok();
+    let Some(source_id)=source else{return Err("找不到原标签".into())};
+    let ids:Vec<i64>={
+        let mut st=conn.prepare("SELECT asset_id FROM asset_tags WHERE tag_id=?1").map_err(|e|e.to_string())?;
+        st.query_map(params![source_id],|r|r.get(0)).map_err(|e|e.to_string())?.filter_map(Result::ok).collect()
+    };
+    let tx=conn.transaction().map_err(|e|e.to_string())?;
+    if let Ok(target_id)=tx.query_row("SELECT id FROM tags WHERE name=?1 COLLATE NOCASE",params![new],|r|r.get::<_,i64>(0)){
+        if target_id!=source_id{
+            tx.execute(
+                "INSERT OR IGNORE INTO asset_tags(asset_id,tag_id,created_at) SELECT asset_id,?1,created_at FROM asset_tags WHERE tag_id=?2",
+                params![target_id,source_id]
+            ).map_err(|e|e.to_string())?;
+            tx.execute("DELETE FROM tags WHERE id=?1",params![source_id]).map_err(|e|e.to_string())?;
+        }
+    }else{
+        tx.execute("UPDATE tags SET name=?1 WHERE id=?2",params![new,source_id]).map_err(|e|e.to_string())?;
+    }
+    reindex_many(&tx,&ids)?;
+    tx.commit().map_err(|e|e.to_string())?;
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn merge_tags(state:State<'_,AppState>,source_name:String,target_name:String)->Result<bool,String>{
+    rename_tag(state,source_name,target_name)
+}
+
+#[tauri::command]
+pub fn delete_tag(state:State<'_,AppState>,name:String)->Result<bool,String>{
+    let mut conn=state.db.lock().map_err(|e|e.to_string())?;
+    let tag_id:i64=conn.query_row("SELECT id FROM tags WHERE name=?1 COLLATE NOCASE",params![name.trim()],|r|r.get(0)).map_err(|e|e.to_string())?;
+    let ids:Vec<i64>={
+        let mut st=conn.prepare("SELECT asset_id FROM asset_tags WHERE tag_id=?1").map_err(|e|e.to_string())?;
+        st.query_map(params![tag_id],|r|r.get(0)).map_err(|e|e.to_string())?.filter_map(Result::ok).collect()
+    };
+    let tx=conn.transaction().map_err(|e|e.to_string())?;
+    tx.execute("DELETE FROM tags WHERE id=?1",params![tag_id]).map_err(|e|e.to_string())?;
+    reindex_many(&tx,&ids)?;
+    tx.commit().map_err(|e|e.to_string())?;
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn rename_collection(state:State<'_,AppState>,id:i64,name:String)->Result<bool,String>{
+    let value=name.trim();if value.is_empty(){return Err("集合名称不能为空".into())}
+    let conn=state.db.lock().map_err(|e|e.to_string())?;
+    conn.execute("UPDATE collections SET name=?1,updated_at=?2 WHERE id=?3",params![value,db::now(),id]).map_err(|e|e.to_string())?;
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn delete_collection(state:State<'_,AppState>,id:i64)->Result<bool,String>{
+    let conn=state.db.lock().map_err(|e|e.to_string())?;
+    conn.execute("DELETE FROM collections WHERE id=?1",params![id]).map_err(|e|e.to_string())?;
+    Ok(true)
+}
