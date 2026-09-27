@@ -63,3 +63,7 @@ jobs:
       - name: Rust check
         if: steps.changes.outputs.rust == 'true'
         run: cargo check --locked --manifest-path src-tauri/Cargo.toml
+
+      - name: Rust tests
+        if: steps.changes.outputs.rust == 'true'
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib

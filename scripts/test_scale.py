@@ -1,7 +1,7 @@
 from pathlib import Path
 import sqlite3,time
 root=Path(__file__).resolve().parents[1]
-schema=(root/'src-tauri/schema.sql').read_text()
+schema=(root/'src-tauri/schema.sql').read_text(encoding='utf-8')
 N=10000
 con=sqlite3.connect(':memory:')
 con.executescript(schema)

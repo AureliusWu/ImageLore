@@ -386,7 +386,8 @@ pub fn delete_tag(state:State<'_,AppState>,name:String)->Result<bool,String>{
 pub fn rename_collection(state:State<'_,AppState>,id:i64,name:String)->Result<bool,String>{
     let value=name.trim();if value.is_empty(){return Err("集合名称不能为空".into())}
     let conn=state.db.lock().map_err(|e|e.to_string())?;
-    conn.execute("UPDATE collections SET name=?1,updated_at=?2 WHERE id=?3",params![value,db::now(),id]).map_err(|e|e.to_string())?;
+    conn.execute("UPDATE collections SET name=?1,updated_at=?2 WHERE id=?3",params![value,db::now(),id])
+        .map_err(|e|if e.to_string().contains("UNIQUE"){"已存在同名集合".into()}else{e.to_string()})?;
     Ok(true)
 }
 

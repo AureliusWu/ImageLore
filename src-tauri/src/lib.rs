@@ -10,29 +10,58 @@ mod sidecar;
 mod state;
 
 use state::AppState;
-use std::sync::Mutex;
+use std::{fs,sync::Mutex};
+use tauri::Manager;
+use tauri_plugin_dialog::{DialogExt,MessageDialogKind};
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
-    let (data_dir, cache_dir) = db::data_root().expect("failed to prepare ImageLore data directory");
-    let database_path = data_dir.join("library.sqlite3");
-    let backups_dir = data_dir.join("backups");
-    std::fs::create_dir_all(&backups_dir).expect("failed to prepare ImageLore backup directory");
-    backup::apply_pending_restore(&database_path,&data_dir,&backups_dir).expect("failed to apply pending ImageLore restore");
-    let connection = db::init_db(&database_path).expect("failed to initialize ImageLore database");
-    let cache_cleanup = cache_dir.clone();
-    std::thread::spawn(move || preview::prune_cache(&cache_cleanup, 1024 * 1024 * 1024));
+fn prepare_state()->Result<AppState,String>{
+    let(data_dir,cache_dir)=db::data_root()?;
+    let database_path=data_dir.join("library.sqlite3");
+    let backups_dir=data_dir.join("backups");
+    fs::create_dir_all(&backups_dir).map_err(|e|e.to_string())?;
+    backup::apply_pending_restore(&database_path,&data_dir,&backups_dir)?;
+    let connection=db::init_db(&database_path)?;
+    let cache_cleanup=cache_dir.clone();
+    std::thread::spawn(move||preview::prune_cache(&cache_cleanup,1024*1024*1024));
+    Ok(AppState{
+        db:Mutex::new(connection),
+        data_dir,
+        cache_dir,
+        database_path,
+        backups_dir,
+        import_jobs:Mutex::new(std::collections::HashMap::new()),
+        next_job_id:std::sync::atomic::AtomicU64::new(1),
+    })
+}
 
+fn write_startup_error(message:&str){
+    let root=dirs::data_local_dir().map(|x|x.join("ImageLore")).unwrap_or_else(std::env::temp_dir);
+    let _=fs::create_dir_all(&root);
+    let _=fs::write(root.join("startup-error.log"),message);
+}
+
+#[cfg_attr(mobile,tauri::mobile_entry_point)]
+pub fn run(){
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(AppState {
-            db: Mutex::new(connection),
-            data_dir,
-            cache_dir,
-            database_path,
-            backups_dir,
-            import_jobs: Mutex::new(std::collections::HashMap::new()),
-            next_job_id: std::sync::atomic::AtomicU64::new(1),
+        .setup(|app|{
+            match prepare_state(){
+                Ok(state)=>{
+                    app.manage(state);
+                }
+                Err(error)=>{
+                    let message=format!("ImageLore 无法安全打开资料库。\n\n{}\n\n错误详情已写入 startup-error.log。",error);
+                    write_startup_error(&message);
+                    if let Some(window)=app.get_webview_window("main"){let _=window.hide();}
+                    let handle=app.handle().clone();
+                    app.dialog()
+                        .message(message)
+                        .kind(MessageDialogKind::Error)
+                        .title("ImageLore 启动失败")
+                        .show(move |_|handle.exit(1));
+                }
+            }
+            Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::library_page,
