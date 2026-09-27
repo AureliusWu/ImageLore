@@ -3,7 +3,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-dialog";
 import { api,isTauri } from "./api";
 import { APP_VERSION } from "./version";
-import type { AssetRecord,AssetSummary,LibraryFacets,LibraryFilter,Lineage } from "./types";
+import type { AssetRecord,AssetSummary,BackupRecord,DuplicateGroup,ImportSummary,LibraryFacets,LibraryFilter,Lineage } from "./types";
 import { useDebouncedValue } from "./hooks/useDebouncedValue";
 import { useEditorDraft } from "./hooks/useEditorDraft";
 import { useNativeDrop } from "./hooks/useNativeDrop";
@@ -13,6 +13,9 @@ import { LibraryPane } from "./components/LibraryPane";
 import { PreviewPane } from "./components/PreviewPane";
 import { InspectorPane,type InspectorTab } from "./components/InspectorPane";
 import { AppDialogs,type AppModalState } from "./components/AppDialogs";
+import { LibraryManager } from "./components/LibraryManager";
+import { ParentPicker } from "./components/ParentPicker";
+import { useImportJob } from "./hooks/useImportJob";
 
 const PAGE_SIZE=240;
 const emptyFacets:LibraryFacets={tags:[],models:[],collections:[]};
@@ -24,6 +27,7 @@ export default function App(){
   const[status,setStatus]=useState("就绪");
   const[filter,setFilter]=useState<LibraryFilter>({query:"",view:"all",tag:null,model:null,collection_id:null});
   const debouncedQuery=useDebouncedValue(filter.query,180);
+  const debouncedParentQuery=useDebouncedValue(parentQuery,180);
   const effectiveFilter=useMemo(()=>({...filter,query:debouncedQuery}),[filter,debouncedQuery]);
 
   const[assets,setAssets]=useState<AssetSummary[]>([]);
@@ -36,6 +40,14 @@ export default function App(){
   const[tab,setTab]=useState<InspectorTab>("prompt");
   const[lineage,setLineage]=useState<Lineage>(emptyLineage);
   const[compareRecord,setCompareRecord]=useState<AssetRecord|null>(null);
+  const[managerOpen,setManagerOpen]=useState(false);
+  const[backups,setBackups]=useState<BackupRecord[]>([]);
+  const[duplicates,setDuplicates]=useState<DuplicateGroup[]>([]);
+  const[parentOpen,setParentOpen]=useState(false);
+  const[parentQuery,setParentQuery]=useState("");
+  const[parentChoice,setParentChoice]=useState<number|null>(null);
+  const[parentResults,setParentResults]=useState<AssetSummary[]>([]);
+  const[parentLoading,setParentLoading]=useState(false);
 
   const[modal,setModal]=useState<AppModalState>(null);
   const[dialogText,setDialogText]=useState("");
@@ -78,6 +90,15 @@ export default function App(){
   useEffect(()=>{if(isTauri)getVersion().then(setVersion).catch(()=>setVersion(APP_VERSION))},[]);
   useEffect(()=>{void refresh()},[debouncedQuery,filter.view,filter.tag,filter.model,filter.collection_id]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(()=>{void refreshFacets()},[refreshFacets]);
+  useEffect(()=>{if(isTauri)void api.ensureAutoBackup().catch(()=>{})},[]);
+  useEffect(()=>{
+    if(!parentOpen)return;
+    setParentLoading(true);
+    api.page({query:debouncedParentQuery,view:"all",tag:null,model:null,collection_id:null},0,100)
+      .then(page=>setParentResults(page.items.filter(x=>x.id!==current?.id)))
+      .catch(()=>setParentResults([]))
+      .finally(()=>setParentLoading(false));
+  },[parentOpen,debouncedParentQuery,current?.id]);
   useEffect(()=>{
     if(!current){setPreview("");setLineage(emptyLineage);setCompareRecord(null);return}
     setStatus("正在加载预览…");
@@ -85,27 +106,35 @@ export default function App(){
     api.lineage(current.id).then(async x=>{setLineage(x);const p=x.parents[0];setCompareRecord(p?await api.get(p.other_id).catch(()=>null):null)}).catch(()=>setLineage(emptyLineage));
   },[current?.id,previewMode]);
 
-  const importResult=useCallback(async(label:string,task:()=>Promise<{added:number;skipped:number;failed:number;last_id:number|null}>)=>{
+  const importDone=useCallback(async(result:ImportSummary)=>{
+    await refreshFacets();await refresh(result.last_id??undefined);
+  },[refreshFacets,refresh]);
+  const importJob=useImportJob(importDone,setStatus);
+  const importImmediate=useCallback(async(label:string,task:()=>Promise<ImportSummary>)=>{
     await flushEditor();setStatus(label);
     try{
       const result=await task();
-      setStatus(`导入完成：新增 ${result.added} 张，跳过 ${result.skipped} 张，失败 ${result.failed} 张`);
-      await refreshFacets();await refresh(result.last_id??undefined);
-    }catch(e){setStatus(`导入失败：${String(e)}`)}
-  },[flushEditor,refreshFacets,refresh]);
+      setStatus("导入完成：新增 "+result.added+"，重复 "+result.duplicates+"，跳过 "+result.skipped+"，失败 "+result.failed);
+      await importDone(result);
+    }catch(e){setStatus("导入失败："+String(e))}
+  },[flushEditor,importDone]);
+  const startBackgroundImport=useCallback(async(label:string,starter:()=>Promise<number>,fallback:()=>Promise<ImportSummary>)=>{
+    await flushEditor();
+    if(isTauri){await importJob.start(label,starter)}else{await importImmediate(label,fallback)}
+  },[flushEditor,importJob,importImmediate]);
 
   const chooseImages=async()=>{
     if(!isTauri){setStatus("文件选择器仅在桌面版中可用");return}
     const picked=await open({multiple:true,filters:[{name:"图片",extensions:["png","jpg","jpeg","webp","bmp","gif"]}]});
     if(!picked)return;const paths=Array.isArray(picked)?picked:[picked];
-    await importResult("正在导入…",()=>api.importPaths(paths));
+    await startBackgroundImport("正在准备导入…",()=>api.startImportPaths(paths),()=>api.importPaths(paths));
   };
   const chooseFolder=async()=>{
     if(!isTauri){setStatus("文件夹选择器仅在桌面版中可用");return}
     const picked=await open({directory:true,multiple:false});if(!picked||Array.isArray(picked))return;
-    await importResult("正在扫描文件夹…",()=>api.importFolder(picked));
+    await startBackgroundImport("正在扫描文件夹…",()=>api.startImportFolder(picked),()=>api.importFolder(picked));
   };
-  const handleDrop=useCallback((paths:string[])=>importResult("正在导入拖入的文件…",()=>api.importDroppedPaths(paths)),[importResult]);
+  const handleDrop=useCallback((paths:string[])=>startBackgroundImport("正在扫描拖入内容…",()=>api.startImportDroppedPaths(paths),()=>api.importDroppedPaths(paths)),[startBackgroundImport]);
   const drop=useNativeDrop(handleDrop,setStatus);
 
   const importDerivative=async()=>{
@@ -131,13 +160,26 @@ export default function App(){
   const refreshMissing=async()=>{setStatus("正在检查文件位置…");const n=await api.refreshMissing();setStatus(`发现 ${n} 个缺失文件`);await refresh()};
   const repairMissing=async()=>{if(!isTauri){setStatus("此功能仅在桌面版中可用");return}const root=await open({directory:true,multiple:false});if(!root||Array.isArray(root))return;const n=await api.relocateMissing(root);setStatus(`已重新定位 ${n} 条记录`);await refresh()};
   const compare=async(id:number)=>setCompareRecord(await api.get(id).catch(()=>null));
+  const refreshManager=useCallback(async()=>{
+    const[b,d]=await Promise.all([api.backups(),api.duplicateGroups()]);
+    setBackups(b);setDuplicates(d);await refreshFacets();
+  },[refreshFacets]);
+  const openManager=async()=>{await flushEditor();await refreshManager();setManagerOpen(true)};
+  const createBackup=async()=>{setStatus("正在备份资料库…");await api.createBackup();await refreshManager();setStatus("资料库备份完成")};
+  const restoreBackup=async(name:string)=>{await api.stageRestore(name);setStatus("恢复已准备完成，请重启 ImageLore 后生效")};
+  const renameTag=async(oldName:string,newName:string)=>{await api.renameTag(oldName,newName);await refreshManager();await refresh(current?.id)};
+  const mergeTag=async(source:string,target:string)=>{await api.mergeTags(source,target);await refreshManager();await refresh(current?.id)};
+  const deleteTag=async(name:string)=>{await api.deleteTag(name);await refreshManager();await refresh(current?.id)};
+  const renameCollection=async(id:number,name:string)=>{await api.renameCollection(id,name);await refreshManager()};
+  const deleteCollection=async(id:number)=>{await api.deleteCollection(id);await refreshManager();setFilter(f=>f.collection_id===id?{...f,collection_id:null}:f)};
+  const openParentPicker=()=>{setParentQuery("");setParentChoice(null);setParentOpen(true)};
+  const confirmParent=async()=>{if(!current||!parentChoice)return;await api.addRelation(parentChoice,current.id,"reference","");setParentOpen(false);setLineage(await api.lineage(current.id));setCompareRecord(await api.get(parentChoice));setStatus("父图已关联")};
 
   const confirmModal=async()=>{
     if(!modal)return;
     if(modal.kind==="batch-tags"){const ids=selected.size?[...selected]:current?[current.id]:[];await api.batchAddTags(ids,parseTags(dialogText));setModal(null);await refreshFacets();await refresh(current?.id);return}
     if(modal.kind==="history"){if(!dialogChoice)return;const a=await api.restoreRevision(Number(dialogChoice));setCurrent(a);loadEditor(a);setModal(null);setStatus("历史版本已恢复");return}
     if(modal.kind==="collection"){let id=Number(dialogChoice);if(dialogChoice==="new"){if(!dialogText.trim())return;id=(await api.createCollection(dialogText.trim(),"")).id}if(!id)return;const ids=selected.size?[...selected]:current?[current.id]:[];await api.addToCollection(id,ids);setModal(null);await refreshFacets();setStatus("已加入集合");return}
-    if(modal.kind==="link-parent"){if(!current||!dialogChoice)return;await api.addRelation(Number(dialogChoice),current.id,"reference","");setModal(null);setLineage(await api.lineage(current.id));setCompareRecord(await api.get(Number(dialogChoice)));setStatus("父图已关联");return}
     if(modal.kind==="remove"){if(!current)return;await flushEditor();await api.deleteAsset(current.id);setModal(null);setCurrent(null);await refreshFacets();await refresh();setStatus("记录已移除")}
   };
 
@@ -164,13 +206,15 @@ export default function App(){
     {drop.active?<div className="drop-overlay" aria-live="polite"><div className="drop-card"><span className="drop-orb">⇩</span><strong>松开鼠标即可导入</strong><p>{drop.count?`检测到 ${drop.count} 个项目`:"正在识别拖入内容"} · 支持图片和文件夹</p><small>文件夹会递归扫描；已存在的图片会自动跳过</small></div></div>:null}
     <AppHeader version={version} query={filter.query} onQuery={query=>setFilter(f=>({...f,query}))} onImport={chooseImages} onFolder={chooseFolder}/>
     <main className="workspace" style={{gridTemplateColumns:`${leftWidth}px 8px minmax(360px,1fr) 8px ${rightWidth}px`}}>
-      <LibraryPane assets={assets} total={total} currentId={current?.id} selected={selected} loading={loading} filter={filter} facets={facets} onFilter={setFilter} onAsset={onAsset} onLoadMore={loadMore} onBatchTags={()=>{setDialogText("");setModal({kind:"batch-tags"})}} onCollection={openCollection} onClearSelection={()=>setSelected(new Set())} onRefreshMissing={refreshMissing}/>
+      <LibraryPane assets={assets} total={total} currentId={current?.id} selected={selected} loading={loading} filter={filter} facets={facets} onFilter={setFilter} onAsset={onAsset} onLoadMore={loadMore} onBatchTags={()=>{setDialogText("");setModal({kind:"batch-tags"})}} onCollection={openCollection} onClearSelection={()=>setSelected(new Set())} onRefreshMissing={refreshMissing} onManage={openManager}/>
       <div className="splitter" onPointerDown={drag("left")}/>
       <PreviewPane asset={current} src={preview} mode={previewMode} onMode={setPreviewMode} onImport={chooseImages} onOpen={()=>current&&api.openExternal(current.id)} onFolder={()=>current&&api.openFolder(current.id)}/>
       <div className="splitter" onPointerDown={drag("right")}/>
-      <InspectorPane asset={current} tab={tab} onTab={setTab} prompt={prompt} onPrompt={setPrompt} negative={negative} onNegative={setNegative} model={model} onModel={setModel} tagsText={tagsText} onTagsText={setTagsText} lineage={lineage} compareRecord={compareRecord} onCompare={compare} onCopy={copyPrompt} onSaveRevision={saveRevision} onHistory={openHistory} onFavorite={toggleFavorite} onRescan={rescan} onSidecar={exportSidecar} onCollection={openCollection} onRemove={()=>setModal({kind:"remove"})} onImportDerivative={importDerivative} onLinkParent={()=>{setDialogChoice("");setModal({kind:"link-parent"})}} promptRef={promptRef}/>
+      <InspectorPane asset={current} tab={tab} onTab={setTab} prompt={prompt} onPrompt={setPrompt} negative={negative} onNegative={setNegative} model={model} onModel={setModel} tagsText={tagsText} onTagsText={setTagsText} lineage={lineage} compareRecord={compareRecord} onCompare={compare} onCopy={copyPrompt} onSaveRevision={saveRevision} onHistory={openHistory} onFavorite={toggleFavorite} onRescan={rescan} onSidecar={exportSidecar} onCollection={openCollection} onRemove={()=>setModal({kind:"remove"})} onImportDerivative={importDerivative} onLinkParent={openParentPicker} promptRef={promptRef}/>
     </main>
-    <footer className="statusbar glass-surface"><span className={`runtime-dot ${isTauri?"native":"preview"}`}/><strong>{isTauri?"桌面版":"浏览器预览"}</strong><span>v{version}</span><span className="status-message">{status}</span><span>已加载 {assets.length}/{total}</span><button onClick={repairMissing} title="根据文件指纹查找移动后的文件">修复缺失文件</button><span className="shortcut">F6 提示词 · F7 预览 · Ctrl+S 保存版本</span></footer>
+    <footer className="statusbar glass-surface"><span className={`runtime-dot ${isTauri?"native":"preview"}`}/><strong>{isTauri?"桌面版":"浏览器预览"}</strong><span>v{version}</span><span className="status-message">{status}</span>{importJob.active?<><progress max={Math.max(1,importJob.progress.total)} value={importJob.progress.processed}/><button onClick={importJob.cancel}>取消导入</button></>:null}<span>已加载 {assets.length}/{total}</span><button onClick={repairMissing} title="根据文件指纹查找移动后的文件">修复缺失文件</button><span className="shortcut">F6 提示词 · F7 预览 · Ctrl+S 保存版本</span></footer>
+    <LibraryManager open={managerOpen} backups={backups} tags={facets.tags} collections={facets.collections} duplicates={duplicates} onClose={()=>setManagerOpen(false)} onBackup={createBackup} onRestore={restoreBackup} onRenameTag={renameTag} onMergeTag={mergeTag} onDeleteTag={deleteTag} onRenameCollection={renameCollection} onDeleteCollection={deleteCollection}/>
+    <ParentPicker open={parentOpen} query={parentQuery} results={parentResults} choice={parentChoice} loading={parentLoading} onQuery={setParentQuery} onChoice={setParentChoice} onClose={()=>setParentOpen(false)} onConfirm={confirmParent}/>
     <AppDialogs modal={modal} assets={assets} currentId={current?.id} text={dialogText} setText={setDialogText} choice={dialogChoice} setChoice={setDialogChoice} onClose={()=>setModal(null)} onConfirm={confirmModal}/>
   </div>
 }
