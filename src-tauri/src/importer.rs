@@ -190,7 +190,7 @@ where F:FnMut(ImportProgress){
     Ok(result)
 }
 
-fn start_job(app:AppHandle,roots:Vec<String>,recursive_dirs:bool)->Result<u64,String>{
+pub(crate) fn start_job(app:AppHandle,roots:Vec<String>,recursive_dirs:bool)->Result<u64,String>{
     let state=app.state::<AppState>();
     let job_id=state.next_job_id.fetch_add(1,Ordering::Relaxed);
     let cancel=Arc::new(AtomicBool::new(false));
