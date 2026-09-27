@@ -2,6 +2,8 @@
 
 ## 0.16.0 — Source Sync
 
+- Hardened version metadata so `VERSION` automatically drives npm, Tauri, Cargo, runtime, README, UI preview and OG SVG; CI now rejects drift or a non-idempotent sync.
+
 - Added persistent Source Folders for frequently used AI output and image directories.
 - Source folders can be synchronized individually or together through the existing background import job with progress and cancellation.
 - Added per-folder “sync on startup” control; startup performs one scan only and does not install a resident filesystem watcher.

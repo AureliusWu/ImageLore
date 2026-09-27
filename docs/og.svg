@@ -27,7 +27,7 @@
   </g>
   <text x="156" y="213" font-family="Segoe UI, Noto Sans CJK SC, sans-serif" font-size="46" font-weight="760" fill="#173a50">ImageLore</text>
   <rect x="157" y="228" width="64" height="24" rx="12" fill="#fff" fill-opacity=".62" stroke="#aad8e4"/>
-  <text x="189" y="245" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="12" font-weight="700" fill="#287b99">v0.16.0</text>
+  <text x="189" y="245" text-anchor="middle" font-family="Segoe UI, sans-serif" font-size="12" font-weight="700" fill="#287b99" data-app-version="true">v0.16.0</text>
   <text x="64" y="308" font-family="Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="26" font-weight="700" fill="#234f63">AI 视觉生成记忆库</text>
   <text x="64" y="348" font-family="Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="15" fill="#55778a">把 Prompt、模型、参数、版本与生成谱系留在本地，</text>
   <text x="64" y="374" font-family="Noto Sans CJK SC, Microsoft YaHei, sans-serif" font-size="15" fill="#55778a">让每一次视觉生成都可检索、可追溯、可复现。</text>
