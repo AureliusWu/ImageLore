@@ -44,6 +44,12 @@
 - 保存筛选与 Library Health
 - Migration v3
 
+## v0.15.2 — Showcase ✅
+- README / OG visual preview
+- Current Chinese UI preview
+- Reproducible 1280×640 OG renderer
+- Metadata source label polish
+
 ## v1.0.0 — Stable Local Library
 - Windows 代码签名与自动更新
 - 启动故障恢复与 rotating logs
