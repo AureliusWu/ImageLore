@@ -1,0 +1,39 @@
+name: Refresh Cargo lockfile
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/refresh-cargo-lock.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: imagelore-refresh-cargo-lock
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    if: github.event.head_commit.message != 'Refresh Cargo.lock for asset protocol'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Refresh Cargo.lock
+        run: cargo generate-lockfile --manifest-path src-tauri/Cargo.toml
+
+      - name: Commit Cargo.lock
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src-tauri/Cargo.lock
+          if (git diff --cached --quiet) { exit 0 }
+          git commit -m "Refresh Cargo.lock for asset protocol"
+          git push
