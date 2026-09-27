@@ -3,6 +3,7 @@ name: Build ImageLore Windows Installer
 on:
   workflow_dispatch:
   push:
+    branches: [main]
     tags: ['v*']
 
 concurrency:
@@ -46,7 +47,7 @@ jobs:
           }
 
       - name: Build NSIS setup EXE
-        run: npm run tauri:build -- --locked
+        run: npm run tauri:build
 
       - name: Upload Windows installer artifact
         uses: actions/upload-artifact@v4

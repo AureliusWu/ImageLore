@@ -65,7 +65,7 @@ npm run tauri:dev
 正式 Windows 构建：
 
 ```bash
-npm run tauri:build -- --locked
+npm run tauri:build
 ```
 
 ## 版本
