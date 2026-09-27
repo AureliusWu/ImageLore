@@ -16,6 +16,7 @@ import { AppDialogs,type AppModalState } from "./components/AppDialogs";
 import { LibraryManager } from "./components/LibraryManager";
 import { ParentPicker } from "./components/ParentPicker";
 import { useImportJob } from "./hooks/useImportJob";
+import { useCloseGuard } from "./hooks/useCloseGuard";
 
 const PAGE_SIZE=240;
 const emptyFacets:LibraryFacets={tags:[],models:[],collections:[]};
@@ -116,7 +117,7 @@ export default function App(){
   useEffect(()=>{if(isTauri)getVersion().then(setVersion).catch(()=>setVersion(APP_VERSION))},[]);
   useEffect(()=>{void refresh()},[debouncedQuery,filter.view,filter.tag,filter.model,filter.collection_id]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(()=>{void refreshFacets()},[refreshFacets]);
-  useEffect(()=>{if(isTauri)void api.ensureAutoBackup().catch(()=>{})},[]);
+  useEffect(()=>{if(isTauri)void api.ensureAutoBackup().catch(e=>setStatus("自动备份失败："+String(e)))},[]);
   useEffect(()=>{
     if(!parentOpen)return;
     let cancelled=false;
@@ -151,6 +152,7 @@ export default function App(){
   },[refreshFacets,refresh]);
   const importJob=useImportJob(importDone,setStatus);
   const{start:startImportJob,cancel:cancelImportJob,active:importActive,progress:importProgress}=importJob;
+  useCloseGuard(flushEditor,importActive?cancelImportJob:undefined);
   const importImmediate=useCallback(async(label:string,task:()=>Promise<ImportSummary>)=>{
     await flushEditor();setStatus(label);
     try{
@@ -184,7 +186,8 @@ export default function App(){
     if(!picked||Array.isArray(picked))return;
     await flushEditor();const result=await api.importPaths([picked]);
     if(result.last_id===current.id){setStatus("所选图片与当前记录内容完全相同，未建立自引用关系");return}
-    if(result.last_id){await api.addRelation(current.id,result.last_id,"derived_from","");await refresh(result.last_id);setTab("lineage");setStatus("派生图已关联")}
+    if(result.last_id){await api.addRelation(current.id,result.last_id,"derived_from","");await refresh(result.last_id);setTab("lineage");setStatus("派生图已关联");return}
+    if(result.duplicates){setStatus("该派生图与资料库中的现有图片内容完全相同，未建立重复谱系")}
   };
 
   const onAsset=async(asset:AssetSummary,e:React.MouseEvent)=>{
@@ -206,16 +209,15 @@ export default function App(){
     const[b,d]=await Promise.all([api.backups(),api.duplicateGroups()]);
     setBackups(b);setDuplicates(d);await refreshFacets();
   },[refreshFacets]);
-  const openManager=async()=>{await flushEditor();await refreshManager();setManagerOpen(true)};
-  const createBackup=async()=>{setStatus("正在备份资料库…");await api.createBackup();await refreshManager();setStatus("资料库备份完成")};
-  const restoreBackup=async(name:string)=>{if(!window.confirm("确定恢复到这份备份吗？当前资料库会在重启时先自动保留一份安全副本。"))return;await api.stageRestore(name);setStatus("恢复已准备完成，请重启 ImageLore 后生效")};
-  const renameTag=async(oldName:string,newName:string)=>{await api.renameTag(oldName,newName);setFilter(f=>f.tag?.toLocaleLowerCase()===oldName.toLocaleLowerCase()?{...f,tag:newName}:f);await refreshManager();await refresh(current?.id)};
-  const mergeTag=async(source:string,target:string)=>{await api.mergeTags(source,target);setFilter(f=>f.tag?.toLocaleLowerCase()===source.toLocaleLowerCase()?{...f,tag:target}:f);await refreshManager();await refresh(current?.id)};
-  const deleteTag=async(name:string)=>{if(!window.confirm("删除标签“"+name+"”？图片记录本身不会被删除。"))return;await api.deleteTag(name);setFilter(f=>f.tag?.toLocaleLowerCase()===name.toLocaleLowerCase()?{...f,tag:null}:f);await refreshManager();await refresh(current?.id)};
-  const renameCollection=async(id:number,name:string)=>{await api.renameCollection(id,name);await refreshManager()};
-  const deleteCollection=async(id:number)=>{if(!window.confirm("删除这个集合？集合内的图片记录不会被删除。"))return;await api.deleteCollection(id);await refreshManager();setFilter(f=>f.collection_id===id?{...f,collection_id:null}:f)};
+  const openManager=async()=>{try{await flushEditor();await refreshManager();setManagerOpen(true)}catch(e){setStatus("打开资料库管理失败："+String(e))}};
+  const createBackup=async()=>{try{setStatus("正在备份资料库…");await api.createBackup();await refreshManager();setStatus("资料库备份完成")}catch(e){setStatus("资料库备份失败："+String(e))}};
+  const restoreBackup=async(name:string)=>{if(!window.confirm("确定恢复到这份备份吗？当前资料库会在重启时先自动保留一份安全副本。"))return;try{await api.stageRestore(name);setStatus("恢复已准备完成，请重启 ImageLore 后生效")}catch(e){setStatus("准备恢复失败："+String(e))}};
+  const renameTag=async(oldName:string,newName:string)=>{try{await api.renameTag(oldName,newName);setFilter(f=>f.tag?.toLocaleLowerCase()===oldName.toLocaleLowerCase()?{...f,tag:newName}:f);await refreshManager();await refresh(current?.id)}catch(e){setStatus("标签修改失败："+String(e))}};
+  const deleteTag=async(name:string)=>{if(!window.confirm("删除标签“"+name+"”？图片记录本身不会被删除。"))return;try{await api.deleteTag(name);setFilter(f=>f.tag?.toLocaleLowerCase()===name.toLocaleLowerCase()?{...f,tag:null}:f);await refreshManager();await refresh(current?.id)}catch(e){setStatus("删除标签失败："+String(e))}};
+  const renameCollection=async(id:number,name:string)=>{try{await api.renameCollection(id,name);await refreshManager()}catch(e){setStatus("集合重命名失败："+String(e))}};
+  const deleteCollection=async(id:number)=>{if(!window.confirm("删除这个集合？集合内的图片记录不会被删除。"))return;try{await api.deleteCollection(id);await refreshManager();setFilter(f=>f.collection_id===id?{...f,collection_id:null}:f)}catch(e){setStatus("删除集合失败："+String(e))}};
   const openParentPicker=()=>{setParentQuery("");setParentChoice(null);setParentOpen(true)};
-  const confirmParent=async()=>{if(!current||!parentChoice)return;await api.addRelation(parentChoice,current.id,"reference","");setParentOpen(false);setLineage(await api.lineage(current.id));setCompareRecord(await api.get(parentChoice));setStatus("父图已关联")};
+  const confirmParent=async()=>{if(!current||!parentChoice)return;try{await api.addRelation(parentChoice,current.id,"reference","");setParentOpen(false);setLineage(await api.lineage(current.id));setCompareRecord(await api.get(parentChoice));setStatus("父图已关联")}catch(e){setStatus("关联父图失败："+String(e))}};
 
   const confirmModal=async()=>{
     if(!modal)return;

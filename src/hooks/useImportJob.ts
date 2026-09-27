@@ -5,12 +5,12 @@ import type { ImportProgress,ImportSummary } from "../types";
 
 const empty:ImportProgress={job_id:0,processed:0,total:0,added:0,skipped:0,duplicates:0,failed:0,last_id:null,current_name:"",done:false,cancelled:false};
 
-export function useImportJob(onDone:(summary:ImportSummary,cancelled:boolean)=>void,setStatus:(value:string)=>void){
+export function useImportJob(onDone:(summary:ImportSummary,cancelled:boolean)=>void|Promise<void>,setStatus:(value:string)=>void){
   const[progress,setProgress]=useState<ImportProgress>(empty);
   const[starting,setStarting]=useState(false);
   const jobRef=useRef(0);
   const startingRef=useRef(false);
-  const bufferedRef=useRef<ImportProgress|null>(null);
+  const bufferedRef=useRef<ImportProgress[]>([]);
   const onDoneRef=useRef(onDone);
   const statusRef=useRef(setStatus);
 
@@ -22,6 +22,7 @@ export function useImportJob(onDone:(summary:ImportSummary,cancelled:boolean)=>v
     if(next.done){
       const summary:ImportSummary={added:next.added,skipped:next.skipped,duplicates:next.duplicates,failed:next.failed,last_id:next.last_id};
       jobRef.current=0;
+      startingRef.current=false;
       setStarting(false);
       statusRef.current(next.cancelled?"导入已取消":"导入完成：新增 "+next.added+"，重复 "+next.duplicates+"，跳过 "+next.skipped+"，失败 "+next.failed);
       void onDoneRef.current(summary,next.cancelled);
@@ -37,7 +38,7 @@ export function useImportJob(onDone:(summary:ImportSummary,cancelled:boolean)=>v
     listen<ImportProgress>("imagelore://import-progress",event=>{
       const next=event.payload;
       if(jobRef.current===0){
-        if(startingRef.current)bufferedRef.current=next;
+        if(startingRef.current)bufferedRef.current.push(next);
         return;
       }
       if(next.job_id===jobRef.current)applyProgress(next);
@@ -46,34 +47,44 @@ export function useImportJob(onDone:(summary:ImportSummary,cancelled:boolean)=>v
     return()=>{disposed=true;unlisten?.()};
   },[applyProgress]);
 
-  const takeBuffered=useCallback(()=>{const value=bufferedRef.current;bufferedRef.current=null;return value},[]);
-
   const start=useCallback(async(label:string,starter:()=>Promise<number>)=>{
-    if(jobRef.current||startingRef.current)return;
+    if(jobRef.current||startingRef.current){
+      statusRef.current("已有导入任务正在进行");
+      return false;
+    }
     startingRef.current=true;
     setStarting(true);
-    bufferedRef.current=null;
+    bufferedRef.current=[];
     setProgress(empty);
     statusRef.current(label);
     try{
       const id=await starter();
       jobRef.current=id;
       setProgress(p=>({...p,job_id:id}));
-      const buffered=takeBuffered();
-      if(buffered&&buffered.job_id===id)applyProgress(buffered);
+      const buffered=bufferedRef.current;
+      bufferedRef.current=[];
+      for(const event of buffered){
+        if(event.job_id===id)applyProgress(event);
+      }
+      return true;
     }catch(e){
       jobRef.current=0;
+      bufferedRef.current=[];
       setProgress(empty);
       statusRef.current("导入启动失败："+String(e));
+      return false;
     }finally{
       startingRef.current=false;
       setStarting(false);
     }
-  },[applyProgress,takeBuffered]);
+  },[applyProgress]);
 
   const cancel=useCallback(async()=>{
     const id=jobRef.current;
-    if(!id)return;
+    if(!id){
+      if(startingRef.current)statusRef.current("导入任务正在启动，请稍候");
+      return;
+    }
     statusRef.current("正在取消导入…");
     try{await api.cancelImport(id)}catch(e){statusRef.current("取消导入失败："+String(e))}
   },[]);
