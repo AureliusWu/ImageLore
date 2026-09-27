@@ -190,7 +190,13 @@ where F:FnMut(ImportProgress){
     Ok(result)
 }
 
-pub(crate) fn start_job(app:AppHandle,roots:Vec<String>,recursive_dirs:bool)->Result<u64,String>{
+pub(crate) fn start_job_with_finish<F>(
+    app:AppHandle,
+    roots:Vec<String>,
+    recursive_dirs:bool,
+    on_finish:F,
+)->Result<u64,String>
+where F:FnOnce(&AppState,&ImportSummary,bool)+Send+'static{
     let state=app.state::<AppState>();
     let job_id=state.next_job_id.fetch_add(1,Ordering::Relaxed);
     let cancel=Arc::new(AtomicBool::new(false));
@@ -205,6 +211,7 @@ pub(crate) fn start_job(app:AppHandle,roots:Vec<String>,recursive_dirs:bool)->Re
         });
         let cancelled=cancel.load(Ordering::Relaxed);
         let summary=run.unwrap_or(ImportSummary{added:0,skipped:0,duplicates:0,failed:1,last_id:None});
+        on_finish(state.inner(),&summary,cancelled);
         let _=app_for_thread.emit("imagelore://import-progress",ImportProgress{
             job_id,processed:0,total:0,added:summary.added,skipped:summary.skipped,duplicates:summary.duplicates,
             failed:summary.failed,current_name:String::new(),done:true,cancelled,last_id:summary.last_id
@@ -213,6 +220,10 @@ pub(crate) fn start_job(app:AppHandle,roots:Vec<String>,recursive_dirs:bool)->Re
     });
 
     Ok(job_id)
+}
+
+pub(crate) fn start_job(app:AppHandle,roots:Vec<String>,recursive_dirs:bool)->Result<u64,String>{
+    start_job_with_finish(app,roots,recursive_dirs,|_,_,_|{})
 }
 
 #[tauri::command]
