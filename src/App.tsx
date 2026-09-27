@@ -27,7 +27,6 @@ export default function App(){
   const[status,setStatus]=useState("就绪");
   const[filter,setFilter]=useState<LibraryFilter>({query:"",view:"all",tag:null,model:null,collection_id:null});
   const debouncedQuery=useDebouncedValue(filter.query,180);
-  const debouncedParentQuery=useDebouncedValue(parentQuery,180);
   const effectiveFilter=useMemo(()=>({...filter,query:debouncedQuery}),[filter,debouncedQuery]);
 
   const[assets,setAssets]=useState<AssetSummary[]>([]);
@@ -48,6 +47,7 @@ export default function App(){
   const[parentChoice,setParentChoice]=useState<number|null>(null);
   const[parentResults,setParentResults]=useState<AssetSummary[]>([]);
   const[parentLoading,setParentLoading]=useState(false);
+  const debouncedParentQuery=useDebouncedValue(parentQuery,180);
 
   const[modal,setModal]=useState<AppModalState>(null);
   const[dialogText,setDialogText]=useState("");
@@ -185,7 +185,7 @@ export default function App(){
 
   useEffect(()=>{
     const handler=(e:KeyboardEvent)=>{
-      if(e.key==="Escape"&&modal){setModal(null);return}
+      if(e.key==="Escape"){if(modal){setModal(null);return}if(parentOpen){setParentOpen(false);return}if(managerOpen){setManagerOpen(false);return}}
       if(e.ctrlKey&&e.key.toLowerCase()==="f"){e.preventDefault();document.querySelector<HTMLInputElement>("#search")?.focus()}
       if(e.key==="F6"){e.preventDefault();promptRef.current?.focus()}
       if(e.key==="F7"){e.preventDefault();setPreviewMode(x=>x==="fit"?"actual":"fit")}
