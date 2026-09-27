@@ -11,6 +11,7 @@ pub struct AssetSummary {
     pub format: String,
     pub metadata_type: String,
     pub fingerprint: String,
+    pub portable_id: String,
     pub file_mtime: i64,
     pub missing: i64,
     pub updated_at: i64,
@@ -162,4 +163,50 @@ pub struct ImportProgress {
     pub done: bool,
     pub cancelled: bool,
     pub last_id: Option<i64>,
+}
+
+
+#[derive(Debug,Clone,Serialize)]
+pub struct GenerationSession {
+    pub id:i64,
+    pub name:String,
+    pub note:String,
+    pub count:i64,
+    pub created_at:i64,
+    pub updated_at:i64,
+}
+
+#[derive(Debug,Clone,Serialize)]
+pub struct AssetSession {
+    pub session_id:i64,
+    pub session_name:String,
+    pub session_note:String,
+    pub asset_note:String,
+}
+
+#[derive(Debug,Clone,Serialize)]
+pub struct ModelAlias {
+    pub alias:String,
+    pub canonical:String,
+}
+
+#[derive(Debug,Clone,Serialize)]
+pub struct SavedFilter {
+    pub id:i64,
+    pub name:String,
+    pub filter:LibraryFilter,
+    pub created_at:i64,
+    pub updated_at:i64,
+}
+
+#[derive(Debug,Clone,Serialize)]
+pub struct LibraryHealth {
+    pub total:i64,
+    pub missing:i64,
+    pub duplicate_groups:i64,
+    pub without_metadata:i64,
+    pub without_fingerprint:i64,
+    pub pending_relations:i64,
+    pub unassigned_session:i64,
+    pub cache_bytes:u64,
 }

@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS assets (
   metadata_type TEXT NOT NULL DEFAULT 'none',
   generation_json TEXT NOT NULL DEFAULT '{}',
   fingerprint TEXT NOT NULL DEFAULT '',
+  portable_id TEXT NOT NULL DEFAULT '',
   file_mtime INTEGER NOT NULL DEFAULT 0,
   missing INTEGER NOT NULL DEFAULT 0 CHECK (missing IN (0,1)),
   created_at INTEGER NOT NULL,
@@ -29,6 +30,7 @@ CREATE INDEX IF NOT EXISTS idx_assets_favorite ON assets(favorite, updated_at DE
 CREATE INDEX IF NOT EXISTS idx_assets_missing ON assets(missing, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_assets_fingerprint ON assets(fingerprint);
 CREATE INDEX IF NOT EXISTS idx_assets_fingerprint_nonempty ON assets(fingerprint) WHERE fingerprint<>'';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_assets_portable_id_nonempty ON assets(portable_id) WHERE portable_id<>'';
 
 CREATE TABLE IF NOT EXISTS prompt_state (
   asset_id INTEGER PRIMARY KEY,
@@ -107,3 +109,48 @@ CREATE VIRTUAL TABLE IF NOT EXISTS asset_search USING fts5(
   tags,
   tokenize='unicode61 remove_diacritics 2'
 );
+
+
+CREATE TABLE IF NOT EXISTS generation_sessions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  note TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS asset_sessions (
+  asset_id INTEGER PRIMARY KEY,
+  session_id INTEGER NOT NULL,
+  note TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  FOREIGN KEY(asset_id) REFERENCES assets(id) ON DELETE CASCADE,
+  FOREIGN KEY(session_id) REFERENCES generation_sessions(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_asset_sessions_session ON asset_sessions(session_id,asset_id);
+
+CREATE TABLE IF NOT EXISTS model_aliases (
+  alias TEXT PRIMARY KEY COLLATE NOCASE,
+  canonical TEXT NOT NULL COLLATE NOCASE,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS saved_filters (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  filter_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS pending_relations (
+  child_portable_id TEXT NOT NULL,
+  parent_portable_id TEXT NOT NULL DEFAULT '',
+  parent_fingerprint TEXT NOT NULL DEFAULT '',
+  relation_type TEXT NOT NULL DEFAULT 'reference',
+  note TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  UNIQUE(child_portable_id,parent_portable_id,parent_fingerprint,relation_type)
+);
+CREATE INDEX IF NOT EXISTS idx_pending_relations_child ON pending_relations(child_portable_id);
