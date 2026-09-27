@@ -1,4 +1,4 @@
-# ImageLore v0.15.2
+# ImageLore v0.16.0
 
 ![ImageLore 应用预览](docs/og.svg)
 
@@ -13,6 +13,7 @@ ImageLore 是一个 local-first 的 AI 视觉生成记忆库，用来保存图�
 
 - 简体中文 Frutiger Aero 桌面界面
 - 图片 / 文件夹 / 原生拖拽导入
+- 资料源目录：启动时自动同步或一键同步常用出图目录
 - 后台导入任务、实时进度与取消
 - SHA-256 精确重复内容检测与自动跳过
 - Prompt、Negative Prompt、模型、标签自动保存
