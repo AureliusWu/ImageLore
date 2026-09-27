@@ -180,6 +180,94 @@ impl MetadataAdapter for ComfyUiAdapter{
     }
 }
 
+
+fn object_string(value:&Value,keys:&[&str])->String{
+    for key in keys{
+        if let Some(v)=value.get(*key){
+            if let Some(s)=v.as_str(){if !s.trim().is_empty(){return s.to_string()}}
+            if v.is_number()||v.is_boolean(){return v.to_string()}
+        }
+    }
+    String::new()
+}
+
+fn copy_generation_fields(source:&Value,target:&mut Map<String,Value>,pairs:&[(&str,&str)]){
+    for(input_key,output_key)in pairs{
+        if target.contains_key(*output_key){continue}
+        if let Some(value)=source.get(*input_key){
+            if value.is_string()||value.is_number()||value.is_boolean(){
+                target.insert((*output_key).to_string(),Value::String(value.as_str().map(str::to_string).unwrap_or_else(||value.to_string())));
+            }
+        }
+    }
+}
+
+struct NovelAiAdapter;
+impl MetadataAdapter for NovelAiAdapter{
+    fn extract(text:&HashMap<String,String>)->Option<GenerationExtract>{
+        let software=text.get("Software").or_else(||text.get("software")).map(String::as_str).unwrap_or("");
+        let comment=text.get("Comment").or_else(||text.get("comment"));
+        if !software.to_ascii_lowercase().contains("novelai")&&comment.is_none(){return None}
+        let parsed=comment.and_then(|x|serde_json::from_str::<Value>(x).ok()).unwrap_or(Value::Null);
+        let prompt=text.get("Description").or_else(||text.get("description")).cloned().unwrap_or_else(||object_string(&parsed,&["prompt"]));
+        let negative=object_string(&parsed,&["uc","negative_prompt","negative"]);
+        let model=object_string(&parsed,&["model","model_name"]);
+        if prompt.is_empty()&&negative.is_empty()&&model.is_empty()&&!software.to_ascii_lowercase().contains("novelai"){return None}
+        let mut generation=Map::new();
+        copy_generation_fields(&parsed,&[
+            ("seed","seed"),("steps","steps"),("scale","cfg_scale"),("cfg_scale","cfg_scale"),
+            ("sampler","sampler"),("sampler_name","sampler"),("noise_schedule","scheduler")
+        ]);
+        if !model.is_empty(){generation.insert("model".into(),Value::String(model.clone()));}
+        generation.insert("raw".into(),parsed);
+        Some(GenerationExtract{prompt,negative_prompt:negative,model,metadata_type:"novelai".into(),generation_json:Value::Object(generation).to_string()})
+    }
+}
+
+struct InvokeAiAdapter;
+impl MetadataAdapter for InvokeAiAdapter{
+    fn extract(text:&HashMap<String,String>)->Option<GenerationExtract>{
+        let raw=text.get("invokeai_metadata")
+            .or_else(||text.get("InvokeAI"))
+            .or_else(||text.get("sd-metadata"))?;
+        let parsed=serde_json::from_str::<Value>(raw).ok()?;
+        let prompt=object_string(&parsed,&["positive_prompt","prompt"]);
+        let negative=object_string(&parsed,&["negative_prompt","negative"]);
+        let model=object_string(&parsed,&["model","model_name","model_name_or_path"]);
+        let mut generation=Map::new();
+        copy_generation_fields(&parsed,&[
+            ("seed","seed"),("steps","steps"),("cfg_scale","cfg_scale"),("cfg","cfg_scale"),
+            ("sampler","sampler"),("sampler_name","sampler"),("scheduler","scheduler"),("strength","denoise")
+        ]);
+        if !model.is_empty(){generation.insert("model".into(),Value::String(model.clone()));}
+        generation.insert("raw".into(),parsed);
+        Some(GenerationExtract{prompt,negative_prompt:negative,model,metadata_type:"invokeai".into(),generation_json:Value::Object(generation).to_string()})
+    }
+}
+
+struct GenericJsonAdapter;
+impl MetadataAdapter for GenericJsonAdapter{
+    fn extract(text:&HashMap<String,String>)->Option<GenerationExtract>{
+        for key in ["Comment","comment","generation","metadata"]{
+            let Some(raw)=text.get(key)else{continue};
+            let Ok(parsed)=serde_json::from_str::<Value>(raw)else{continue};
+            let prompt=object_string(&parsed,&["prompt","positive_prompt"]);
+            let negative=object_string(&parsed,&["negative_prompt","negative"]);
+            let model=object_string(&parsed,&["model","model_name"]);
+            if prompt.is_empty()&&negative.is_empty()&&model.is_empty(){continue}
+            let mut generation=Map::new();
+            copy_generation_fields(&parsed,&[
+                ("seed","seed"),("steps","steps"),("cfg_scale","cfg_scale"),("cfg","cfg_scale"),
+                ("sampler","sampler"),("sampler_name","sampler"),("scheduler","scheduler"),("denoise","denoise")
+            ]);
+            if !model.is_empty(){generation.insert("model".into(),Value::String(model.clone()));}
+            generation.insert("raw".into(),parsed);
+            return Some(GenerationExtract{prompt,negative_prompt:negative,model,metadata_type:"json".into(),generation_json:Value::Object(generation).to_string()})
+        }
+        None
+    }
+}
+
 pub fn extract_generation(path:&Path)->GenerationExtract{
     if path.extension().and_then(|x|x.to_str()).unwrap_or("").to_ascii_lowercase()!="png"{
         return GenerationExtract{metadata_type:"none".into(),generation_json:"{}".into(),..Default::default()}
@@ -187,6 +275,9 @@ pub fn extract_generation(path:&Path)->GenerationExtract{
     let text=read_png_text(path);
     if let Some(value)=A1111Adapter::extract(&text){return value}
     if let Some(value)=ComfyUiAdapter::extract(&text){return value}
+    if let Some(value)=NovelAiAdapter::extract(&text){return value}
+    if let Some(value)=InvokeAiAdapter::extract(&text){return value}
+    if let Some(value)=GenericJsonAdapter::extract(&text){return value}
     GenerationExtract{metadata_type:"none".into(),generation_json:"{}".into(),..Default::default()}
 }
 
@@ -210,5 +301,27 @@ mod tests{
     fn comfy_reference_accepts_string_and_numeric_ids(){
         assert_eq!(ref_id(&serde_json::json!(["12",0])).as_deref(),Some("12"));
         assert_eq!(ref_id(&serde_json::json!([12,0])).as_deref(),Some("12"));
+    }
+
+    #[test]
+    fn novelai_comment_is_extracted(){
+        let mut text=HashMap::new();
+        text.insert("Software".into(),"NovelAI".into());
+        text.insert("Description".into(),"blue-haired character".into());
+        text.insert("Comment".into(),r#"{"uc":"blur","steps":28,"scale":5.5,"seed":42,"sampler":"k_euler"}"#.into());
+        let result=NovelAiAdapter::extract(&text).unwrap();
+        assert_eq!(result.prompt,"blue-haired character");
+        assert_eq!(result.negative_prompt,"blur");
+        assert_eq!(result.metadata_type,"novelai");
+    }
+
+    #[test]
+    fn invokeai_json_is_extracted(){
+        let mut text=HashMap::new();
+        text.insert("invokeai_metadata".into(),r#"{"positive_prompt":"portrait","negative_prompt":"blur","seed":7,"steps":30,"model":"sdxl"}"#.into());
+        let result=InvokeAiAdapter::extract(&text).unwrap();
+        assert_eq!(result.prompt,"portrait");
+        assert_eq!(result.model,"sdxl");
+        assert_eq!(result.metadata_type,"invokeai");
     }
 }
