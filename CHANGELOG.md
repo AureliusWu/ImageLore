@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.15.2 — Showcase
+
+- Added a 1280×640 ImageLore OG / README preview source matching the current Frutiger Aero desktop UI.
+- Added a reproducible GitHub Actions renderer that produces `docs/og.png` from the SVG source with CJK fonts.
+- Refreshed `docs/UI_PREVIEW.html` from the legacy v0.10 English mock to the current v0.15 Chinese interface and Generation Session concepts.
+- Added friendly preview labels for NovelAI, InvokeAI, generic JSON and images without generation metadata.
+
+
+
 ## 0.15.1 — Consistency Hardening
 
 - Fixed an autosave race where rapid edit → save → revert sequences could leave the database on an intermediate Prompt / Model / Tag state while the editor showed the reverted value.
