@@ -1,6 +1,5 @@
 use crate::{db,models::*,sidecar,state::AppState};
 use rusqlite::{params,Connection,OptionalExtension};
-use std::fs;
 use tauri::State;
 use walkdir::WalkDir;
 
@@ -24,8 +23,9 @@ pub(crate) fn resolve_pending_relations(conn:&Connection)->Result<usize,String>{
         let mut st=conn.prepare(
             "SELECT rowid,child_portable_id,parent_portable_id,parent_fingerprint,relation_type,note FROM pending_relations ORDER BY created_at,rowid"
         ).map_err(|e|e.to_string())?;
-        st.query_map([],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?)))
-            .map_err(|e|e.to_string())?.filter_map(Result::ok).collect()
+        let mapped=st.query_map([],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))).map_err(|e|e.to_string())?;
+        let collected=mapped.filter_map(Result::ok).collect();
+        collected
     };
     let mut resolved=0;
     for(rowid,child_portable,parent_portable,parent_fingerprint,relation_type,note)in rows{
@@ -80,8 +80,9 @@ pub fn generation_sessions(state:State<'_,AppState>)->Result<Vec<GenerationSessi
     let mut st=conn.prepare(
         "SELECT s.id,s.name,s.note,COUNT(a.asset_id),s.created_at,s.updated_at FROM generation_sessions s LEFT JOIN asset_sessions a ON a.session_id=s.id GROUP BY s.id ORDER BY s.updated_at DESC,s.name COLLATE NOCASE"
     ).map_err(|e|e.to_string())?;
-    Ok(st.query_map([],|r|Ok(GenerationSession{id:r.get(0)?,name:r.get(1)?,note:r.get(2)?,count:r.get(3)?,created_at:r.get(4)?,updated_at:r.get(5)?}))
-        .map_err(|e|e.to_string())?.filter_map(Result::ok).collect())
+    let mapped=st.query_map([],|r|Ok(GenerationSession{id:r.get(0)?,name:r.get(1)?,note:r.get(2)?,count:r.get(3)?,created_at:r.get(4)?,updated_at:r.get(5)?})).map_err(|e|e.to_string())?;
+    let items=mapped.filter_map(Result::ok).collect();
+    Ok(items)
 }
 
 #[tauri::command]
@@ -134,7 +135,9 @@ pub fn update_relation_note(state:State<'_,AppState>,relation_id:i64,note:String
 pub fn model_aliases(state:State<'_,AppState>)->Result<Vec<ModelAlias>,String>{
     let conn=state.db.lock().map_err(|e|e.to_string())?;
     let mut st=conn.prepare("SELECT alias,canonical FROM model_aliases ORDER BY canonical COLLATE NOCASE,alias COLLATE NOCASE").map_err(|e|e.to_string())?;
-    Ok(st.query_map([],|r|Ok(ModelAlias{alias:r.get(0)?,canonical:r.get(1)?})).map_err(|e|e.to_string())?.filter_map(Result::ok).collect())
+    let mapped=st.query_map([],|r|Ok(ModelAlias{alias:r.get(0)?,canonical:r.get(1)?})).map_err(|e|e.to_string())?;
+    let items=mapped.filter_map(Result::ok).collect();
+    Ok(items)
 }
 
 #[tauri::command]
