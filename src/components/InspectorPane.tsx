@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import type { AssetRecord, GenerationInfo, Lineage } from "../types";
+import type { AssetRecord,AssetSession,GenerationInfo,GenerationSession,Lineage } from "../types";
 import { ComparePanel } from "./ComparePanel";
 
 export type InspectorTab="prompt"|"info"|"lineage";
@@ -7,9 +7,12 @@ export type InspectorTab="prompt"|"info"|"lineage";
 function InfoRow({label,value}:{label:string;value:unknown}){return <div className="info-row"><span>{label}</span><strong>{value===undefined||value===null||value===""?"—":String(value)}</strong></div>}
 const relationLabel=(value:string)=>({"derived_from":"派生","variation":"变体","edit":"编辑","upscale":"放大","reference":"参考"} as Record<string,string>)[value]||value;
 
-export function InspectorPane({asset,tab,onTab,prompt,onPrompt,negative,onNegative,model,onModel,tagsText,onTagsText,lineage,compareRecord,onCompare,onCopy,onSaveRevision,onHistory,onFavorite,onRescan,onSidecar,onCollection,onRemove,onImportDerivative,onLinkParent,promptRef}:{
+export function InspectorPane({asset,tab,onTab,prompt,onPrompt,negative,onNegative,model,onModel,tagsText,onTagsText,lineage,compareRecord,compareParentSrc,compareCurrentSrc,sessions,assetSession,onCompare,onCopy,onSaveRevision,onHistory,onFavorite,onRescan,onSidecar,onCollection,onRemove,onImportDerivative,onLinkParent,onSetSession,onCreateSession,onEditSessionNote,onEditRelationNote,promptRef}:{
   asset:AssetRecord|null;tab:InspectorTab;onTab:(t:InspectorTab)=>void;prompt:string;onPrompt:(v:string)=>void;negative:string;onNegative:(v:string)=>void;model:string;onModel:(v:string)=>void;tagsText:string;onTagsText:(v:string)=>void;
-  lineage:Lineage;compareRecord:AssetRecord|null;onCompare:(id:number)=>void;onCopy:()=>void;onSaveRevision:()=>void;onHistory:()=>void;onFavorite:()=>void;onRescan:()=>void;onSidecar:()=>void;onCollection:()=>void;onRemove:()=>void;onImportDerivative:()=>void;onLinkParent:()=>void;promptRef:React.RefObject<HTMLTextAreaElement|null>;
+  lineage:Lineage;compareRecord:AssetRecord|null;compareParentSrc:string;compareCurrentSrc:string;sessions:GenerationSession[];assetSession:AssetSession|null;
+  onCompare:(id:number)=>void;onCopy:()=>void;onSaveRevision:()=>void;onHistory:()=>void;onFavorite:()=>void;onRescan:()=>void;onSidecar:()=>void;onCollection:()=>void;onRemove:()=>void;onImportDerivative:()=>void;onLinkParent:()=>void;
+  onSetSession:(sessionId:number|null)=>void;onCreateSession:()=>void;onEditSessionNote:()=>void;onEditRelationNote:(relationId:number,currentNote:string)=>void;
+  promptRef:React.RefObject<HTMLTextAreaElement|null>;
 }){
   const generation=useMemo<GenerationInfo>(()=>{try{return asset?JSON.parse(asset.generation_json||"{}"):{} }catch{return{}}},[asset?.generation_json]);
   return <aside className="inspector-pane panel glass-surface">
@@ -22,11 +25,24 @@ export function InspectorPane({asset,tab,onTab,prompt,onPrompt,negative,onNegati
         <label className="field"><span>反向提示词 <small>排除内容</small></span><textarea className="small-area" disabled={!asset} value={negative} onChange={e=>onNegative(e.target.value)} placeholder="可选，用于描述不希望出现的内容" spellCheck={false}/></label>
         <div className="two-col"><label className="field"><span>标签 <small>使用逗号分隔</small></span><input disabled={!asset} value={tagsText} onChange={e=>onTagsText(e.target.value)} placeholder="角色, 卧室, 研究"/></label><label className="field"><span>模型 <small>生成来源</small></span><input disabled={!asset} value={model} onChange={e=>onModel(e.target.value)} placeholder="GPT Image / Flux…"/></label></div>
         {asset?.tags.length?<div className="tag-preview">{asset.tags.map(tag=><span key={tag}>{tag}</span>)}</div>:null}
-        <div className="tool-card"><div><strong>记录工具</strong><span>低频操作集中放在这里，保持编辑区清爽。</span></div><div><button disabled={!asset} onClick={onRescan}>重新读取元数据</button><button disabled={!asset} onClick={onSidecar}>导出 Sidecar</button><button disabled={!asset} onClick={onCollection}>加入集合</button></div></div>
+        <div className="tool-card"><div><strong>记录工具</strong><span>低频操作集中放在这里，保持编辑区清爽。</span></div><div><button disabled={!asset} onClick={onRescan}>重新读取元数据</button><button disabled={!asset} onClick={onSidecar}>导出 Sidecar v3</button><button disabled={!asset} onClick={onCollection}>加入集合</button></div></div>
         <button className="danger-link" disabled={!asset} onClick={onRemove}>从 ImageLore 中移除这条记录</button>
       </>:null}
-      {tab==="info"?<div className="info-list"><div className="info-hero"><span>i</span><div><strong>可复现上下文</strong><p>在不复制原始图片的前提下，把图片元数据和 ImageLore 记录保存在一起。</p></div></div><InfoRow label="元数据来源" value={asset?.metadata_type}/><InfoRow label="模型" value={asset?.model}/><InfoRow label="尺寸" value={asset?.width&&asset.height?`${asset.width} × ${asset.height}`:"—"}/><InfoRow label="格式" value={asset?.format}/><InfoRow label="随机种子" value={generation.seed}/><InfoRow label="步数" value={generation.steps}/><InfoRow label="采样器" value={generation.sampler}/><InfoRow label="调度器" value={generation.scheduler}/><InfoRow label="CFG" value={generation.cfg_scale}/><InfoRow label="降噪强度" value={generation.denoise}/><InfoRow label="文件指纹" value={asset?.fingerprint?asset.fingerprint.slice(0,24)+"…":"—"}/><details><summary>原始生成 JSON</summary><pre>{asset?.generation_json||"{}"}</pre></details></div>:null}
-      {tab==="lineage"?<div className="lineage-panel"><div className="lineage-hero"><span>⑂</span><div><strong>生成谱系</strong><p>明确记录参考、编辑、变体与派生关系。</p></div></div><div className="lineage-actions"><button className="button primary" disabled={!asset} onClick={onImportDerivative}>＋ 导入派生图</button><button className="button secondary" disabled={!asset} onClick={onLinkParent}>关联父图</button></div><h4>父级 <b>{lineage.parents.length}</b></h4>{lineage.parents.length?lineage.parents.map(x=><button className={`edge-card ${compareRecord?.id===x.other_id?"active":""}`} key={x.id} onClick={()=>onCompare(x.other_id)}><span>{relationLabel(x.relation_type)}</span><strong>{x.other_name}</strong><small>{x.note||"点击进行对比"}</small></button>):<p className="muted">没有父级记录。这条记录可以作为谱系根节点。</p>}{asset&&compareRecord?<ComparePanel parent={compareRecord} current={asset}/>:null}<h4>子级 <b>{lineage.children.length}</b></h4>{lineage.children.length?lineage.children.map(x=><div className="edge-card child" key={x.id}><span>{relationLabel(x.relation_type)}</span><strong>{x.other_name}</strong><small>{x.note}</small></div>):<p className="muted">还没有派生记录。</p>}</div>:null}
+      {tab==="info"?<div className="info-list"><div className="info-hero"><span>i</span><div><strong>可复现上下文</strong><p>保留原始生成参数、稳定 Portable ID 与可移植 Sidecar。</p></div></div><InfoRow label="元数据来源" value={asset?.metadata_type}/><InfoRow label="模型" value={asset?.model}/><InfoRow label="尺寸" value={asset?.width&&asset.height?`${asset.width} × ${asset.height}`:"—"}/><InfoRow label="格式" value={asset?.format}/><InfoRow label="随机种子" value={generation.seed}/><InfoRow label="步数" value={generation.steps}/><InfoRow label="采样器" value={generation.sampler}/><InfoRow label="调度器" value={generation.scheduler}/><InfoRow label="CFG" value={generation.cfg_scale}/><InfoRow label="降噪强度" value={generation.denoise}/><InfoRow label="Portable ID" value={asset?.portable_id}/><InfoRow label="文件指纹" value={asset?.fingerprint?asset.fingerprint.slice(0,24)+"…":"—"}/><details><summary>原始生成 JSON</summary><pre>{asset?.generation_json||"{}"}</pre></details></div>:null}
+      {tab==="lineage"?<div className="lineage-panel">
+        <div className="lineage-hero"><span>⑂</span><div><strong>生成谱系</strong><p>记录生成会话、参考、编辑、变体和分支备注。</p></div></div>
+        <div className="session-card">
+          <div><strong>Generation Session</strong><small>{assetSession?.asset_note||assetSession?.session_note||"把同一轮实验归入同一会话。"}</small></div>
+          <select disabled={!asset} value={assetSession?.session_id??""} onChange={e=>onSetSession(e.target.value?Number(e.target.value):null)}><option value="">未分配</option>{sessions.map(s=><option key={s.id} value={s.id}>{s.name} ({s.count})</option>)}</select>
+          <button disabled={!asset} onClick={onCreateSession}>＋ 新建</button><button disabled={!assetSession} onClick={onEditSessionNote}>备注</button>
+        </div>
+        <div className="lineage-actions"><button className="button primary" disabled={!asset} onClick={onImportDerivative}>＋ 导入派生图</button><button className="button secondary" disabled={!asset} onClick={onLinkParent}>关联父图</button></div>
+        <h4>父级 <b>{lineage.parents.length}</b></h4>
+        {lineage.parents.length?lineage.parents.map(x=><div className={`edge-card ${compareRecord?.id===x.other_id?"active":""}`} key={x.id}><button className="edge-main" onClick={()=>onCompare(x.other_id)}><span>{relationLabel(x.relation_type)}</span><strong>{x.other_name}</strong><small>{x.note||"点击进行对比"}</small></button><button className="edge-note" onClick={()=>onEditRelationNote(x.id,x.note)}>备注</button></div>):<p className="muted">没有父级记录。这条记录可以作为谱系根节点。</p>}
+        {asset&&compareRecord?<ComparePanel parent={compareRecord} current={asset} parentSrc={compareParentSrc} currentSrc={compareCurrentSrc}/>:null}
+        <h4>子级 <b>{lineage.children.length}</b></h4>
+        {lineage.children.length?lineage.children.map(x=><div className="edge-card child" key={x.id}><div className="edge-main"><span>{relationLabel(x.relation_type)}</span><strong>{x.other_name}</strong><small>{x.note||"暂无分支备注"}</small></div><button className="edge-note" onClick={()=>onEditRelationNote(x.id,x.note)}>备注</button></div>):<p className="muted">还没有派生记录。</p>}
+      </div>:null}
     </div>
   </aside>
 }
