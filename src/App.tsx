@@ -65,6 +65,7 @@ export default function App(){
   const selectRecord=useCallback(async(id:number,selection?:Set<number>)=>{
     const seq=++selectSeq.current;
     ++refreshSeq.current;
+    setLoading(false);
     await flushEditor();
     try{
       const record=await api.get(id);
@@ -83,7 +84,8 @@ export default function App(){
     try{
       const page=await api.page(effectiveFilter,0,PAGE_SIZE);
       if(seq!==refreshSeq.current)return;
-      const nextId=preferId??(current?.id&&page.items.some(x=>x.id===current.id)?current.id:page.items[0]?.id);
+      const preferredVisible=preferId&&page.items.some(x=>x.id===preferId)?preferId:undefined;
+      const nextId=preferredVisible??(current?.id&&page.items.some(x=>x.id===current.id)?current.id:page.items[0]?.id);
       const next=nextId?await api.get(nextId).catch(()=>null):null;
       if(seq!==refreshSeq.current)return;
       setAssets(page.items);setTotal(page.total);
@@ -97,12 +99,18 @@ export default function App(){
 
   const loadMore=useCallback(async()=>{
     if(loading||assets.length>=total)return;
+    const seq=refreshSeq.current;
     setLoading(true);
     try{
       const page=await api.page(effectiveFilter,assets.length,PAGE_SIZE);
+      if(seq!==refreshSeq.current)return;
       setAssets(prev=>{const ids=new Set(prev.map(x=>x.id));return[...prev,...page.items.filter(x=>!ids.has(x.id))]});
       setTotal(page.total);
-    }catch(e){setStatus(String(e))}finally{setLoading(false)}
+    }catch(e){
+      if(seq===refreshSeq.current)setStatus(String(e));
+    }finally{
+      if(seq===refreshSeq.current)setLoading(false);
+    }
   },[loading,assets,effectiveFilter,total]);
 
   useEffect(()=>{if(isTauri)getVersion().then(setVersion).catch(()=>setVersion(APP_VERSION))},[]);
@@ -123,6 +131,9 @@ export default function App(){
     if(!current){setPreview("");setLineage(emptyLineage);setCompareRecord(null);return}
     let cancelled=false;
     const assetId=current.id;
+    setPreview("");
+    setLineage(emptyLineage);
+    setCompareRecord(null);
     setStatus("正在加载预览…");
     api.preview(assetId,previewMode==="fit"?2200:0,false)
       .then(src=>{if(!cancelled){setPreview(src);setStatus("就绪")}})
@@ -198,9 +209,9 @@ export default function App(){
   const openManager=async()=>{await flushEditor();await refreshManager();setManagerOpen(true)};
   const createBackup=async()=>{setStatus("正在备份资料库…");await api.createBackup();await refreshManager();setStatus("资料库备份完成")};
   const restoreBackup=async(name:string)=>{if(!window.confirm("确定恢复到这份备份吗？当前资料库会在重启时先自动保留一份安全副本。"))return;await api.stageRestore(name);setStatus("恢复已准备完成，请重启 ImageLore 后生效")};
-  const renameTag=async(oldName:string,newName:string)=>{await api.renameTag(oldName,newName);await refreshManager();await refresh(current?.id)};
-  const mergeTag=async(source:string,target:string)=>{await api.mergeTags(source,target);await refreshManager();await refresh(current?.id)};
-  const deleteTag=async(name:string)=>{if(!window.confirm("删除标签“"+name+"”？图片记录本身不会被删除。"))return;await api.deleteTag(name);await refreshManager();await refresh(current?.id)};
+  const renameTag=async(oldName:string,newName:string)=>{await api.renameTag(oldName,newName);setFilter(f=>f.tag?.toLocaleLowerCase()===oldName.toLocaleLowerCase()?{...f,tag:newName}:f);await refreshManager();await refresh(current?.id)};
+  const mergeTag=async(source:string,target:string)=>{await api.mergeTags(source,target);setFilter(f=>f.tag?.toLocaleLowerCase()===source.toLocaleLowerCase()?{...f,tag:target}:f);await refreshManager();await refresh(current?.id)};
+  const deleteTag=async(name:string)=>{if(!window.confirm("删除标签“"+name+"”？图片记录本身不会被删除。"))return;await api.deleteTag(name);setFilter(f=>f.tag?.toLocaleLowerCase()===name.toLocaleLowerCase()?{...f,tag:null}:f);await refreshManager();await refresh(current?.id)};
   const renameCollection=async(id:number,name:string)=>{await api.renameCollection(id,name);await refreshManager()};
   const deleteCollection=async(id:number)=>{if(!window.confirm("删除这个集合？集合内的图片记录不会被删除。"))return;await api.deleteCollection(id);await refreshManager();setFilter(f=>f.collection_id===id?{...f,collection_id:null}:f)};
   const openParentPicker=()=>{setParentQuery("");setParentChoice(null);setParentOpen(true)};
