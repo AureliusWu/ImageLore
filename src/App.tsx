@@ -208,13 +208,13 @@ export default function App(){
     const picked=await open({multiple:false,filters:[{name:"图片",extensions:["png","jpg","jpeg","webp","bmp","gif"]}]});
     if(!picked||Array.isArray(picked))return;
     await flushEditor();const result=await api.importPaths([picked]);
+    if(result.duplicates){setStatus("该派生图与资料库中的现有图片内容完全相同，未建立重复谱系");return}
     if(result.last_id===current.id){setStatus("所选图片与当前记录内容完全相同，未建立自引用关系");return}
     if(result.last_id){
       await api.addRelation(current.id,result.last_id,"derived_from","");
       if(assetSession)await api.setAssetSession(result.last_id,assetSession.session_id,"");
       await refreshSessions();await refresh(result.last_id);setTab("lineage");setStatus("派生图已关联");return
     }
-    if(result.duplicates){setStatus("该派生图与资料库中的现有图片内容完全相同，未建立重复谱系")}
   };
 
   const onAsset=async(asset:AssetSummary,e:React.MouseEvent)=>{
