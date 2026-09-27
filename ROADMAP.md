@@ -12,6 +12,9 @@
 ## v0.13.0 — Reliability & Flow ✅
 无损自动保存、轻量图库记录、事务写入、导入解锁、CJK 搜索、模块拆分、CI 验证。
 
+## v0.13.1 — Build Hygiene ✅
+依赖锁定、快速 CI / Release 分离、并发取消、单次 NSIS 构建与可复现发布。
+
 ## v0.14.0 — Library Intelligence
 - 标签重命名 / 合并
 - Collection 管理页
