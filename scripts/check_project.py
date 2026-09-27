@@ -2,7 +2,7 @@ from pathlib import Path
 import json
 root=Path(__file__).resolve().parents[1]
 required=[
- 'VERSION','package.json','package-lock.json','src/App.tsx','src/api.ts','src/styles.css','src/hooks/useEditorDraft.ts','src/hooks/useNativeDrop.ts',
+ 'VERSION','package.json','package-lock.json','scripts/version_targets.mjs','src/App.tsx','src/api.ts','src/styles.css','src/hooks/useEditorDraft.ts','src/hooks/useNativeDrop.ts',
  'src-tauri/Cargo.toml','src-tauri/Cargo.lock','src-tauri/schema.sql','src-tauri/src/lib.rs','src-tauri/src/db.rs','src-tauri/src/importer.rs','src-tauri/src/migrations.rs',
  'src-tauri/src/backup.rs','src-tauri/src/commands.rs','src-tauri/src/generation.rs','src-tauri/src/metadata.rs','src-tauri/src/sources.rs','src-tauri/tauri.conf.json',
  'src/hooks/useImportJob.ts','src/hooks/useCloseGuard.ts','src/components/LibraryManager.tsx','src/components/ParentPicker.tsx','.github/workflows/ci.yml','.github/workflows/native-ci.yml','.github/workflows/windows-release.yml'
