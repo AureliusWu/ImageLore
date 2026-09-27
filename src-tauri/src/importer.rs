@@ -27,18 +27,18 @@ struct PreparedAsset{
 
 enum InsertOutcome{Added(i64),Existing(i64),Duplicate}
 
-fn supported_files(roots:Vec<String>,recursive_dirs:bool)->Vec<PathBuf>{
+fn supported_files(roots:Vec<String>,recursive_dirs:bool,cancel:&AtomicBool)->Vec<PathBuf>{
     let mut out=Vec::new();
-    for raw in roots{
+    'roots:for raw in roots{
+        if cancel.load(Ordering::Relaxed){break}
         let root=PathBuf::from(raw);
         if root.is_file(){
             if metadata::is_supported(&root){out.push(root)}
         }else if root.is_dir()&&recursive_dirs{
-            out.extend(
-                WalkDir::new(root).follow_links(false).into_iter().filter_map(Result::ok)
-                    .filter(|e|e.file_type().is_file()&&metadata::is_supported(e.path()))
-                    .map(|e|e.into_path())
-            );
+            for entry in WalkDir::new(root).follow_links(false).into_iter().filter_map(Result::ok){
+                if cancel.load(Ordering::Relaxed){break 'roots}
+                if entry.file_type().is_file()&&metadata::is_supported(entry.path()){out.push(entry.into_path())}
+            }
         }
     }
     out
@@ -119,7 +119,7 @@ fn run_import<F>(
     mut progress:F,
 )->Result<ImportSummary,String>
 where F:FnMut(ImportProgress){
-    let paths=supported_files(roots,recursive_dirs);
+    let paths=supported_files(roots,recursive_dirs,cancel);
     let total=paths.len();
     let mut result=ImportSummary{added:0,skipped:0,duplicates:0,failed:0,last_id:None};
 

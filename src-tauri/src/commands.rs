@@ -67,7 +67,8 @@ pub fn delete_asset(state:State<'_,AppState>, id:i64) -> Result<bool,String> {
         tx.commit().map_err(|e|e.to_string())?;
         fingerprint
     };
-    preview::purge_asset_cache(&state.cache_dir,&fingerprint);
+    let cache_prefix=if fingerprint.is_empty(){format!("asset-{}",id)}else{fingerprint};
+    preview::purge_asset_cache(&state.cache_dir,&cache_prefix);
     Ok(true)
 }
 
@@ -229,12 +230,18 @@ pub fn export_sidecar(state:State<'_,AppState>,id:i64)->Result<String,String>{
 
 #[tauri::command]
 pub fn preview_cache_path(state:State<'_,AppState>,id:i64,max_edge:u32,thumbnail:bool)->Result<String,String>{
-    let conn=state.db.lock().map_err(|e|e.to_string())?;
-    let asset=db::get_asset(&conn,id)?;
-    drop(conn);
+    let asset={
+        let conn=state.db.lock().map_err(|e|e.to_string())?;
+        db::get_asset(&conn,id)?
+    };
     let path=Path::new(&asset.path);
     if !path.exists(){return Err("原图片文件不存在".into())}
-    let key=if asset.fingerprint.is_empty(){format!("{}-{}",asset.id,asset.file_mtime)}else{asset.fingerprint.clone()};
+    let meta=fs::metadata(path).map_err(|e|e.to_string())?;
+    let actual_mtime=meta.modified().ok()
+        .and_then(|t|t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|x|x.as_secs() as i64).unwrap_or(asset.file_mtime);
+    let prefix=if asset.fingerprint.is_empty(){format!("asset-{}",asset.id)}else{asset.fingerprint.clone()};
+    let key=format!("{}-{}-{}",prefix,actual_mtime,meta.len());
     preview::cached_preview_path(path,&state.cache_dir,&key,max_edge,thumbnail)
 }
 

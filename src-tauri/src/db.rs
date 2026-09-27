@@ -141,9 +141,11 @@ fn filter_parts(filter: &LibraryFilter) -> (String, String, Vec<SqlValue>) {
     if !query.is_empty(){
         let has_cjk=query.chars().any(|c|matches!(c,'\u{3400}'..='\u{9fff}'|'\u{3040}'..='\u{30ff}'|'\u{ac00}'..='\u{d7af}'));
         if has_cjk{
-            where_parts.push("(a.name LIKE ? OR COALESCE(ps.prompt,'') LIKE ? OR COALESCE(ps.negative_prompt,'') LIKE ? OR COALESCE(ps.model,'') LIKE ? OR EXISTS(SELECT 1 FROM asset_tags sq_at JOIN tags sq_t ON sq_t.id=sq_at.tag_id WHERE sq_at.asset_id=a.id AND sq_t.name LIKE ?))".into());
-            let needle=SqlValue::Text(format!("%{}%",query));
-            for _ in 0..5{args.push(needle.clone())}
+            for term in query.split_whitespace().filter(|x|!x.is_empty()){
+                where_parts.push("(a.name LIKE ? OR COALESCE(ps.prompt,'') LIKE ? OR COALESCE(ps.negative_prompt,'') LIKE ? OR COALESCE(ps.model,'') LIKE ? OR EXISTS(SELECT 1 FROM asset_tags sq_at JOIN tags sq_t ON sq_t.id=sq_at.tag_id WHERE sq_at.asset_id=a.id AND sq_t.name LIKE ?))".into());
+                let needle=SqlValue::Text(format!("%{}%",term));
+                for _ in 0..5{args.push(needle.clone())}
+            }
         }else{
             joins.push_str(" JOIN asset_search ON asset_search.asset_id=a.id ");
             where_parts.push("asset_search MATCH ?".into());
@@ -250,4 +252,29 @@ pub fn duplicate_groups(conn:&Connection)->Result<Vec<crate::models::DuplicateGr
         });
     }
     Ok(groups)
+}
+
+
+#[cfg(test)]
+mod tests{
+    use super::*;
+
+    fn test_conn()->Connection{
+        let conn=Connection::open_in_memory().unwrap();
+        conn.execute_batch(include_str!("../schema.sql")).unwrap();
+        conn
+    }
+
+    #[test]
+    fn cjk_search_supports_multiple_terms(){
+        let conn=test_conn();
+        let now=now();
+        conn.execute("INSERT INTO assets(path,name,created_at,updated_at) VALUES('x.png','海洋角色',?1,?1)",params![now]).unwrap();
+        let id=conn.last_insert_rowid();
+        conn.execute("INSERT INTO prompt_state(asset_id,prompt,negative_prompt,model,updated_at) VALUES(?1,'蓝色长发 成年女性','','Flux',?2)",params![id,now]).unwrap();
+        conn.execute("INSERT INTO asset_search(asset_id,name,prompt,negative_prompt,model,tags) VALUES(?1,'海洋角色','蓝色长发 成年女性','','Flux','')",params![id]).unwrap();
+        let filter=LibraryFilter{query:"蓝色 女性".into(),view:"all".into(),..Default::default()};
+        let page=library_page(&conn,&filter,0,20).unwrap();
+        assert_eq!(page.total,1);
+    }
 }
