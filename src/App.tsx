@@ -53,6 +53,8 @@ export default function App(){
   const[dialogText,setDialogText]=useState("");
   const[dialogChoice,setDialogChoice]=useState("");
   const promptRef=useRef<HTMLTextAreaElement>(null);
+  const refreshSeq=useRef(0);
+  const selectSeq=useRef(0);
   const{previewMode,setPreviewMode,leftWidth,rightWidth,drag}=useWorkspaceLayout();
 
   const refreshFacets=useCallback(()=>api.facets().then(setFacets).catch(()=>setFacets(emptyFacets)),[]);
@@ -61,20 +63,36 @@ export default function App(){
   const{prompt,negative,model,tagsText,setPrompt,setNegative,setModel,setTagsText,flush:flushEditor,load:loadEditor}=editor;
 
   const selectRecord=useCallback(async(id:number,selection?:Set<number>)=>{
+    const seq=++selectSeq.current;
+    ++refreshSeq.current;
     await flushEditor();
-    const record=await api.get(id);
-    setCurrent(record);setSelected(selection??new Set([id]));
+    try{
+      const record=await api.get(id);
+      if(seq!==selectSeq.current)return;
+      setCurrent(record);setSelected(selection??new Set([id]));
+    }catch(e){
+      if(seq===selectSeq.current)setStatus("记录加载失败："+String(e));
+    }
   },[flushEditor]);
 
   const refresh=useCallback(async(preferId?:number)=>{
-    await flushEditor();setLoading(true);
+    const seq=++refreshSeq.current;
+    await flushEditor();
+    if(seq!==refreshSeq.current)return;
+    setLoading(true);
     try{
       const page=await api.page(effectiveFilter,0,PAGE_SIZE);
-      setAssets(page.items);setTotal(page.total);
+      if(seq!==refreshSeq.current)return;
       const nextId=preferId??(current?.id&&page.items.some(x=>x.id===current.id)?current.id:page.items[0]?.id);
       const next=nextId?await api.get(nextId).catch(()=>null):null;
+      if(seq!==refreshSeq.current)return;
+      setAssets(page.items);setTotal(page.total);
       setCurrent(next);loadEditor(next);setSelected(next?new Set([next.id]):new Set());
-    }catch(e){setStatus(`图库加载失败：${String(e)}`)}finally{setLoading(false)}
+    }catch(e){
+      if(seq===refreshSeq.current)setStatus(`图库加载失败：${String(e)}`);
+    }finally{
+      if(seq===refreshSeq.current)setLoading(false);
+    }
   },[effectiveFilter,current?.id,flushEditor,loadEditor]);
 
   const loadMore=useCallback(async()=>{
@@ -93,23 +111,35 @@ export default function App(){
   useEffect(()=>{if(isTauri)void api.ensureAutoBackup().catch(()=>{})},[]);
   useEffect(()=>{
     if(!parentOpen)return;
+    let cancelled=false;
     setParentLoading(true);
     api.page({query:debouncedParentQuery,view:"all",tag:null,model:null,collection_id:null},0,100)
-      .then(page=>setParentResults(page.items.filter(x=>x.id!==current?.id)))
-      .catch(()=>setParentResults([]))
-      .finally(()=>setParentLoading(false));
+      .then(page=>{if(!cancelled)setParentResults(page.items.filter(x=>x.id!==current?.id))})
+      .catch(()=>{if(!cancelled)setParentResults([])})
+      .finally(()=>{if(!cancelled)setParentLoading(false)});
+    return()=>{cancelled=true};
   },[parentOpen,debouncedParentQuery,current?.id]);
   useEffect(()=>{
     if(!current){setPreview("");setLineage(emptyLineage);setCompareRecord(null);return}
+    let cancelled=false;
+    const assetId=current.id;
     setStatus("正在加载预览…");
-    api.preview(current.id,previewMode==="fit"?2200:0,false).then(src=>{setPreview(src);setStatus("就绪")}).catch(e=>{setPreview("");setStatus(`预览失败：${String(e)}`)});
-    api.lineage(current.id).then(async x=>{setLineage(x);const p=x.parents[0];setCompareRecord(p?await api.get(p.other_id).catch(()=>null):null)}).catch(()=>setLineage(emptyLineage));
+    api.preview(assetId,previewMode==="fit"?2200:0,false)
+      .then(src=>{if(!cancelled){setPreview(src);setStatus("就绪")}})
+      .catch(e=>{if(!cancelled){setPreview("");setStatus(`预览失败：${String(e)}`)}});
+    void api.lineage(assetId).then(async x=>{
+      const p=x.parents[0];
+      const parent=p?await api.get(p.other_id).catch(()=>null):null;
+      if(!cancelled){setLineage(x);setCompareRecord(parent)}
+    }).catch(()=>{if(!cancelled)setLineage(emptyLineage)});
+    return()=>{cancelled=true};
   },[current?.id,previewMode]);
 
   const importDone=useCallback(async(result:ImportSummary)=>{
     await refreshFacets();await refresh(result.last_id??undefined);
   },[refreshFacets,refresh]);
   const importJob=useImportJob(importDone,setStatus);
+  const{start:startImportJob,cancel:cancelImportJob,active:importActive,progress:importProgress}=importJob;
   const importImmediate=useCallback(async(label:string,task:()=>Promise<ImportSummary>)=>{
     await flushEditor();setStatus(label);
     try{
@@ -120,8 +150,8 @@ export default function App(){
   },[flushEditor,importDone]);
   const startBackgroundImport=useCallback(async(label:string,starter:()=>Promise<number>,fallback:()=>Promise<ImportSummary>)=>{
     await flushEditor();
-    if(isTauri){await importJob.start(label,starter)}else{await importImmediate(label,fallback)}
-  },[flushEditor,importJob,importImmediate]);
+    if(isTauri){await startImportJob(label,starter)}else{await importImmediate(label,fallback)}
+  },[flushEditor,startImportJob,importImmediate]);
 
   const chooseImages=async()=>{
     if(!isTauri){setStatus("文件选择器仅在桌面版中可用");return}
@@ -142,6 +172,7 @@ export default function App(){
     const picked=await open({multiple:false,filters:[{name:"图片",extensions:["png","jpg","jpeg","webp","bmp","gif"]}]});
     if(!picked||Array.isArray(picked))return;
     await flushEditor();const result=await api.importPaths([picked]);
+    if(result.last_id===current.id){setStatus("所选图片与当前记录内容完全相同，未建立自引用关系");return}
     if(result.last_id){await api.addRelation(current.id,result.last_id,"derived_from","");await refresh(result.last_id);setTab("lineage");setStatus("派生图已关联")}
   };
 
@@ -199,7 +230,7 @@ export default function App(){
       }
     };
     window.addEventListener("keydown",handler);return()=>window.removeEventListener("keydown",handler);
-  },[modal,current,assets,prompt,selectRecord]); // eslint-disable-line react-hooks/exhaustive-deps
+  },[modal,parentOpen,managerOpen,current,assets,prompt,selectRecord]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return <div className="app-shell">
     <div className="aero-background" aria-hidden="true"><i className="cloud a"/><i className="cloud b"/><i className="bubble a"/><i className="bubble b"/></div>
@@ -212,7 +243,7 @@ export default function App(){
       <div className="splitter" onPointerDown={drag("right")}/>
       <InspectorPane asset={current} tab={tab} onTab={setTab} prompt={prompt} onPrompt={setPrompt} negative={negative} onNegative={setNegative} model={model} onModel={setModel} tagsText={tagsText} onTagsText={setTagsText} lineage={lineage} compareRecord={compareRecord} onCompare={compare} onCopy={copyPrompt} onSaveRevision={saveRevision} onHistory={openHistory} onFavorite={toggleFavorite} onRescan={rescan} onSidecar={exportSidecar} onCollection={openCollection} onRemove={()=>setModal({kind:"remove"})} onImportDerivative={importDerivative} onLinkParent={openParentPicker} promptRef={promptRef}/>
     </main>
-    <footer className="statusbar glass-surface"><span className={`runtime-dot ${isTauri?"native":"preview"}`}/><strong>{isTauri?"桌面版":"浏览器预览"}</strong><span>v{version}</span><span className="status-message">{status}</span>{importJob.active?<><progress max={Math.max(1,importJob.progress.total)} value={importJob.progress.processed}/><button onClick={importJob.cancel}>取消导入</button></>:null}<span>已加载 {assets.length}/{total}</span><button onClick={repairMissing} title="根据文件指纹查找移动后的文件">修复缺失文件</button><span className="shortcut">F6 提示词 · F7 预览 · Ctrl+S 保存版本</span></footer>
+    <footer className="statusbar glass-surface"><span className={`runtime-dot ${isTauri?"native":"preview"}`}/><strong>{isTauri?"桌面版":"浏览器预览"}</strong><span>v{version}</span><span className="status-message">{status}</span>{importActive?<><progress max={Math.max(1,importProgress.total)} value={importProgress.processed}/><button onClick={cancelImportJob}>取消导入</button></>:null}<span>已加载 {assets.length}/{total}</span><button onClick={repairMissing} title="根据文件指纹查找移动后的文件">修复缺失文件</button><span className="shortcut">F6 提示词 · F7 预览 · Ctrl+S 保存版本</span></footer>
     <LibraryManager open={managerOpen} backups={backups} tags={facets.tags} collections={facets.collections} duplicates={duplicates} onClose={()=>setManagerOpen(false)} onBackup={createBackup} onRestore={restoreBackup} onRenameTag={renameTag} onDeleteTag={deleteTag} onRenameCollection={renameCollection} onDeleteCollection={deleteCollection}/>
     <ParentPicker open={parentOpen} query={parentQuery} results={parentResults} choice={parentChoice} loading={parentLoading} onQuery={setParentQuery} onChoice={setParentChoice} onClose={()=>setParentOpen(false)} onConfirm={confirmParent}/>
     <AppDialogs modal={modal} assets={assets} currentId={current?.id} text={dialogText} setText={setDialogText} choice={dialogChoice} setChoice={setDialogChoice} onClose={()=>setModal(null)} onConfirm={confirmModal}/>
