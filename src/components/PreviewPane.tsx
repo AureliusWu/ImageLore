@@ -2,7 +2,15 @@ import type { AssetRecord } from "../types";
 
 type PreviewMode="fit"|"actual";
 const bytes=(n:number|null)=>!n?"":n<1024?`${n} B`:n<1024*1024?`${(n/1024).toFixed(1)} KB`:`${(n/1024/1024).toFixed(1)} MB`;
-const metadataLabel=(value:string)=>({"manual":"手动","a1111":"AUTOMATIC1111","comfyui":"ComfyUI"} as Record<string,string>)[value]||value;
+const metadataLabel=(value:string)=>({
+  "manual":"手动",
+  "a1111":"AUTOMATIC1111",
+  "comfyui":"ComfyUI",
+  "novelai":"NovelAI",
+  "invokeai":"InvokeAI",
+  "json":"通用 JSON",
+  "none":"无生成元数据"
+} as Record<string,string>)[value]||value;
 
 export function PreviewPane({asset,src,mode,onMode,onImport,onOpen,onFolder}:{asset:AssetRecord|null;src:string;mode:PreviewMode;onMode:(m:PreviewMode)=>void;onImport:()=>void;onOpen:()=>void;onFolder:()=>void}){
   return <section className="preview-pane panel glass-surface">
