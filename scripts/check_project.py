@@ -13,13 +13,13 @@ version=(root/'VERSION').read_text().strip()
 assert json.loads((root/'package.json').read_text())['version']==version
 assert json.loads((root/'package-lock.json').read_text())['version']==version
 assert json.loads((root/'src-tauri/tauri.conf.json').read_text())['version']==version
-cargo=(root/'src-tauri/Cargo.toml').read_text()
+cargo=(root/'src-tauri/Cargo.toml').read_text(encoding='utf-8')
 assert f'version = "{version}"' in cargo.split('[lib]',1)[0]
-runtime='\n'.join(p.read_text(errors='ignore') for p in (root/'src-tauri/src').glob('*.rs'))
+runtime='\n'.join(p.read_text(encoding='utf-8', errors='ignore') for p in (root/'src-tauri/src').glob('*.rs'))
 assert 'PromptDock' not in runtime and 'imagelore.db' not in runtime and '.promptdock.json' not in runtime
 assert 'library.sqlite3' in runtime
 assert 'ensure_auto_backup' in runtime and 'start_import_folder' in runtime and 'duplicate_groups' in runtime
-assert 'const LATEST:i64=2' in (root/'src-tauri/src/migrations.rs').read_text()
+assert 'const LATEST:i64=2' in (root/'src-tauri/src/migrations.rs').read_text(encoding='utf-8')
 front='\n'.join(p.read_text(errors='ignore') for p in (root/'src').rglob('*.tsx'))
 assert 'pd.' not in front
 print(f'ImageLore v{version} project integrity: PASS')
