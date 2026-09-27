@@ -154,7 +154,7 @@ fn start_job(app:AppHandle,roots:Vec<String>,recursive_dirs:bool)->Result<u64,St
             job_id,processed:0,total:0,added:summary.added,skipped:summary.skipped,duplicates:summary.duplicates,
             failed:summary.failed,current_name:String::new(),done:true,cancelled,last_id:summary.last_id
         });
-        if let Ok(mut jobs)=state.import_jobs.lock(){jobs.remove(&job_id);}
+        if let Ok(mut jobs)=state.import_jobs.lock(){jobs.remove(&job_id);};
     });
 
     Ok(job_id)
