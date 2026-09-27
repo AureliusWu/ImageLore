@@ -83,7 +83,7 @@ npm run tauri:build
 
 ## 版本
 
-`VERSION` 是唯一版本源：
+`VERSION` 是唯一的**当前应用版本**来源。`version:sync` 会自动同步 npm、Tauri、Cargo、前端运行时、README、静态 UI 预览与 OG SVG；`version:check` 会逐项校验。`docs/og.png` 由 OG SVG 在 GitHub Actions 中自动重绘。`CHANGELOG.md`、`ROADMAP.md` 与数据库 `schema_version` 分别表示历史里程碑和数据库结构版本，刻意保持独立：
 
 ```bash
 npm run version:sync
