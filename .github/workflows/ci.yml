@@ -18,6 +18,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -25,18 +27,39 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
 
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: swatinem/rust-cache@v2
-        with:
-          workspaces: './src-tauri -> target'
-          cache-on-failure: true
-
       - name: Install locked frontend dependencies
         run: npm ci
 
       - name: Verify project
         run: npm run check
 
+      - name: Detect native changes
+        id: changes
+        shell: pwsh
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          $base = $env:BASE_SHA
+          if (-not $base -or $base -match '^0+$') {
+            "rust=true" >> $env:GITHUB_OUTPUT
+            exit 0
+          }
+          $changed = git diff --name-only $base $env:GITHUB_SHA
+          $native = $changed | Where-Object {
+            $_ -like "src-tauri/*" -or
+            $_ -eq "VERSION"
+          }
+          if ($native) { "rust=true" >> $env:GITHUB_OUTPUT } else { "rust=false" >> $env:GITHUB_OUTPUT }
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.changes.outputs.rust == 'true'
+
+      - uses: swatinem/rust-cache@v2
+        if: steps.changes.outputs.rust == 'true'
+        with:
+          workspaces: './src-tauri -> target'
+          cache-on-failure: true
+
       - name: Rust check
+        if: steps.changes.outputs.rust == 'true'
         run: cargo check --locked --manifest-path src-tauri/Cargo.toml
