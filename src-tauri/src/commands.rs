@@ -156,11 +156,13 @@ pub fn collections(state:State<'_,AppState>)->Result<Vec<CollectionRecord>,Strin
 
 #[tauri::command]
 pub fn create_collection(state:State<'_,AppState>,name:String,description:String)->Result<CollectionRecord,String>{
+    let name=name.trim();
+    if name.is_empty(){return Err("集合名称不能为空".into())}
     let conn=state.db.lock().map_err(|e|e.to_string())?;
     let stamp=db::now();
-    conn.execute("INSERT INTO collections(name,description,created_at,updated_at) VALUES(?1,?2,?3,?3)",params![name.trim(),description.trim(),stamp]).map_err(|e|e.to_string())?;
+    conn.execute("INSERT INTO collections(name,description,created_at,updated_at) VALUES(?1,?2,?3,?3)",params![name,description.trim(),stamp]).map_err(|e|e.to_string())?;
     let id=conn.last_insert_rowid();
-    Ok(CollectionRecord{id,name:name.trim().to_string(),description:description.trim().to_string(),created_at:stamp,updated_at:stamp,count:0})
+    Ok(CollectionRecord{id,name:name.to_string(),description:description.trim().to_string(),created_at:stamp,updated_at:stamp,count:0})
 }
 
 #[tauri::command]
@@ -191,19 +193,22 @@ pub fn rescan_metadata(state:State<'_,AppState>,id:i64)->Result<AssetRecord,Stri
     let info=metadata::file_info(&path);
     let fp=metadata::fingerprint(&path);
     let extract=metadata::extract_generation(&path);
-    let updated={
-        let mut conn=state.db.lock().map_err(|e|e.to_string())?;
-        let tx=conn.transaction().map_err(|e|e.to_string())?;
-        tx.execute("UPDATE assets SET width=?1,height=?2,file_size=?3,format=?4,mime_type=?5,metadata_type=?6,generation_json=?7,fingerprint=?8,file_mtime=?9,missing=0,updated_at=?10 WHERE id=?11",params![info.width,info.height,info.file_size,info.format,info.mime_type,extract.metadata_type,extract.generation_json,fp,info.file_mtime,db::now(),id]).map_err(|e|e.to_string())?;
-        if old.prompt.is_empty()&&old.negative_prompt.is_empty()&&old.model.is_empty(){
-            tx.execute("UPDATE prompt_state SET prompt=?1,negative_prompt=?2,model=?3,updated_at=?4 WHERE asset_id=?5",params![extract.prompt,extract.negative_prompt,extract.model,db::now(),id]).map_err(|e|e.to_string())?;
-        }
-        db::reindex_asset(&tx,id)?;
-        tx.commit().map_err(|e|e.to_string())?;
-        db::get_asset(&conn,id)?
-    };
+    let mut conn=state.db.lock().map_err(|e|e.to_string())?;
+    let tx=conn.transaction().map_err(|e|e.to_string())?;
+    let stamp=db::now();
+    tx.execute(
+        "UPDATE assets SET width=?1,height=?2,file_size=?3,format=?4,mime_type=?5,metadata_type=?6,generation_json=?7,fingerprint=?8,file_mtime=?9,missing=0,updated_at=?10 WHERE id=?11",
+        params![info.width,info.height,info.file_size,info.format,info.mime_type,extract.metadata_type,extract.generation_json,fp,info.file_mtime,stamp,id]
+    ).map_err(|e|e.to_string())?;
+    if old.prompt.is_empty()&&old.negative_prompt.is_empty()&&old.model.is_empty(){
+        tx.execute("UPDATE prompt_state SET prompt=?1,negative_prompt=?2,model=?3,updated_at=?4 WHERE asset_id=?5",params![extract.prompt,extract.negative_prompt,extract.model,stamp,id]).map_err(|e|e.to_string())?;
+    }
+    db::reindex_asset(&tx,id)?;
+    tx.commit().map_err(|e|e.to_string())?;
+    let refreshed=db::get_asset(&conn,id)?;
+    drop(conn);
     preview::purge_asset_cache(&state.cache_dir,&old.fingerprint);
-    Ok(updated)
+    Ok(refreshed)
 }
 
 #[tauri::command]
@@ -238,14 +243,15 @@ pub fn refresh_missing(state:State<'_,AppState>)->Result<i64,String>{
     let rows:Vec<(i64,String,i64)>={
         let conn=state.db.lock().map_err(|e|e.to_string())?;
         let mut st=conn.prepare("SELECT id,path,missing FROM assets").map_err(|e|e.to_string())?;
-        st.query_map([],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(|e|e.to_string())?.filter_map(Result::ok).collect()
+        let rows=st.query_map([],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(|e|e.to_string())?.filter_map(Result::ok).collect();
+        rows
     };
     let mut missing_count=0;
     let mut changes=Vec::new();
     for(id,path,old)in rows{
         let missing=if Path::new(&path).exists(){0}else{1};
         if missing==1{missing_count+=1}
-        if missing!=old{changes.push((id,missing))}
+        if missing!=old{changes.push((id,missing));}
     }
     if !changes.is_empty(){
         let mut conn=state.db.lock().map_err(|e|e.to_string())?;
@@ -263,30 +269,36 @@ pub fn relocate_missing(state:State<'_,AppState>,root:String)->Result<i64,String
     let wanted:Vec<(i64,String)>={
         let conn=state.db.lock().map_err(|e|e.to_string())?;
         let mut st=conn.prepare("SELECT id,fingerprint FROM assets WHERE missing=1 AND fingerprint<>''").map_err(|e|e.to_string())?;
-        st.query_map([],|r|Ok((r.get(0)?,r.get(1)?))).map_err(|e|e.to_string())?.filter_map(Result::ok).collect()
+        let rows=st.query_map([],|r|Ok((r.get(0)?,r.get(1)?))).map_err(|e|e.to_string())?.filter_map(Result::ok).collect();
+        rows
     };
-    if wanted.is_empty(){return Ok(0)}
     let fingerprints=wanted.iter().map(|x|x.1.clone()).collect::<HashSet<_>>();
     let mut found=HashMap::<String,PathBuf>::new();
     for entry in WalkDir::new(root).follow_links(false).into_iter().filter_map(Result::ok){
         if !entry.file_type().is_file()||!metadata::is_supported(entry.path()){continue}
         let fp=metadata::fingerprint(entry.path());
         if fingerprints.contains(&fp){
-            found.entry(fp).or_insert_with(||entry.path().to_path_buf());
+            found.insert(fp,entry.path().to_path_buf());
             if found.len()==fingerprints.len(){break}
         }
     }
-    let updates:Vec<(i64,PathBuf)>=wanted.into_iter().filter_map(|(id,fp)|found.get(&fp).cloned().map(|path|(id,path))).collect();
+
+    let mut updates=Vec::new();
+    for(id,fp)in wanted{
+        if let Some(path)=found.get(&fp){
+            let canonical=path.canonicalize().unwrap_or_else(|_|path.clone());
+            let name=canonical.file_name().and_then(|x|x.to_str()).unwrap_or("image").to_string();
+            updates.push((id,canonical.to_string_lossy().to_string(),name));
+        }
+    }
     if updates.is_empty(){return Ok(0)}
+    let fixed=updates.len() as i64;
     let mut conn=state.db.lock().map_err(|e|e.to_string())?;
     let tx=conn.transaction().map_err(|e|e.to_string())?;
-    let mut fixed=0;
-    for(id,path)in updates{
-        let canonical=path.canonicalize().unwrap_or(path);
-        let name=canonical.file_name().and_then(|x|x.to_str()).unwrap_or("image");
-        tx.execute("UPDATE assets SET path=?1,name=?2,missing=0,updated_at=?3 WHERE id=?4",params![canonical.to_string_lossy(),name,db::now(),id]).map_err(|e|e.to_string())?;
+    let stamp=db::now();
+    for(id,path,name)in updates{
+        tx.execute("UPDATE assets SET path=?1,name=?2,missing=0,updated_at=?3 WHERE id=?4",params![path,name,stamp,id]).map_err(|e|e.to_string())?;
         db::reindex_asset(&tx,id)?;
-        fixed+=1;
     }
     tx.commit().map_err(|e|e.to_string())?;
     Ok(fixed)

@@ -214,6 +214,14 @@ pub fn asset_exists_by_path(conn: &Connection, path: &str) -> Result<Option<i64>
     conn.query_row("SELECT id FROM assets WHERE path=?1", params![path], |r| r.get(0)).optional().map_err(|e| e.to_string())
 }
 
+pub fn asset_file_state_by_path(conn:&Connection,path:&str)->Result<Option<(i64,i64,Option<i64>)>,String>{
+    conn.query_row(
+        "SELECT id,file_mtime,file_size FROM assets WHERE path=?1",
+        params![path],
+        |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))
+    ).optional().map_err(|e|e.to_string())
+}
+
 
 pub fn asset_exists_by_fingerprint(conn:&Connection,fingerprint:&str)->Result<Option<i64>,String>{
     if fingerprint.is_empty(){return Ok(None)}
