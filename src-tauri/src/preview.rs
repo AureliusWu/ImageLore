@@ -1,6 +1,13 @@
 use image::{DynamicImage, ImageFormat};
-use std::{fs, path::{Path, PathBuf}, time::UNIX_EPOCH};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
+    time::UNIX_EPOCH,
+};
 use walkdir::WalkDir;
+
+static TEMP_SEQUENCE:AtomicU64=AtomicU64::new(1);
 
 fn load_scaled(path:&Path,max_edge:u32)->Result<DynamicImage,String>{
     let image=image::open(path).map_err(|e|e.to_string())?;
@@ -25,7 +32,11 @@ pub fn cached_preview_path(path:&Path,cache_root:&Path,cache_key:&str,max_edge:u
     fs::create_dir_all(parent).map_err(|e|e.to_string())?;
     let image=load_scaled(path,max_edge)?;
 
-    let temp=output.with_extension(format!("webp.{}.tmp",std::process::id()));
+    let temp=output.with_extension(format!(
+        "webp.{}.{}.tmp",
+        std::process::id(),
+        TEMP_SEQUENCE.fetch_add(1,Ordering::Relaxed)
+    ));
     {
         let mut file=fs::File::create(&temp).map_err(|e|e.to_string())?;
         image.write_to(&mut file,ImageFormat::WebP).map_err(|e|e.to_string())?;

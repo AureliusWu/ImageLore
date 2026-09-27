@@ -40,10 +40,9 @@ export function useEditorDraft(
     const assetId=snapshot.assetId;
     if(assetId===null)return;
     window.clearTimeout(timer.current);
-    const base=baseline.current;
-    if(base.assetId!==assetId)return;
-
     saving.current=saving.current.then(async()=>{
+      const base=baseline.current;
+      if(base.assetId!==assetId)return;
       let latest:AssetRecord|null=null;
       const textChanged=snapshot.prompt!==base.prompt||snapshot.negative!==base.negative||snapshot.model!==base.model;
       const tags=parseTags(snapshot.tagsText),baseTags=parseTags(base.tagsText);
