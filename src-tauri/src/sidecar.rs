@@ -12,7 +12,8 @@ pub struct ParentRef{
 #[derive(Debug,Clone)]
 pub struct SessionRef{
     pub name:String,
-    pub note:String,
+    pub session_note:String,
+    pub asset_note:String,
 }
 
 pub fn path_for(path:&Path)->PathBuf{
@@ -67,6 +68,8 @@ pub fn session(value:&Value)->Option<SessionRef>{
     if name.is_empty(){return None}
     Some(SessionRef{
         name:name.to_string(),
-        note:item.get("note").and_then(Value::as_str).unwrap_or("").to_string(),
+        session_note:item.get("session_note").and_then(Value::as_str)
+            .or_else(||item.get("note").and_then(Value::as_str)).unwrap_or("").to_string(),
+        asset_note:item.get("asset_note").and_then(Value::as_str).unwrap_or("").to_string(),
     })
 }

@@ -221,8 +221,35 @@ pub fn export_sidecar(state:State<'_,AppState>,id:i64)->Result<String,String>{
     let(asset,out,text)={
         let conn=state.db.lock().map_err(|e|e.to_string())?;
         let asset=db::get_asset(&conn,id)?;
-        let lin=Lineage{parents:relations(&conn,id,true)?,children:relations(&conn,id,false)?};
-        let data=json!({"schema":"imagelore.sidecar.v2","image":asset.path,"fingerprint":asset.fingerprint,"prompt":asset.prompt,"negative_prompt":asset.negative_prompt,"model":asset.model,"tags":asset.tags,"metadata_type":asset.metadata_type,"generation":serde_json::from_str::<Value>(&asset.generation_json).unwrap_or(Value::String(asset.generation_json.clone())),"parents":lin.parents});
+        let mut parent_st=conn.prepare(
+            "SELECT p.portable_id,p.fingerprint,r.relation_type,r.note FROM relations r JOIN assets p ON p.id=r.parent_id WHERE r.child_id=?1 ORDER BY r.created_at"
+        ).map_err(|e|e.to_string())?;
+        let parents:Vec<Value>=parent_st.query_map(params![id],|r|{
+            Ok(json!({
+                "portable_id":r.get::<_,String>(0)?,
+                "fingerprint":r.get::<_,String>(1)?,
+                "relation_type":r.get::<_,String>(2)?,
+                "note":r.get::<_,String>(3)?
+            }))
+        }).map_err(|e|e.to_string())?.filter_map(Result::ok).collect();
+        let session:Option<Value>=conn.query_row(
+            "SELECT s.name,s.note,a.note FROM asset_sessions a JOIN generation_sessions s ON s.id=a.session_id WHERE a.asset_id=?1",
+            params![id],
+            |r|Ok(json!({"name":r.get::<_,String>(0)?,"session_note":r.get::<_,String>(1)?,"asset_note":r.get::<_,String>(2)?}))
+        ).ok();
+        let data=json!({
+            "schema":"imagelore.sidecar.v3",
+            "asset":{"portable_id":asset.portable_id,"fingerprint":asset.fingerprint,"name":asset.name},
+            "image":asset.path,
+            "prompt":asset.prompt,
+            "negative_prompt":asset.negative_prompt,
+            "model":asset.model,
+            "tags":asset.tags,
+            "metadata_type":asset.metadata_type,
+            "generation":serde_json::from_str::<Value>(&asset.generation_json).unwrap_or(Value::String(asset.generation_json.clone())),
+            "session":session,
+            "parents":parents
+        });
         let out=sidecar::path_for(Path::new(&asset.path));
         let text=serde_json::to_string_pretty(&data).map_err(|e|e.to_string())?;
         (asset,out,text)
