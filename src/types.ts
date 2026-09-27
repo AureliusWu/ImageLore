@@ -36,3 +36,7 @@ export interface LibraryHealth {
   total:number;missing:number;duplicate_groups:number;without_metadata:number;without_fingerprint:number;
   pending_relations:number;unassigned_session:number;cache_bytes:number;
 }
+
+export interface SourceFolder {
+  id:number;path:string;name:string;auto_sync:boolean;last_scan_at:number;created_at:number;updated_at:number;
+}

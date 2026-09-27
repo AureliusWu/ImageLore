@@ -1,6 +1,6 @@
 [package]
 name = "imagelore"
-version = "0.15.2"
+version = "0.16.0"
 description = "Local-first AI generation memory library"
 authors = ["ImageLore"]
 edition = "2021"
