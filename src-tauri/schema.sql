@@ -28,6 +28,7 @@ CREATE INDEX IF NOT EXISTS idx_assets_updated ON assets(updated_at DESC, id DESC
 CREATE INDEX IF NOT EXISTS idx_assets_favorite ON assets(favorite, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_assets_missing ON assets(missing, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_assets_fingerprint ON assets(fingerprint);
+CREATE INDEX IF NOT EXISTS idx_assets_fingerprint_nonempty ON assets(fingerprint) WHERE fingerprint<>'';
 
 CREATE TABLE IF NOT EXISTS prompt_state (
   asset_id INTEGER PRIMARY KEY,

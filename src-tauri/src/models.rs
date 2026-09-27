@@ -128,6 +128,38 @@ pub struct Lineage {
 pub struct ImportSummary {
     pub added: i64,
     pub skipped: i64,
+    pub duplicates: i64,
     pub failed: i64,
+    pub last_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BackupRecord {
+    pub name: String,
+    pub path: String,
+    pub size: u64,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DuplicateGroup {
+    pub fingerprint: String,
+    pub count: i64,
+    pub asset_ids: Vec<i64>,
+    pub names: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportProgress {
+    pub job_id: u64,
+    pub processed: usize,
+    pub total: usize,
+    pub added: i64,
+    pub skipped: i64,
+    pub duplicates: i64,
+    pub failed: i64,
+    pub current_name: String,
+    pub done: bool,
+    pub cancelled: bool,
     pub last_id: Option<i64>,
 }
