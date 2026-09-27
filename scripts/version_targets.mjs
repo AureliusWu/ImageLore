@@ -55,7 +55,7 @@ export function syncVersionTargets(root, version) {
   cargo = replaceExactly(
     cargo,
     /(^\[package\][\s\S]*?^version\s*=\s*)"[^"]+"/m,
-    `$1"${version}"`,
+    (_match, prefix) => `${prefix}"${version}"`,
     1,
     'Cargo.toml package version'
   );
@@ -67,7 +67,7 @@ export function syncVersionTargets(root, version) {
     lock = replaceExactly(
       lock,
       /(\[\[package\]\]\r?\nname = "imagelore"\r?\nversion = ")[^"]+(")/,
-      `$1${version}$2`,
+      (_match, prefix, suffix) => `${prefix}${version}${suffix}`,
       1,
       'Cargo.lock ImageLore version'
     );
