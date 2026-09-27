@@ -1,17 +1,17 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import type { AssetRecord, AssetSummary, BackupRecord, CollectionRecord, DuplicateGroup, ImportSummary, LibraryFacets, LibraryFilter, LibraryPage, Lineage, PromptPatch, Revision } from "./types";
+import type { AssetRecord, AssetSession, AssetSummary, BackupRecord, CollectionRecord, DuplicateGroup, GenerationSession, ImportSummary, LibraryFacets, LibraryFilter, LibraryHealth, LibraryPage, Lineage, ModelAlias, PromptPatch, Revision, SavedFilter } from "./types";
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 const demoSvg = (title:string, a:string, b:string) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="${a}"/><stop offset="1" stop-color="${b}"/></linearGradient></defs><rect width="100%" height="100%" fill="url(#g)"/><circle cx="880" cy="180" r="180" fill="rgba(255,255,255,.22)"/><circle cx="260" cy="690" r="260" fill="rgba(255,255,255,.12)"/><text x="70" y="110" font-family="Segoe UI" font-size="54" font-weight="700" fill="white">${title}</text><text x="72" y="165" font-family="Segoe UI" font-size="24" fill="rgba(255,255,255,.78)">ImageLore Generation Record</text></svg>`)}`;
 
 let mockAssets:AssetRecord[] = [
-  {id:1,path:"D:/AI/character-origin.png",name:"Character Origin.png",prompt:"adult blue-haired marine fantasy character, calm expression, clean character design, pearl ornaments",negative_prompt:"low quality, extra fingers",model:"GPT Image",tags:["character","blue hair","origin"],favorite:1,width:1536,height:2048,file_size:2840000,format:"PNG",mime_type:"image/png",metadata_type:"manual",generation_json:'{"size":"1536x2048"}',fingerprint:"demo-01",file_mtime:0,missing:0,created_at:1760000000,updated_at:1760000500},
-  {id:2,path:"D:/AI/bedroom-variation.png",name:"Bedroom Variation.png",prompt:"adult blue-haired marine fantasy character, sitting beside a bed at night, warm bedside lamp, quiet mood",negative_prompt:"low quality",model:"GPT Image",tags:["character","bedroom","variation"],favorite:0,width:1536,height:2048,file_size:2310000,format:"PNG",mime_type:"image/png",metadata_type:"manual",generation_json:'{"size":"1536x2048"}',fingerprint:"demo-02",file_mtime:0,missing:0,created_at:1760000100,updated_at:1760000600},
-  {id:3,path:"D:/AI/photo-study.png",name:"Photoreal Study.png",prompt:"photorealistic adult East Asian woman, blue hair, marine inspired jewelry, editorial portrait",negative_prompt:"plastic skin",model:"Flux",tags:["photoreal","study"],favorite:0,width:1024,height:1536,file_size:1900000,format:"PNG",mime_type:"image/png",metadata_type:"a1111",generation_json:'{"steps":"28","sampler":"DPM++ 2M","cfg_scale":"5","seed":"4120039"}',fingerprint:"demo-03",file_mtime:0,missing:0,created_at:1760000200,updated_at:1760000400},
-  {id:4,path:"D:/AI/poster.png",name:"Aero Poster.png",prompt:"frutiger aero inspired poster, blue sky, clear water, lush green hills, glossy bubbles",negative_prompt:"dark UI, gray background",model:"Flux",tags:["poster","aero"],favorite:1,width:1400,height:1800,file_size:2100000,format:"PNG",mime_type:"image/png",metadata_type:"manual",generation_json:'{}',fingerprint:"demo-04",file_mtime:0,missing:0,created_at:1760000300,updated_at:1760000700},
-  {id:5,path:"D:/AI/closeup.png",name:"Close-up Test.png",prompt:"close-up character portrait, clean light, glassy blue eyes",negative_prompt:"blur",model:"GPT Image",tags:["portrait","test"],favorite:0,width:1200,height:1200,file_size:1200000,format:"PNG",mime_type:"image/png",metadata_type:"manual",generation_json:'{}',fingerprint:"demo-05",file_mtime:0,missing:0,created_at:1760000400,updated_at:1760000300},
-  {id:6,path:"D:/AI/missing.png",name:"Moved Reference.png",prompt:"reference image",negative_prompt:"",model:"",tags:["reference"],favorite:0,width:1024,height:1024,file_size:900000,format:"PNG",mime_type:"image/png",metadata_type:"manual",generation_json:'{}',fingerprint:"demo-06",file_mtime:0,missing:1,created_at:1760000500,updated_at:1760000200}
+  {id:1,path:"D:/AI/character-origin.png",name:"Character Origin.png",prompt:"adult blue-haired marine fantasy character, calm expression, clean character design, pearl ornaments",negative_prompt:"low quality, extra fingers",model:"GPT Image",tags:["character","blue hair","origin"],favorite:1,width:1536,height:2048,file_size:2840000,format:"PNG",mime_type:"image/png",metadata_type:"manual",generation_json:'{"size":"1536x2048"}',fingerprint:"demo-01",portable_id:"il-demo-01",file_mtime:0,missing:0,created_at:1760000000,updated_at:1760000500},
+  {id:2,path:"D:/AI/bedroom-variation.png",name:"Bedroom Variation.png",prompt:"adult blue-haired marine fantasy character, sitting beside a bed at night, warm bedside lamp, quiet mood",negative_prompt:"low quality",model:"GPT Image",tags:["character","bedroom","variation"],favorite:0,width:1536,height:2048,file_size:2310000,format:"PNG",mime_type:"image/png",metadata_type:"manual",generation_json:'{"size":"1536x2048"}',fingerprint:"demo-02",portable_id:"il-demo-02",file_mtime:0,missing:0,created_at:1760000100,updated_at:1760000600},
+  {id:3,path:"D:/AI/photo-study.png",name:"Photoreal Study.png",prompt:"photorealistic adult East Asian woman, blue hair, marine inspired jewelry, editorial portrait",negative_prompt:"plastic skin",model:"Flux",tags:["photoreal","study"],favorite:0,width:1024,height:1536,file_size:1900000,format:"PNG",mime_type:"image/png",metadata_type:"a1111",generation_json:'{"steps":"28","sampler":"DPM++ 2M","cfg_scale":"5","seed":"4120039"}',fingerprint:"demo-03",portable_id:"il-demo-03",file_mtime:0,missing:0,created_at:1760000200,updated_at:1760000400},
+  {id:4,path:"D:/AI/poster.png",name:"Aero Poster.png",prompt:"frutiger aero inspired poster, blue sky, clear water, lush green hills, glossy bubbles",negative_prompt:"dark UI, gray background",model:"Flux",tags:["poster","aero"],favorite:1,width:1400,height:1800,file_size:2100000,format:"PNG",mime_type:"image/png",metadata_type:"manual",generation_json:'{}',fingerprint:"demo-04",portable_id:"il-demo-04",file_mtime:0,missing:0,created_at:1760000300,updated_at:1760000700},
+  {id:5,path:"D:/AI/closeup.png",name:"Close-up Test.png",prompt:"close-up character portrait, clean light, glassy blue eyes",negative_prompt:"blur",model:"GPT Image",tags:["portrait","test"],favorite:0,width:1200,height:1200,file_size:1200000,format:"PNG",mime_type:"image/png",metadata_type:"manual",generation_json:'{}',fingerprint:"demo-05",portable_id:"il-demo-05",file_mtime:0,missing:0,created_at:1760000400,updated_at:1760000300},
+  {id:6,path:"D:/AI/missing.png",name:"Moved Reference.png",prompt:"reference image",negative_prompt:"",model:"",tags:["reference"],favorite:0,width:1024,height:1024,file_size:900000,format:"PNG",mime_type:"image/png",metadata_type:"manual",generation_json:'{}',fingerprint:"demo-06",portable_id:"il-demo-06",file_mtime:0,missing:1,created_at:1760000500,updated_at:1760000200}
 ];
 const demoImages = new Map<number,string>([
   [1,demoSvg("Origin","#5ac8eb","#78be70")],[2,demoSvg("Variation","#4fbbe4","#96ca71")],[3,demoSvg("Photo Study","#74b6d8","#5e8ea6")],
@@ -61,6 +61,16 @@ async function mockCall<T>(command:string,args:Record<string,unknown>):Promise<T
     case "export_sidecar":return "demo.png.imagelore.json" as T;
     case "refresh_missing":return mockAssets.filter(x=>x.missing).length as T;
     case "relocate_missing":return 0 as T;
+    case "generation_sessions":return [{id:1,name:"Blue Character Study",note:"Main iteration session",count:2,created_at:0,updated_at:0}] as T;
+    case "create_generation_session":return {id:2,name:String(args.name),note:String(args.note||""),count:0,created_at:0,updated_at:0} as T;
+    case "asset_session":return null as T;
+    case "set_asset_session":case "update_relation_note":return true as T;
+    case "model_aliases":return [{alias:"flux1-dev-fp8.safetensors",canonical:"Flux.1 Dev"}] as T;
+    case "upsert_model_alias":case "delete_model_alias":return true as T;
+    case "saved_filters":return [] as T;
+    case "save_filter":return {id:1,name:String(args.name),filter:args.filter as LibraryFilter,created_at:0,updated_at:0} as T;
+    case "delete_saved_filter":return true as T;
+    case "library_health":return {total:mockAssets.length,missing:mockAssets.filter(x=>x.missing).length,duplicate_groups:0,without_metadata:1,without_fingerprint:0,pending_relations:0,unassigned_session:mockAssets.length,cache_bytes:10485760} as T;
     case "open_external":case "open_containing_folder":return true as T;
     default:throw new Error(`Unknown mock command: ${command}`);
   }
@@ -93,6 +103,18 @@ export const api={
   restoreRevision:(revisionId:number)=>call<AssetRecord>("restore_revision",{revisionId}),
   lineage:(id:number)=>call<Lineage>("lineage",{id}),
   addRelation:(parentId:number,childId:number,relationType:string,note="")=>call<boolean>("add_relation",{parentId,childId,relationType,note}),
+  sessions:()=>call<GenerationSession[]>("generation_sessions"),
+  createSession:(name:string,note="")=>call<GenerationSession>("create_generation_session",{name,note}),
+  assetSession:(assetId:number)=>call<AssetSession|null>("asset_session",{assetId}),
+  setAssetSession:(assetId:number,sessionId:number|null,note="")=>call<boolean>("set_asset_session",{assetId,sessionId,note}),
+  updateRelationNote:(relationId:number,note:string)=>call<boolean>("update_relation_note",{relationId,note}),
+  modelAliases:()=>call<ModelAlias[]>("model_aliases"),
+  upsertModelAlias:(alias:string,canonical:string)=>call<boolean>("upsert_model_alias",{alias,canonical}),
+  deleteModelAlias:(alias:string)=>call<boolean>("delete_model_alias",{alias}),
+  savedFilters:()=>call<SavedFilter[]>("saved_filters"),
+  saveFilter:(name:string,filter:LibraryFilter)=>call<SavedFilter>("save_filter",{name,filter}),
+  deleteSavedFilter:(id:number)=>call<boolean>("delete_saved_filter",{id}),
+  libraryHealth:()=>call<LibraryHealth>("library_health"),
   collections:()=>call<CollectionRecord[]>("collections"),
   duplicateGroups:()=>call<DuplicateGroup[]>("duplicate_groups"),
   createBackup:()=>call<BackupRecord>("create_backup"),
