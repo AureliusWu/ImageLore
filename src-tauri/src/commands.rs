@@ -161,7 +161,8 @@ pub fn create_collection(state:State<'_,AppState>,name:String,description:String
     if name.is_empty(){return Err("集合名称不能为空".into())}
     let conn=state.db.lock().map_err(|e|e.to_string())?;
     let stamp=db::now();
-    conn.execute("INSERT INTO collections(name,description,created_at,updated_at) VALUES(?1,?2,?3,?3)",params![name,description.trim(),stamp]).map_err(|e|e.to_string())?;
+    conn.execute("INSERT INTO collections(name,description,created_at,updated_at) VALUES(?1,?2,?3,?3)",params![name,description.trim(),stamp])
+        .map_err(|e|if e.to_string().contains("UNIQUE"){"已存在同名集合".into()}else{e.to_string()})?;
     let id=conn.last_insert_rowid();
     Ok(CollectionRecord{id,name:name.to_string(),description:description.trim().to_string(),created_at:stamp,updated_at:stamp,count:0})
 }
@@ -169,11 +170,14 @@ pub fn create_collection(state:State<'_,AppState>,name:String,description:String
 #[tauri::command]
 pub fn add_to_collection(state:State<'_,AppState>,collection_id:i64,asset_ids:Vec<i64>)->Result<bool,String>{
     let mut conn=state.db.lock().map_err(|e|e.to_string())?;
+    let exists:i64=conn.query_row("SELECT COUNT(*) FROM collections WHERE id=?1",params![collection_id],|r|r.get(0)).map_err(|e|e.to_string())?;
+    if exists==0{return Err("找不到目标集合".into())}
     let tx=conn.transaction().map_err(|e|e.to_string())?;
+    let stamp=db::now();
     for id in asset_ids{
-        tx.execute("INSERT OR IGNORE INTO collection_assets(collection_id,asset_id,created_at) VALUES(?1,?2,?3)",params![collection_id,id,db::now()]).map_err(|e|e.to_string())?;
+        tx.execute("INSERT OR IGNORE INTO collection_assets(collection_id,asset_id,created_at) VALUES(?1,?2,?3)",params![collection_id,id,stamp]).map_err(|e|e.to_string())?;
     }
-    tx.execute("UPDATE collections SET updated_at=?1 WHERE id=?2",params![db::now(),collection_id]).map_err(|e|e.to_string())?;
+    tx.execute("UPDATE collections SET updated_at=?1 WHERE id=?2",params![stamp,collection_id]).map_err(|e|e.to_string())?;
     tx.commit().map_err(|e|e.to_string())?;
     Ok(true)
 }
