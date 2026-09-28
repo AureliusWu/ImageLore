@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS app_meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
-INSERT OR IGNORE INTO app_meta(key,value) VALUES ('schema_version','4');
+INSERT OR IGNORE INTO app_meta(key,value) VALUES ('schema_version','5');
 
 CREATE TABLE IF NOT EXISTS assets (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -109,6 +109,23 @@ CREATE VIRTUAL TABLE IF NOT EXISTS asset_search USING fts5(
   tags,
   tokenize='unicode61 remove_diacritics 2'
 );
+
+
+CREATE TABLE IF NOT EXISTS generation_index (
+  asset_id INTEGER PRIMARY KEY,
+  seed TEXT NOT NULL DEFAULT '',
+  steps INTEGER,
+  sampler TEXT NOT NULL DEFAULT '',
+  scheduler TEXT NOT NULL DEFAULT '',
+  cfg_scale REAL,
+  denoise REAL,
+  FOREIGN KEY(asset_id) REFERENCES assets(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_generation_seed ON generation_index(seed) WHERE seed<>'';
+CREATE INDEX IF NOT EXISTS idx_generation_sampler ON generation_index(sampler COLLATE NOCASE) WHERE sampler<>'';
+CREATE INDEX IF NOT EXISTS idx_generation_scheduler ON generation_index(scheduler COLLATE NOCASE) WHERE scheduler<>'';
+CREATE INDEX IF NOT EXISTS idx_generation_steps ON generation_index(steps) WHERE steps IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_generation_cfg ON generation_index(cfg_scale) WHERE cfg_scale IS NOT NULL;
 
 
 CREATE TABLE IF NOT EXISTS generation_sessions (

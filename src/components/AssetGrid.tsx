@@ -4,7 +4,18 @@ import type { AssetSummary } from "../types";
 
 function LazyThumb({asset,selected,onClick}:{asset:AssetSummary;selected:boolean;onClick:(e:React.MouseEvent)=>void}){
   const ref=useRef<HTMLButtonElement>(null);const[src,setSrc]=useState("");
-  useEffect(()=>{const el=ref.current;if(!el)return;const obs=new IntersectionObserver(entries=>{if(entries.some(x=>x.isIntersecting)){api.preview(asset.id,420,true).then(setSrc).catch(()=>setSrc(""));obs.disconnect()}},{rootMargin:"300px"});obs.observe(el);return()=>obs.disconnect()},[asset.id,asset.file_mtime,asset.fingerprint]);
+  useEffect(()=>{
+    const el=ref.current;if(!el)return;
+    let active=true;setSrc("");
+    const obs=new IntersectionObserver(entries=>{
+      if(entries.some(x=>x.isIntersecting)){
+        api.preview(asset.id,420,true).then(value=>{if(active)setSrc(value)}).catch(()=>{if(active)setSrc("")});
+        obs.disconnect();
+      }
+    },{rootMargin:"300px"});
+    obs.observe(el);
+    return()=>{active=false;obs.disconnect()};
+  },[asset.id,asset.file_mtime,asset.fingerprint]);
   return <button ref={ref} className={`asset-card ${selected?"selected":""}`} onClick={onClick} title={asset.path}>
     <div className="asset-thumb">{src?<img src={src} alt=""/>:<div className="thumb-skeleton"/>}{asset.favorite?<span className="asset-star">★</span>:null}{asset.missing?<span className="asset-missing">文件缺失</span>:null}</div>
     <div className="asset-copy"><strong>{asset.name}</strong><span>{asset.width&&asset.height?`${asset.width}×${asset.height}`:asset.format||"图片"}</span></div>

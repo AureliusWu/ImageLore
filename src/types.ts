@@ -3,6 +3,9 @@ export type RelationType = "derived_from" | "variation" | "edit" | "upscale" | "
 
 export interface LibraryFilter {
   query:string;view:LibraryView;tag?:string|null;model?:string|null;collection_id?:number|null;
+  metadata_type?:string|null;sampler?:string|null;scheduler?:string|null;seed?:string|null;
+  steps_min?:number|null;steps_max?:number|null;cfg_min?:number|null;cfg_max?:number|null;
+  denoise_min?:number|null;denoise_max?:number|null;orientation?:string|null;sort?:string;
 }
 export interface AssetSummary {
   id:number;path:string;name:string;favorite:number;width:number|null;height:number|null;format:string;
@@ -15,7 +18,10 @@ export interface AssetRecord extends AssetSummary {
 export interface LibraryPage { items:AssetSummary[];total:number;offset:number;limit:number; }
 export interface FacetCount { name:string;count:number; }
 export interface CollectionRecord { id:number;name:string;description:string;created_at:number;updated_at:number;count:number; }
-export interface LibraryFacets { tags:FacetCount[];models:FacetCount[];collections:CollectionRecord[]; }
+export interface LibraryFacets {
+  tags:FacetCount[];models:FacetCount[];collections:CollectionRecord[];
+  metadata_types:FacetCount[];samplers:FacetCount[];schedulers:FacetCount[];
+}
 export interface ImportSummary { added:number;skipped:number;duplicates:number;failed:number;last_id:number|null; }
 export interface ImportProgress extends ImportSummary {
   job_id:number;processed:number;total:number;current_name:string;done:boolean;cancelled:boolean;

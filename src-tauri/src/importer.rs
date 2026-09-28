@@ -1,4 +1,4 @@
-use crate::{db,generation,metadata,models::{ImportProgress,ImportSummary},preview,sidecar,state::AppState};
+use crate::{db,generation,generation_index,metadata,models::{ImportProgress,ImportSummary},preview,sidecar,state::AppState};
 use rusqlite::params;
 use std::{
     path::{Path,PathBuf},
@@ -97,6 +97,7 @@ fn refresh_existing(state:&AppState,id:i64,item:PreparedAsset)->Result<InsertOut
     }
     if old.tags.is_empty()&&!item.tags.is_empty(){db::replace_tags_raw(&tx,id,&item.tags)?;}
     merge_context(&tx,id,&item)?;
+    generation_index::upsert(&tx,id,&item.generation_json)?;
     db::reindex_asset(&tx,id)?;
     tx.commit().map_err(|e|e.to_string())?;
     drop(conn);
@@ -130,6 +131,7 @@ fn insert_new(state:&AppState,item:PreparedAsset)->Result<InsertOutcome,String>{
     tx.execute("INSERT INTO prompt_state(asset_id,prompt,negative_prompt,model,updated_at) VALUES(?1,?2,?3,?4,?5)",params![id,item.prompt,item.negative_prompt,item.model,stamp]).map_err(|e|e.to_string())?;
     db::replace_tags_raw(&tx,id,&item.tags)?;
     merge_context(&tx,id,&item)?;
+    generation_index::upsert(&tx,id,&item.generation_json)?;
     db::reindex_asset(&tx,id)?;
     tx.commit().map_err(|e|e.to_string())?;
     Ok(InsertOutcome::Added(id))

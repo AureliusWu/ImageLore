@@ -1,7 +1,8 @@
+use crate::generation_index;
 use rusqlite::{params,Connection,OptionalExtension};
 use sha2::{Digest,Sha256};
 
-const LATEST:i64=4;
+const LATEST:i64=5;
 
 fn set_version(conn:&Connection,version:i64)->Result<(),String>{
     conn.execute(
@@ -105,6 +106,28 @@ fn migrate_v4(conn:&Connection)->Result<(),String>{
     ).map_err(|e|e.to_string())
 }
 
+fn migrate_v5(conn:&Connection)->Result<(),String>{
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS generation_index (
+           asset_id INTEGER PRIMARY KEY,
+           seed TEXT NOT NULL DEFAULT '',
+           steps INTEGER,
+           sampler TEXT NOT NULL DEFAULT '',
+           scheduler TEXT NOT NULL DEFAULT '',
+           cfg_scale REAL,
+           denoise REAL,
+           FOREIGN KEY(asset_id) REFERENCES assets(id) ON DELETE CASCADE
+         );
+         CREATE INDEX IF NOT EXISTS idx_generation_seed ON generation_index(seed) WHERE seed<>'';
+         CREATE INDEX IF NOT EXISTS idx_generation_sampler ON generation_index(sampler COLLATE NOCASE) WHERE sampler<>'';
+         CREATE INDEX IF NOT EXISTS idx_generation_scheduler ON generation_index(scheduler COLLATE NOCASE) WHERE scheduler<>'';
+         CREATE INDEX IF NOT EXISTS idx_generation_steps ON generation_index(steps) WHERE steps IS NOT NULL;
+         CREATE INDEX IF NOT EXISTS idx_generation_cfg ON generation_index(cfg_scale) WHERE cfg_scale IS NOT NULL;"
+    ).map_err(|e|e.to_string())?;
+    generation_index::rebuild_all(conn)?;
+    Ok(())
+}
+
 pub fn apply(conn:&Connection)->Result<(),String>{
     conn.execute_batch("CREATE TABLE IF NOT EXISTS app_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);").map_err(|e|e.to_string())?;
     let current:Option<String>=conn.query_row(
@@ -140,6 +163,12 @@ pub fn apply(conn:&Connection)->Result<(),String>{
         set_version(conn,version)?;
     }
 
+    if version<5{
+        migrate_v5(conn)?;
+        version=5;
+        set_version(conn,version)?;
+    }
+
     Ok(())
 }
 
@@ -148,15 +177,39 @@ mod tests{
     use super::*;
 
     #[test]
+    fn migration_v5_backfills_generation_index(){
+        let conn=Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE app_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+             INSERT INTO app_meta VALUES('schema_version','4');
+             CREATE TABLE assets(
+               id INTEGER PRIMARY KEY,path TEXT NOT NULL,generation_json TEXT NOT NULL DEFAULT '{}'
+             );
+             INSERT INTO assets(id,path,generation_json) VALUES(1,'x.png','{\"seed\":\"42\",\"steps\":\"30\",\"sampler\":\"Euler\",\"cfg_scale\":\"6.5\"}');"
+        ).unwrap();
+        apply(&conn).unwrap();
+        let version:String=conn.query_row("SELECT value FROM app_meta WHERE key='schema_version'",[],|r|r.get(0)).unwrap();
+        assert_eq!(version,"5");
+        let row:(String,i64,String,f64)=conn.query_row(
+            "SELECT seed,steps,sampler,cfg_scale FROM generation_index WHERE asset_id=1",[],
+            |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))
+        ).unwrap();
+        assert_eq!(row,("42".into(),30,"Euler".into(),6.5));
+    }
+
+    #[test]
     fn migration_v4_adds_source_folders(){
         let conn=Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE app_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
-             INSERT INTO app_meta VALUES('schema_version','3');"
+             INSERT INTO app_meta VALUES('schema_version','3');
+             CREATE TABLE assets(
+               id INTEGER PRIMARY KEY,path TEXT NOT NULL,generation_json TEXT NOT NULL DEFAULT '{}'
+             );"
         ).unwrap();
         apply(&conn).unwrap();
         let version:String=conn.query_row("SELECT value FROM app_meta WHERE key='schema_version'",[],|r|r.get(0)).unwrap();
-        assert_eq!(version,"4");
+        assert_eq!(version,"5");
         conn.execute(
             "INSERT INTO source_folders(path,name,created_at,updated_at) VALUES('D:/AI','AI',1,1)",[]
         ).unwrap();

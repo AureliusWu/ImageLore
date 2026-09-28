@@ -3,6 +3,7 @@ mod commands;
 mod db;
 mod importer;
 mod generation;
+mod generation_index;
 mod migrations;
 mod metadata;
 mod models;
