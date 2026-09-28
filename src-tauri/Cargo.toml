@@ -1,6 +1,6 @@
 [package]
 name = "imagelore"
-version = "0.18.0"
+version = "0.18.1"
 description = "Local-first AI generation memory library"
 authors = ["ImageLore"]
 edition = "2021"
@@ -26,3 +26,4 @@ walkdir = "2"
 dirs = "6"
 mime_guess = "2"
 fastembed = { version = "=7.1.0", default-features = false, features = ["hf-hub-rustls-tls", "ort-download-binaries-rustls-tls", "image-models"] }
+hf-hub = { version = "=0.5.0", default-features = false, features = ["ureq", "rustls-tls"] }

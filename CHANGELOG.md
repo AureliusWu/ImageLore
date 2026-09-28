@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.18.1 — Editor & Semantic Security Hardening
+
+- Added a gallery right-click context menu to locate the selected image in the system file manager.
+- Fixed Prompt Revision saving so the current Prompt, Negative Prompt, model and tags are committed atomically with the revision instead of racing the autosave queue.
+- Pinned the CLIP ViT-B/32 vision and text components to immutable Qdrant commit revisions.
+- Added exact ONNX byte-size and SHA-256 trust anchors; mismatched model files are rejected before ONNX Runtime loads them.
+- Added bounded JSON validation for tokenizer / preprocessor support files, staged installation, atomic promotion into a trusted cache, and cleanup of temporary download caches.
+- Added native regression tests for SHA-256 verification and rejection of untrusted model bytes.
+
+
 ## 0.18.0 — Semantic Recall
 
 - Added Migration v6 with a rebuildable local semantic embedding index keyed by asset fingerprint and embedding model.
