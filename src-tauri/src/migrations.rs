@@ -236,7 +236,7 @@ mod tests{
         ).unwrap();
         apply(&conn).unwrap();
         let version:String=conn.query_row("SELECT value FROM app_meta WHERE key='schema_version'",[],|r|r.get(0)).unwrap();
-        assert_eq!(version,"5");
+        assert_eq!(version,"6");
         let row:(String,i64,String,f64)=conn.query_row(
             "SELECT seed,steps,sampler,cfg_scale FROM generation_index WHERE asset_id=1",[],
             |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))
@@ -256,7 +256,7 @@ mod tests{
         ).unwrap();
         apply(&conn).unwrap();
         let version:String=conn.query_row("SELECT value FROM app_meta WHERE key='schema_version'",[],|r|r.get(0)).unwrap();
-        assert_eq!(version,"5");
+        assert_eq!(version,"6");
         conn.execute(
             "INSERT INTO source_folders(path,name,created_at,updated_at) VALUES('D:/AI','AI',1,1)",[]
         ).unwrap();
