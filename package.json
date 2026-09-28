@@ -1,7 +1,7 @@
 {
   "name": "imagelore",
   "private": true,
-  "version": "0.18.0",
+  "version": "0.18.1",
   "type": "module",
   "scripts": {
     "version:sync": "node scripts/sync_version.mjs",
