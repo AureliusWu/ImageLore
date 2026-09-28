@@ -11,6 +11,8 @@ export function useImportJob(onDone:(summary:ImportSummary,cancelled:boolean)=>v
   const jobRef=useRef(0);
   const startingRef=useRef(false);
   const bufferedRef=useRef<ImportProgress[]>([]);
+  const startWaitersRef=useRef<Array<()=>void>>([]);
+  const doneWaitersRef=useRef<Array<()=>void>>([]);
   const onDoneRef=useRef(onDone);
   const statusRef=useRef(setStatus);
 
@@ -26,6 +28,7 @@ export function useImportJob(onDone:(summary:ImportSummary,cancelled:boolean)=>v
       setStarting(false);
       statusRef.current(next.cancelled?"导入已取消":"导入完成：新增 "+next.added+"，重复 "+next.duplicates+"，跳过 "+next.skipped+"，失败 "+next.failed);
       void onDoneRef.current(summary,next.cancelled);
+      for(const resolve of doneWaitersRef.current.splice(0))resolve();
     }else{
       statusRef.current("正在导入 "+next.processed+"/"+next.total+" · "+next.current_name);
     }
@@ -76,17 +79,27 @@ export function useImportJob(onDone:(summary:ImportSummary,cancelled:boolean)=>v
     }finally{
       startingRef.current=false;
       setStarting(false);
+      for(const resolve of startWaitersRef.current.splice(0))resolve();
     }
   },[applyProgress]);
 
   const cancel=useCallback(async()=>{
+    if(startingRef.current)await new Promise<void>(resolve=>startWaitersRef.current.push(resolve));
     const id=jobRef.current;
-    if(!id){
-      if(startingRef.current)statusRef.current("导入任务正在启动，请稍候");
-      return;
-    }
+    if(!id)return;
     statusRef.current("正在取消导入…");
-    try{await api.cancelImport(id)}catch(e){statusRef.current("取消导入失败："+String(e))}
+    let resolveDone:()=>void=()=>{};
+    const done=new Promise<void>(resolve=>{resolveDone=resolve;doneWaitersRef.current.push(resolve)});
+    try{
+      const accepted=await api.cancelImport(id);
+      if(!accepted||jobRef.current===0)resolveDone();
+      await done;
+    }catch(e){
+      resolveDone();
+      statusRef.current("取消导入失败："+String(e));
+    }finally{
+      doneWaitersRef.current=doneWaitersRef.current.filter(x=>x!==resolveDone);
+    }
   },[]);
 
   return{active:starting||(progress.job_id!==0&&!progress.done),progress,start,cancel};
