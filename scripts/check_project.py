@@ -20,8 +20,8 @@ runtime='\n'.join(p.read_text(encoding='utf-8', errors='ignore') for p in (root/
 assert 'PromptDock' not in runtime and 'imagelore.db' not in runtime and '.promptdock.json' not in runtime
 assert 'library.sqlite3' in runtime
 assert 'ensure_auto_backup' in runtime and 'start_import_folder' in runtime and 'duplicate_groups' in runtime
-assert 'const LATEST:i64=6' in (root/'src-tauri/src/migrations.rs').read_text(encoding='utf-8')
-assert 'imagelore.sidecar.v3' in runtime and 'pending_relations' in runtime and 'generation_sessions' in runtime and 'source_folders' in runtime and 'generation_index' in runtime and 'semantic_embeddings' in runtime
+assert 'const LATEST:i64=7' in (root/'src-tauri/src/migrations.rs').read_text(encoding='utf-8')
+assert 'imagelore.sidecar.v3' in runtime and 'pending_relations' in runtime and 'generation_sessions' in runtime and 'source_folders' in runtime and 'generation_index' in runtime and 'semantic_embeddings' in runtime and 'asset_cjk_search' in runtime
 front='\n'.join(p.read_text(encoding='utf-8', errors='ignore') for p in (root/'src').rglob('*.tsx'))
 assert 'pd.' not in front
 print(f'ImageLore v{version} project integrity: PASS')

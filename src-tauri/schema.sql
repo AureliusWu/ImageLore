@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS app_meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
-INSERT OR IGNORE INTO app_meta(key,value) VALUES ('schema_version','6');
+INSERT OR IGNORE INTO app_meta(key,value) VALUES ('schema_version','7');
 
 CREATE TABLE IF NOT EXISTS assets (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -108,6 +108,12 @@ CREATE VIRTUAL TABLE IF NOT EXISTS asset_search USING fts5(
   model,
   tags,
   tokenize='unicode61 remove_diacritics 2'
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS asset_cjk_search USING fts5(
+  asset_id UNINDEXED,
+  text,
+  tokenize='trigram'
 );
 
 

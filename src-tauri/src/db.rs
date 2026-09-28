@@ -117,11 +117,21 @@ pub fn add_tags(conn:&mut Connection,asset_ids:&[i64],tags:&[String])->Result<()
 
 pub fn reindex_asset(conn: &Connection, asset_id: i64) -> Result<(), String> {
     let asset = get_asset(conn, asset_id)?;
+    let tags=asset.tags.join(" ");
     conn.execute("DELETE FROM asset_search WHERE asset_id=?1", params![asset_id]).map_err(|e| e.to_string())?;
     conn.execute(
         "INSERT INTO asset_search(asset_id,name,prompt,negative_prompt,model,tags) VALUES(?1,?2,?3,?4,?5,?6)",
-        params![asset_id, asset.name, asset.prompt, asset.negative_prompt, asset.model, asset.tags.join(" ")],
+        params![asset_id, asset.name, asset.prompt, asset.negative_prompt, asset.model, tags],
     ).map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM asset_cjk_search WHERE rowid=?1",params![asset_id]).map_err(|e|e.to_string())?;
+    let trigram_text=format!(
+        "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
+        asset.name,asset.prompt,asset.negative_prompt,asset.model,asset.tags.join(" ")
+    );
+    conn.execute(
+        "INSERT INTO asset_cjk_search(rowid,asset_id,text) VALUES(?1,?1,?2)",
+        params![asset_id,trigram_text]
+    ).map_err(|e|e.to_string())?;
     Ok(())
 }
 
@@ -133,6 +143,14 @@ fn fts_query(input: &str) -> String {
         .join(" AND ")
 }
 
+fn cjk_trigram_query(input:&str)->Option<String>{
+    let terms=input.split_whitespace()
+        .filter(|term|term.chars().count()>=3)
+        .map(|term|format!("\"{}\"",term.replace('"',"\"\"")))
+        .collect::<Vec<_>>();
+    if terms.is_empty(){None}else{Some(terms.join(" AND "))}
+}
+
 fn filter_parts(filter: &LibraryFilter) -> (String, String, Vec<SqlValue>) {
     let mut joins = " LEFT JOIN generation_index gi ON gi.asset_id=a.id ".to_string();
     let mut where_parts = vec!["1=1".to_string()];
@@ -142,6 +160,11 @@ fn filter_parts(filter: &LibraryFilter) -> (String, String, Vec<SqlValue>) {
     if !query.is_empty(){
         let has_cjk=query.chars().any(|c|matches!(c,'\u{3400}'..='\u{9fff}'|'\u{3040}'..='\u{30ff}'|'\u{ac00}'..='\u{d7af}'));
         if has_cjk{
+            if let Some(trigram)=cjk_trigram_query(query){
+                joins.push_str(" JOIN asset_cjk_search ON asset_cjk_search.asset_id=a.id ");
+                where_parts.push("asset_cjk_search MATCH ?".into());
+                args.push(SqlValue::Text(trigram));
+            }
             for term in query.split_whitespace().filter(|x|!x.is_empty()){
                 where_parts.push("(a.name LIKE ? OR COALESCE(ps.prompt,'') LIKE ? OR COALESCE(ps.negative_prompt,'') LIKE ? OR COALESCE(ps.model,'') LIKE ? OR EXISTS(SELECT 1 FROM asset_tags sq_at JOIN tags sq_t ON sq_t.id=sq_at.tag_id WHERE sq_at.asset_id=a.id AND sq_t.name LIKE ?))".into());
                 let needle=SqlValue::Text(format!("%{}%",term));
