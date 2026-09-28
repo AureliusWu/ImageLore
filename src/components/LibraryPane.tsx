@@ -23,6 +23,12 @@ export function LibraryPane({assets,total,currentId,selected,loading,filter,face
   if(filter.denoise_min!=null||filter.denoise_max!=null)chips.push([`Denoise · ${filter.denoise_min??"…"}–${filter.denoise_max??"…"}`,()=>onFilter({...filter,denoise_min:null,denoise_max:null})]);
   if(filter.orientation)chips.push([`构图 · ${filter.orientation==="portrait"?"竖图":filter.orientation==="landscape"?"横图":"方图"}`,()=>onFilter({...filter,orientation:null})]);
 
+  const advancedCount=[
+    filter.metadata_type,filter.sampler,filter.scheduler,filter.seed,
+    filter.steps_min!=null||filter.steps_max!=null,filter.cfg_min!=null||filter.cfg_max!=null,
+    filter.denoise_min!=null||filter.denoise_max!=null,filter.orientation
+  ].filter(Boolean).length;
+
   const clearAdvanced=()=>onFilter({
     ...filter,metadata_type:null,sampler:null,scheduler:null,seed:null,steps_min:null,steps_max:null,
     cfg_min:null,cfg_max:null,denoise_min:null,denoise_max:null,orientation:null
@@ -48,8 +54,8 @@ export function LibraryPane({assets,total,currentId,selected,loading,filter,face
       <label><span>模型</span><select value={filter.model??""} onChange={e=>onFilter({...filter,model:e.target.value||null})}><option value="">全部模型</option>{facets.models.map(x=><option key={x.name} value={x.name}>{x.name} ({x.count})</option>)}</select></label>
     </div>
 
-    <details className="advanced-filter" open={chips.length>3}>
-      <summary><span>生成参数筛选</span><b>{Math.max(0,chips.length-3)||""}</b></summary>
+    <details className="advanced-filter" open={advancedCount>0}>
+      <summary><span>生成参数筛选</span><b>{advancedCount||""}</b></summary>
       <div className="advanced-filter-grid">
         <label><span>元数据来源</span><select value={filter.metadata_type??""} onChange={e=>onFilter({...filter,metadata_type:e.target.value||null})}><option value="">全部来源</option>{facets.metadata_types.map(x=><option key={x.name} value={x.name}>{x.name} ({x.count})</option>)}</select></label>
         <label><span>采样器</span><select value={filter.sampler??""} onChange={e=>onFilter({...filter,sampler:e.target.value||null})}><option value="">全部采样器</option>{facets.samplers.map(x=><option key={x.name} value={x.name}>{x.name} ({x.count})</option>)}</select></label>
