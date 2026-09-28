@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.20.0 — Windows Upgrade Reliability
+
+- Kept the Windows NSIS install identity stable (`ImageLore`, current-user mode, same Start Menu folder) so a newer installer replaces the existing installation instead of creating a side-by-side copy.
+- Disabled Windows installer downgrades to prevent an older setup EXE from replacing a newer installation.
+- Moved persistent data to `%LOCALAPPDATA%\\app.imagelore.desktop`, separating the library database, backups, semantic models and caches from the executable install directory.
+- Added first-launch migration from the legacy `%LOCALAPPDATA%\\ImageLore` data layout; the database/WAL files, backups and local models are preserved, while derived preview cache is rebuilt.
+- Updated the local asset-protocol scope to the new cache location.
+- Added a Windows release smoke test that builds v0.19.0 and the current installer, performs a real silent in-place upgrade, then verifies one installed-app entry, the same install location, the new executable version, shortcut target, and preservation/migration of a seeded library.
+- Windows release artifacts are uploaded only after the upgrade smoke test passes.
+
 ## 0.19.0 — Search Scale
 
 - Added Migration v7 with a local FTS5 trigram candidate index for CJK-heavy libraries.

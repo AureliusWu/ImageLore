@@ -18,6 +18,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -48,6 +50,33 @@ jobs:
 
       - name: Build NSIS setup EXE
         run: npm run tauri:build
+
+      - name: Build v0.19.0 upgrade baseline
+        shell: pwsh
+        run: |
+          $baseline = Join-Path $env:RUNNER_TEMP "imagelore-v0.19.0"
+          if (Test-Path $baseline) { Remove-Item $baseline -Recurse -Force }
+          git worktree add --detach "$baseline" 23959672b340524b6db9cf97298a4118f4668efb
+          Push-Location $baseline
+          npm ci
+          npm run tauri:build
+          Pop-Location
+          $previous = Get-ChildItem "$baseline/src-tauri/target/release/bundle/nsis/*.exe" | Select-Object -First 1
+          if (-not $previous) { throw "v0.19.0 baseline installer not found" }
+          "IMAGELore_PREVIOUS_INSTALLER=$($previous.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "IMAGELore_PREVIOUS_SCHEMA=$baseline/src-tauri/schema.sql" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Verify in-place upgrade from v0.19.0
+        shell: pwsh
+        run: |
+          $current = Get-ChildItem "src-tauri/target/release/bundle/nsis/*.exe" | Select-Object -First 1
+          if (-not $current) { throw "Current NSIS installer not found" }
+          ./scripts/test_windows_upgrade.ps1 `
+            -PreviousInstaller "$env:IMAGELore_PREVIOUS_INSTALLER" `
+            -CurrentInstaller "$($current.FullName)" `
+            -PreviousSchema "$env:IMAGELore_PREVIOUS_SCHEMA" `
+            -PreviousVersion "0.19.0" `
+            -CurrentVersion "$((Get-Content VERSION).Trim())"
 
       - name: Upload Windows installer artifact
         uses: actions/upload-artifact@v4

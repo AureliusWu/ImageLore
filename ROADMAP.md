@@ -90,6 +90,14 @@
 - Prompt / Model / Tag / 文件名变化与删除保持搜索索引一致
 - 50k 图库 CJK 索引搜索性能 smoke test
 
+## v0.20.0 — Windows Upgrade Reliability ✅
+- NSIS 安装身份与 currentUser 安装模式保持稳定，升级覆盖同一安装记录
+- 禁止安装器降级覆盖
+- 用户数据库 / 备份 / 模型 / 缓存迁出程序安装目录
+- v0.19.x 旧数据首次启动自动迁移
+- Windows Release 实机式 v0.19.0 → 当前版本覆盖升级 smoke test
+- 验证唯一安装项、原安装目录、EXE 版本、快捷方式与数据库保留
+
 ## v1.0.0 — Stable Local Library
 - Windows 代码签名与自动更新
 - 启动故障恢复与 rotating logs
