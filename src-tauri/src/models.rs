@@ -256,6 +256,8 @@ pub struct SemanticStatus {
     pub model_id:String,
     pub enabled:bool,
     pub model_ready:bool,
+    pub vision_ready:bool,
+    pub text_ready:bool,
     pub indexed:i64,
     pub total:i64,
     pub stale:i64,
