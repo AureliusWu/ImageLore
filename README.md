@@ -44,7 +44,7 @@ ImageLore 是一个 local-first 的 AI 视觉生成记忆库，用来保存图�
 - Model Alias / normalization
 - 保存筛选视图与 Library Health
 - .imagelore.json Sidecar
-- Windows NSIS 一键安装包
+- Windows NSIS 一键安装包；v0.20.0 起支持经过 CI 实测的旧版原位覆盖升级
 
 ## 数据位置
 
@@ -65,6 +65,8 @@ ImageLore 是一个 local-first 的 AI 视觉生成记忆库，用来保存图�
 `%LOCALAPPDATA%\ImageLore\models\`
 
 原始图片始终保留在原位置，不会复制进 SQLite；从 ImageLore 删除记录也不会删除原始图片。
+
+从 v0.19.x 或更早版本升级到 v0.20.0 时，旧 `%LOCALAPPDATA%\\ImageLore` 中的数据库、备份与本地语义模型会在首次启动时自动迁移到新的独立数据目录；安装程序本身仍原位覆盖旧版本。
 
 ## 快捷键
 
