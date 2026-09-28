@@ -53,7 +53,8 @@
         ],
         "displayLanguageSelector": false,
         "startMenuFolder": "ImageLore"
-      }
+      },
+      "allowDowngrades": false
     },
     "icon": [
       "icons/icon.ico",
