@@ -298,25 +298,34 @@ pub fn asset_exists_by_fingerprint(conn:&Connection,fingerprint:&str)->Result<Op
 
 pub fn duplicate_groups(conn:&Connection)->Result<Vec<crate::models::DuplicateGroup>,String>{
     let mut st=conn.prepare(
-        "SELECT fingerprint,COUNT(*) FROM assets WHERE fingerprint<>'' GROUP BY fingerprint HAVING COUNT(*)>1 ORDER BY COUNT(*) DESC"
+        "SELECT a.fingerprint,d.n,a.id,a.name
+         FROM assets a
+         JOIN (
+           SELECT fingerprint,COUNT(*) AS n
+           FROM assets
+           WHERE fingerprint<>''
+           GROUP BY fingerprint
+           HAVING COUNT(*)>1
+         ) d ON d.fingerprint=a.fingerprint
+         ORDER BY d.n DESC,a.fingerprint,a.id"
     ).map_err(|e|e.to_string())?;
-    let fingerprints:Vec<(String,i64)>=st.query_map([],|r|Ok((r.get(0)?,r.get(1)?)))
+    let rows:Vec<(String,i64,i64,String)>=st.query_map([],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))
         .map_err(|e|e.to_string())?.filter_map(Result::ok).collect();
+
     let mut groups=Vec::new();
-    for(fingerprint,count)in fingerprints{
-        let mut item_st=conn.prepare("SELECT id,name FROM assets WHERE fingerprint=?1 ORDER BY id").map_err(|e|e.to_string())?;
-        let items:Vec<(i64,String)>=item_st.query_map(params![fingerprint.clone()],|r|Ok((r.get(0)?,r.get(1)?)))
-            .map_err(|e|e.to_string())?.filter_map(Result::ok).collect();
-        groups.push(crate::models::DuplicateGroup{
-            fingerprint,
-            count,
-            asset_ids:items.iter().map(|x|x.0).collect(),
-            names:items.into_iter().map(|x|x.1).collect(),
-        });
+    for(fingerprint,count,id,name)in rows{
+        match groups.last_mut(){
+            Some(group) if group.fingerprint==fingerprint=>{
+                group.asset_ids.push(id);
+                group.names.push(name);
+            }
+            _=>groups.push(crate::models::DuplicateGroup{
+                fingerprint,count,asset_ids:vec![id],names:vec![name],
+            })
+        }
     }
     Ok(groups)
 }
-
 
 #[cfg(test)]
 mod tests{
