@@ -198,9 +198,21 @@ export default function App(){
     return()=>{cancelled=true};
   },[current?.id,compareRecord?.id]);
 
+  const semanticJob=useSemanticJob(async()=>{
+    await refreshSemanticStatus();
+    if(searchMode==="semantic")await refresh(current?.id);
+  },setStatus);
+  const{start:startSemanticIndex,cancel:cancelSemanticIndex,active:semanticActive,progress:semanticProgress}=semanticJob;
+
   const importDone=useCallback(async(result:ImportSummary)=>{
-    await Promise.all([refreshFacets(),refreshSources()]);await refresh(result.last_id??undefined);
-  },[refreshFacets,refreshSources,refresh]);
+    await Promise.all([refreshFacets(),refreshSources()]);
+    await refresh(result.last_id??undefined);
+    const semantic=await api.semanticStatus().catch(()=>null);
+    if(semantic){
+      setSemanticStatus(semantic);
+      if(semantic.enabled&&semantic.stale>0&&!semanticActive)void startSemanticIndex();
+    }
+  },[refreshFacets,refreshSources,refresh,semanticActive,startSemanticIndex]);
   const importJob=useImportJob(importDone,setStatus);
   const{start:startImportJob,cancel:cancelImportJob,active:importActive,progress:importProgress}=importJob;
   useEffect(()=>{
@@ -212,7 +224,11 @@ export default function App(){
       if(ids.length)void startImportJob("正在同步资料源目录…",()=>api.startSyncSources(ids));
     }).catch(e=>setStatus("来源目录读取失败："+String(e)));
   },[startImportJob]);
-  useCloseGuard(flushEditor,importActive?cancelImportJob:undefined);
+  const cancelBackground=useCallback(async()=>{
+    if(importActive)await cancelImportJob();
+    if(semanticActive)await cancelSemanticIndex();
+  },[importActive,semanticActive,cancelImportJob,cancelSemanticIndex]);
+  useCloseGuard(flushEditor,importActive||semanticActive?cancelBackground:undefined);
   const importImmediate=useCallback(async(label:string,task:()=>Promise<ImportSummary>)=>{
     await flushEditor();setStatus(label);
     try{
@@ -270,8 +286,8 @@ export default function App(){
   const repairMissing=async()=>{if(!isTauri){setStatus("此功能仅在桌面版中可用");return}const root=await open({directory:true,multiple:false});if(!root||Array.isArray(root))return;const n=await api.relocateMissing(root);setStatus(`已重新定位 ${n} 条记录`);await refresh()};
   const compare=async(id:number)=>setCompareRecord(await api.get(id).catch(()=>null));
   const refreshManager=useCallback(async()=>{
-    const[b,d,a,s,h,sources]=await Promise.all([api.backups(),api.duplicateGroups(),api.modelAliases(),api.savedFilters(),api.libraryHealth(),api.sourceFolders()]);
-    setBackups(b);setDuplicates(d);setModelAliases(a);setSavedFilters(s);setHealth(h);setSourceFolders(sources);await refreshFacets();
+    const[b,d,a,s,h,sources,semantic]=await Promise.all([api.backups(),api.duplicateGroups(),api.modelAliases(),api.savedFilters(),api.libraryHealth(),api.sourceFolders(),api.semanticStatus()]);
+    setBackups(b);setDuplicates(d);setModelAliases(a);setSavedFilters(s);setHealth(h);setSourceFolders(sources);setSemanticStatus(semantic);await refreshFacets();
   },[refreshFacets]);
   const openManager=async()=>{try{await flushEditor();await refreshManager();setManagerOpen(true)}catch(e){setStatus("打开资料库管理失败："+String(e))}};
   const createBackup=async()=>{try{setStatus("正在备份资料库…");await api.createBackup();await refreshManager();setStatus("资料库备份完成")}catch(e){setStatus("资料库备份失败："+String(e))}};
@@ -304,6 +320,34 @@ export default function App(){
     await flushEditor();
     await startImportJob(ids.length===1?"正在同步来源目录…":"正在同步全部来源目录…",()=>api.startSyncSources(ids));
   };
+  const changeSearchMode=(mode:SearchMode)=>{
+    setSearchMode(mode);
+    if(mode==="keyword"){setSimilarSource(null);setSemanticScores(new Map())}
+  };
+  const changeSearchQuery=(query:string)=>{
+    if(similarSource)setSimilarSource(null);
+    setFilter(f=>({...f,query}));
+  };
+  const findSimilar=()=>{
+    if(!current)return;
+    setFilter(f=>({...f,query:""}));
+    setSearchMode("semantic");
+    setSimilarSource({id:current.id,name:current.name});
+    setStatus("正在查找视觉相似图片…");
+  };
+  const clearSimilar=()=>{setSimilarSource(null);setSemanticScores(new Map())};
+  const rebuildSemantic=async()=>{await startSemanticIndex()};
+  const clearSemantic=async()=>{
+    if(!window.confirm("清空语义索引？原图和资料库记录不会受到影响。"))return;
+    if(semanticActive)await cancelSemanticIndex();
+    await api.clearSemanticIndex();setSimilarSource(null);setSemanticScores(new Map());await refreshSemanticStatus();await refresh();setStatus("语义索引已清空");
+  };
+  const deleteSemanticModels=async()=>{
+    if(!window.confirm("删除本地语义模型缓存？下次使用语义功能时会重新下载。"))return;
+    if(semanticActive)await cancelSemanticIndex();
+    await api.deleteSemanticModels();await refreshSemanticStatus();setStatus("本地语义模型缓存已删除");
+  };
+
   const setSession=async(sessionId:number|null)=>{if(!current)return;try{await api.setAssetSession(current.id,sessionId,assetSession?.asset_note||"");setAssetSession(await api.assetSession(current.id));await refreshSessions();setStatus(sessionId?"已加入生成会话":"已移出生成会话")}catch(e){setStatus("生成会话更新失败："+String(e))}};
   const selectedIds=()=>selected.size?[...selected]:current?[current.id]:[];
   const batchFavorite=async(favorite:boolean)=>{
@@ -368,16 +412,16 @@ export default function App(){
   return <div className="app-shell">
     <div className="aero-background" aria-hidden="true"><i className="cloud a"/><i className="cloud b"/><i className="bubble a"/><i className="bubble b"/></div>
     {drop.active?<div className="drop-overlay" aria-live="polite"><div className="drop-card"><span className="drop-orb">⇩</span><strong>松开鼠标即可导入</strong><p>{drop.count?`检测到 ${drop.count} 个项目`:"正在识别拖入内容"} · 支持图片和文件夹</p><small>文件夹会递归扫描；已存在的图片会自动跳过</small></div></div>:null}
-    <AppHeader version={version} query={filter.query} onQuery={query=>setFilter(f=>({...f,query}))} onImport={chooseImages} onFolder={chooseFolder}/>
+    <AppHeader version={version} query={filter.query} mode={searchMode} similarSourceName={similarSource?.name} onMode={changeSearchMode} onQuery={changeSearchQuery} onClearSimilar={clearSimilar} onImport={chooseImages} onFolder={chooseFolder}/>
     <main className="workspace" style={{gridTemplateColumns:`${leftWidth}px 8px minmax(360px,1fr) 8px ${rightWidth}px`}}>
-      <LibraryPane assets={assets} total={total} currentId={current?.id} selected={selected} loading={loading} filter={filter} facets={facets} savedFilters={savedFilters} sessions={sessions} onFilter={setFilter} onAsset={onAsset} onLoadMore={loadMore} onBatchTags={()=>{setDialogText("");setModal({kind:"batch-tags"})}} onBatchFavorite={batchFavorite} onBatchRescan={batchRescan} onBatchSession={batchSession} onCollection={openCollection} onClearSelection={()=>setSelected(new Set())} onRefreshMissing={refreshMissing} onManage={openManager} onSaveView={saveCurrentView} onApplySavedView={applySavedView}/>
+      <LibraryPane assets={assets} total={total} currentId={current?.id} selected={selected} loading={loading} scores={searchMode==="semantic"?semanticScores:undefined} filter={filter} facets={facets} savedFilters={savedFilters} sessions={sessions} onFilter={setFilter} onAsset={onAsset} onLoadMore={loadMore} onBatchTags={()=>{setDialogText("");setModal({kind:"batch-tags"})}} onBatchFavorite={batchFavorite} onBatchRescan={batchRescan} onBatchSession={batchSession} onCollection={openCollection} onClearSelection={()=>setSelected(new Set())} onRefreshMissing={refreshMissing} onManage={openManager} onSaveView={saveCurrentView} onApplySavedView={applySavedView}/>
       <div className="splitter" onPointerDown={drag("left")}/>
       <PreviewPane asset={current} src={preview} mode={previewMode} onMode={setPreviewMode} onImport={chooseImages} onOpen={()=>current&&api.openExternal(current.id)} onFolder={()=>current&&api.openFolder(current.id)}/>
       <div className="splitter" onPointerDown={drag("right")}/>
-      <InspectorPane asset={current} tab={tab} onTab={setTab} prompt={prompt} onPrompt={setPrompt} negative={negative} onNegative={setNegative} model={model} onModel={setModel} tagsText={tagsText} onTagsText={setTagsText} lineage={lineage} compareRecord={compareRecord} compareParentSrc={compareParentSrc} compareCurrentSrc={compareCurrentSrc} sessions={sessions} assetSession={assetSession} onCompare={compare} onCopy={copyPrompt} onSaveRevision={saveRevision} onHistory={openHistory} onFavorite={toggleFavorite} onRescan={rescan} onSidecar={exportSidecar} onCollection={openCollection} onRemove={()=>setModal({kind:"remove"})} onImportDerivative={importDerivative} onLinkParent={openParentPicker} onSetSession={setSession} onCreateSession={createSession} onEditSessionNote={editSessionNote} onEditRelationNote={editRelationNote} promptRef={promptRef}/>
+      <InspectorPane asset={current} tab={tab} onTab={setTab} prompt={prompt} onPrompt={setPrompt} negative={negative} onNegative={setNegative} model={model} onModel={setModel} tagsText={tagsText} onTagsText={setTagsText} lineage={lineage} compareRecord={compareRecord} compareParentSrc={compareParentSrc} compareCurrentSrc={compareCurrentSrc} sessions={sessions} assetSession={assetSession} onCompare={compare} onCopy={copyPrompt} onSaveRevision={saveRevision} onHistory={openHistory} onFavorite={toggleFavorite} onFindSimilar={findSimilar} onRescan={rescan} onSidecar={exportSidecar} onCollection={openCollection} onRemove={()=>setModal({kind:"remove"})} onImportDerivative={importDerivative} onLinkParent={openParentPicker} onSetSession={setSession} onCreateSession={createSession} onEditSessionNote={editSessionNote} onEditRelationNote={editRelationNote} promptRef={promptRef}/>
     </main>
-    <footer className="statusbar glass-surface"><span className={`runtime-dot ${isTauri?"native":"preview"}`}/><strong>{isTauri?"桌面版":"浏览器预览"}</strong><span>v{version}</span><span className="status-message">{status}</span>{importActive?<><progress max={Math.max(1,importProgress.total)} value={importProgress.processed}/><button onClick={cancelImportJob}>取消导入</button></>:null}<span>已加载 {assets.length}/{total}</span><button onClick={repairMissing} title="根据文件指纹查找移动后的文件">修复缺失文件</button><span className="shortcut">F6 提示词 · F7 预览 · Ctrl+S 保存版本</span></footer>
-    <LibraryManager open={managerOpen} backups={backups} tags={facets.tags} collections={facets.collections} duplicates={duplicates} modelAliases={modelAliases} savedFilters={savedFilters} sourceFolders={sourceFolders} sourceSyncing={importActive} health={health} onClose={()=>setManagerOpen(false)} onBackup={createBackup} onRestore={restoreBackup} onRenameTag={renameTag} onDeleteTag={deleteTag} onRenameCollection={renameCollection} onDeleteCollection={deleteCollection} onUpsertModelAlias={upsertModelAlias} onDeleteModelAlias={deleteModelAlias} onDeleteSavedFilter={deleteSavedView} onAddSourceFolder={addSourceFolder} onRemoveSourceFolder={removeSourceFolder} onToggleSourceAutoSync={toggleSourceAutoSync} onSyncSourceFolders={syncSourceFolders}/>
+    <footer className="statusbar glass-surface"><span className={`runtime-dot ${isTauri?"native":"preview"}`}/><strong>{isTauri?"桌面版":"浏览器预览"}</strong><span>v{version}</span><span className="status-message">{status}</span>{importActive?<><progress max={Math.max(1,importProgress.total)} value={importProgress.processed}/><button onClick={cancelImportJob}>取消导入</button></>:null}{semanticActive?<><progress max={Math.max(1,semanticProgress.total)} value={semanticProgress.processed}/><button onClick={cancelSemanticIndex}>取消索引</button></>:null}<span>已加载 {assets.length}/{total}</span><button onClick={repairMissing} title="根据文件指纹查找移动后的文件">修复缺失文件</button><span className="shortcut">F6 提示词 · F7 预览 · Ctrl+S 保存版本</span></footer>
+    <LibraryManager open={managerOpen} backups={backups} tags={facets.tags} collections={facets.collections} duplicates={duplicates} modelAliases={modelAliases} savedFilters={savedFilters} sourceFolders={sourceFolders} sourceSyncing={importActive} health={health} semanticStatus={semanticStatus} semanticIndexing={semanticActive} semanticProgress={semanticProgress} onRebuildSemantic={rebuildSemantic} onCancelSemantic={cancelSemanticIndex} onClearSemantic={clearSemantic} onDeleteSemanticModels={deleteSemanticModels} onClose={()=>setManagerOpen(false)} onBackup={createBackup} onRestore={restoreBackup} onRenameTag={renameTag} onDeleteTag={deleteTag} onRenameCollection={renameCollection} onDeleteCollection={deleteCollection} onUpsertModelAlias={upsertModelAlias} onDeleteModelAlias={deleteModelAlias} onDeleteSavedFilter={deleteSavedView} onAddSourceFolder={addSourceFolder} onRemoveSourceFolder={removeSourceFolder} onToggleSourceAutoSync={toggleSourceAutoSync} onSyncSourceFolders={syncSourceFolders}/>
     <ParentPicker open={parentOpen} query={parentQuery} results={parentResults} choice={parentChoice} loading={parentLoading} onQuery={setParentQuery} onChoice={setParentChoice} onClose={()=>setParentOpen(false)} onConfirm={confirmParent}/>
     <AppDialogs modal={modal} assets={assets} currentId={current?.id} text={dialogText} setText={setDialogText} choice={dialogChoice} setChoice={setDialogChoice} onClose={()=>setModal(null)} onConfirm={confirmModal}/>
   </div>
