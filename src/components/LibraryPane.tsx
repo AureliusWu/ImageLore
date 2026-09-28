@@ -4,8 +4,8 @@ import type { AssetSummary,GenerationSession,LibraryFacets,LibraryFilter,Library
 const views:Array<[LibraryView,string,string]>=[["all","全部","▦"],["favorites","收藏","★"],["recent","最近","◷"],["missing","缺失","!"]];
 const numberValue=(value:string)=>value.trim()===""?null:Number(value);
 
-export function LibraryPane({assets,total,currentId,selected,loading,filter,facets,savedFilters,sessions,onFilter,onAsset,onLoadMore,onBatchTags,onBatchFavorite,onBatchRescan,onBatchSession,onCollection,onClearSelection,onRefreshMissing,onManage,onSaveView,onApplySavedView}:{
-  assets:AssetSummary[];total:number;currentId?:number;selected:Set<number>;loading:boolean;filter:LibraryFilter;facets:LibraryFacets;savedFilters:SavedFilter[];sessions:GenerationSession[];
+export function LibraryPane({assets,total,currentId,selected,loading,scores,filter,facets,savedFilters,sessions,onFilter,onAsset,onLoadMore,onBatchTags,onBatchFavorite,onBatchRescan,onBatchSession,onCollection,onClearSelection,onRefreshMissing,onManage,onSaveView,onApplySavedView}:{
+  assets:AssetSummary[];total:number;currentId?:number;selected:Set<number>;loading:boolean;scores?:Map<number,number>;filter:LibraryFilter;facets:LibraryFacets;savedFilters:SavedFilter[];sessions:GenerationSession[];
   onFilter:(next:LibraryFilter)=>void;onAsset:(asset:AssetSummary,e:React.MouseEvent)=>void;onLoadMore:()=>void;
   onBatchTags:()=>void;onBatchFavorite:(favorite:boolean)=>void;onBatchRescan:()=>void;onBatchSession:(sessionId:number|null)=>void;
   onCollection:()=>void;onClearSelection:()=>void;onRefreshMissing:()=>void;onManage:()=>void;onSaveView:()=>void;onApplySavedView:(view:SavedFilter)=>void;
@@ -76,6 +76,6 @@ export function LibraryPane({assets,total,currentId,selected,loading,filter,face
 
     {selected.size>1?<div className="selection-bar generation-batch"><strong>已选择 {selected.size} 项</strong><button onClick={onBatchTags}>标签</button><button onClick={()=>onBatchFavorite(true)}>收藏</button><button onClick={()=>onBatchFavorite(false)}>取消收藏</button><button onClick={onBatchRescan}>重读元数据</button><select defaultValue="" onChange={e=>{if(e.target.value!=="")onBatchSession(e.target.value==="none"?null:Number(e.target.value));e.currentTarget.value=""}}><option value="">分配 Session…</option><option value="none">移出 Session</option>{sessions.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select><button onClick={onCollection}>集合</button><button onClick={onClearSelection}>取消</button></div>:null}
 
-    {assets.length?<AssetGrid assets={assets} total={total} currentId={currentId} selected={selected} loading={loading} onAsset={onAsset} onLoadMore={onLoadMore}/>:<div className="library-empty"><span className="empty-orb">✦</span><strong>没有符合条件的生成记录</strong><p>可以清除筛选，或导入新的图片与生成元数据。</p></div>}
+    {assets.length?<AssetGrid assets={assets} total={total} currentId={currentId} selected={selected} loading={loading} scores={scores} onAsset={onAsset} onLoadMore={onLoadMore}/>:<div className="library-empty"><span className="empty-orb">✦</span><strong>没有符合条件的生成记录</strong><p>可以清除筛选，或导入新的图片与生成元数据。</p></div>}
   </aside>
 }
