@@ -1,4 +1,4 @@
-# ImageLore v0.19.0
+# ImageLore v0.20.0
 
 ![ImageLore 应用预览](docs/og.svg)
 
