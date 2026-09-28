@@ -249,3 +249,35 @@ pub struct SourceFolder {
     pub created_at:i64,
     pub updated_at:i64,
 }
+
+
+#[derive(Debug,Clone,Serialize)]
+pub struct SemanticStatus {
+    pub model_id:String,
+    pub enabled:bool,
+    pub model_ready:bool,
+    pub indexed:i64,
+    pub total:i64,
+    pub stale:i64,
+    pub model_bytes:u64,
+    pub index_bytes:u64,
+}
+
+#[derive(Debug,Clone,Serialize)]
+pub struct SemanticHit {
+    pub asset:AssetSummary,
+    pub score:f32,
+}
+
+#[derive(Debug,Clone,Serialize)]
+pub struct SemanticProgress {
+    pub job_id:u64,
+    pub processed:usize,
+    pub total:usize,
+    pub indexed:i64,
+    pub skipped:i64,
+    pub failed:i64,
+    pub current_name:String,
+    pub done:bool,
+    pub cancelled:bool,
+}
