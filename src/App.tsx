@@ -84,7 +84,7 @@ export default function App(){
   const refreshSemanticStatus=useCallback(()=>api.semanticStatus().then(setSemanticStatus).catch(()=>setSemanticStatus(null)),[]);
   const onEditorSaved=useCallback((a:AssetRecord)=>setCurrent(prev=>prev?.id===a.id?a:prev),[]);
   const editor=useEditorDraft(current,onEditorSaved,refreshFacets,setStatus);
-  const{prompt,negative,model,tagsText,setPrompt,setNegative,setModel,setTagsText,flush:flushEditor,load:loadEditor}=editor;
+  const{prompt,negative,model,tagsText,setPrompt,setNegative,setModel,setTagsText,flush:flushEditor,saveRevision:saveEditorRevision,load:loadEditor}=editor;
 
   const selectRecord=useCallback(async(id:number,selection?:Set<number>)=>{
     const seq=++selectSeq.current;
@@ -278,9 +278,13 @@ export default function App(){
     if(e.ctrlKey||e.metaKey){next=new Set(selected);next.has(asset.id)?next.delete(asset.id):next.add(asset.id)}
     await selectRecord(asset.id,next);
   };
+  const openAssetFolder=async(asset:AssetSummary)=>{
+    if(asset.missing){setStatus("文件缺失，无法打开所在位置");return}
+    try{await api.openFolder(asset.id);setStatus(`已定位：${asset.name}`)}catch(e){setStatus("打开文件所在位置失败："+String(e))}
+  };
   const toggleFavorite=async()=>{if(!current)return;const a=await api.toggleFavorite(current.id);setCurrent(a);setAssets(xs=>xs.map(x=>x.id===a.id?{...x,favorite:a.favorite,updated_at:a.updated_at}:x))};
   const copyPrompt=()=>{if(current)void navigator.clipboard.writeText(prompt).then(()=>setStatus("提示词已复制"))};
-  const saveRevision=async()=>{if(!current)return;await flushEditor();await api.addRevision(current.id,"");setStatus("提示词版本已保存")};
+  const saveRevision=async()=>{if(!current)return;await saveEditorRevision("")};
   const openHistory=async()=>{if(current){setDialogChoice("");setModal({kind:"history",revisions:await api.revisions(current.id)})}};
   const openCollection=async()=>{setDialogChoice("");setDialogText("");setModal({kind:"collection",collections:await api.collections()})};
   const rescan=async()=>{if(!current)return;await flushEditor();const a=await api.rescan(current.id);setCurrent(a);loadEditor(a);setStatus("元数据已刷新")};
@@ -417,7 +421,7 @@ export default function App(){
     {drop.active?<div className="drop-overlay" aria-live="polite"><div className="drop-card"><span className="drop-orb">⇩</span><strong>松开鼠标即可导入</strong><p>{drop.count?`检测到 ${drop.count} 个项目`:"正在识别拖入内容"} · 支持图片和文件夹</p><small>文件夹会递归扫描；已存在的图片会自动跳过</small></div></div>:null}
     <AppHeader version={version} query={filter.query} mode={searchMode} similarSourceName={similarSource?.name} onMode={changeSearchMode} onQuery={changeSearchQuery} onClearSimilar={clearSimilar} onImport={chooseImages} onFolder={chooseFolder}/>
     <main className="workspace" style={{gridTemplateColumns:`${leftWidth}px 8px minmax(360px,1fr) 8px ${rightWidth}px`}}>
-      <LibraryPane assets={assets} total={total} currentId={current?.id} selected={selected} loading={loading} scores={searchMode==="semantic"?semanticScores:undefined} filter={filter} facets={facets} savedFilters={savedFilters} sessions={sessions} onFilter={setFilter} onAsset={onAsset} onLoadMore={loadMore} onBatchTags={()=>{setDialogText("");setModal({kind:"batch-tags"})}} onBatchFavorite={batchFavorite} onBatchRescan={batchRescan} onBatchSession={batchSession} onCollection={openCollection} onClearSelection={()=>setSelected(new Set())} onRefreshMissing={refreshMissing} onManage={openManager} onSaveView={saveCurrentView} onApplySavedView={applySavedView}/>
+      <LibraryPane assets={assets} total={total} currentId={current?.id} selected={selected} loading={loading} scores={searchMode==="semantic"?semanticScores:undefined} filter={filter} facets={facets} savedFilters={savedFilters} sessions={sessions} onFilter={setFilter} onAsset={onAsset} onOpenAssetFolder={openAssetFolder} onLoadMore={loadMore} onBatchTags={()=>{setDialogText("");setModal({kind:"batch-tags"})}} onBatchFavorite={batchFavorite} onBatchRescan={batchRescan} onBatchSession={batchSession} onCollection={openCollection} onClearSelection={()=>setSelected(new Set())} onRefreshMissing={refreshMissing} onManage={openManager} onSaveView={saveCurrentView} onApplySavedView={applySavedView}/>
       <div className="splitter" onPointerDown={drag("left")}/>
       <PreviewPane asset={current} src={preview} mode={previewMode} onMode={setPreviewMode} onImport={chooseImages} onOpen={()=>current&&api.openExternal(current.id)} onFolder={()=>current&&api.openFolder(current.id)}/>
       <div className="splitter" onPointerDown={drag("right")}/>
