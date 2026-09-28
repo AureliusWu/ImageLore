@@ -1,5 +1,6 @@
 export type LibraryView = "all" | "favorites" | "recent" | "missing";
 export type RelationType = "derived_from" | "variation" | "edit" | "upscale" | "reference";
+export type SearchMode = "keyword" | "semantic";
 
 export interface LibraryFilter {
   query:string;view:LibraryView;tag?:string|null;model?:string|null;collection_id?:number|null;
@@ -45,4 +46,15 @@ export interface LibraryHealth {
 
 export interface SourceFolder {
   id:number;path:string;name:string;auto_sync:boolean;last_scan_at:number;created_at:number;updated_at:number;
+}
+
+
+export interface SemanticStatus {
+  model_id:string;enabled:boolean;model_ready:boolean;vision_ready:boolean;text_ready:boolean;
+  indexed:number;total:number;stale:number;model_bytes:number;index_bytes:number;
+}
+export interface SemanticHit { asset:AssetSummary;score:number; }
+export interface SemanticProgress {
+  job_id:number;processed:number;total:number;indexed:number;skipped:number;failed:number;
+  current_name:string;done:boolean;cancelled:boolean;
 }

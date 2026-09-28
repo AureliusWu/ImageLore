@@ -25,12 +25,15 @@ con.execute("INSERT INTO model_aliases(alias,canonical,created_at,updated_at) VA
 con.execute("INSERT INTO saved_filters(name,filter_json,created_at,updated_at) VALUES(?,?,?,?)",('Flux','{"query":"","view":"all","model":"Flux.1 Dev"}',now,now))
 con.execute("INSERT INTO source_folders(path,name,auto_sync,last_scan_at,created_at,updated_at) VALUES(?,?,?,?,?,?)",('D:/AI/outputs','outputs',1,0,now,now))
 con.execute("INSERT INTO generation_index(asset_id,seed,steps,sampler,scheduler,cfg_scale,denoise) VALUES(?,?,?,?,?,?,?)",(aid,'4120039',28,'DPM++ 2M','karras',5.5,0.72))
+con.execute("INSERT INTO semantic_embeddings(asset_id,model_id,dimensions,vector,fingerprint,indexed_at) VALUES(?,?,?,?,?,?)",(aid,'clip-vit-b32-qdrant-v1',2,b'12345678','schema-fp',now))
 con.commit()
-assert con.execute("select value from app_meta where key='schema_version'").fetchone()[0]=='5'
+assert con.execute("select value from app_meta where key='schema_version'").fetchone()[0]=='6'
 assert con.execute("select portable_id from assets where id=?",(aid,)).fetchone()[0]=='il-schema-smoke'
 assert con.execute("select count(*) from generation_sessions").fetchone()[0]==1
 assert con.execute("select count(*) from saved_filters").fetchone()[0]==1
 assert con.execute("select auto_sync from source_folders").fetchone()[0]==1
 assert con.execute("select seed from generation_index where asset_id=?",(aid,)).fetchone()[0]=='4120039'
+assert con.execute("select model_id from semantic_embeddings where asset_id=?",(aid,)).fetchone()[0]=='clip-vit-b32-qdrant-v1'
+assert con.execute("select value from semantic_settings where key='enabled'").fetchone()[0]=='0'
 con.close()
-print('ImageLore v5 fresh schema: PASS')
+print('ImageLore v6 fresh schema: PASS')

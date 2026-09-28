@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS app_meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
-INSERT OR IGNORE INTO app_meta(key,value) VALUES ('schema_version','5');
+INSERT OR IGNORE INTO app_meta(key,value) VALUES ('schema_version','6');
 
 CREATE TABLE IF NOT EXISTS assets (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -126,6 +126,26 @@ CREATE INDEX IF NOT EXISTS idx_generation_sampler ON generation_index(sampler CO
 CREATE INDEX IF NOT EXISTS idx_generation_scheduler ON generation_index(scheduler COLLATE NOCASE) WHERE scheduler<>'';
 CREATE INDEX IF NOT EXISTS idx_generation_steps ON generation_index(steps) WHERE steps IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_generation_cfg ON generation_index(cfg_scale) WHERE cfg_scale IS NOT NULL;
+
+
+CREATE TABLE IF NOT EXISTS semantic_embeddings (
+  asset_id INTEGER PRIMARY KEY,
+  model_id TEXT NOT NULL,
+  dimensions INTEGER NOT NULL,
+  vector BLOB NOT NULL,
+  fingerprint TEXT NOT NULL DEFAULT '',
+  indexed_at INTEGER NOT NULL,
+  FOREIGN KEY(asset_id) REFERENCES assets(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_semantic_model ON semantic_embeddings(model_id, asset_id);
+CREATE INDEX IF NOT EXISTS idx_semantic_fingerprint ON semantic_embeddings(fingerprint) WHERE fingerprint<>'';
+
+CREATE TABLE IF NOT EXISTS semantic_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+INSERT OR IGNORE INTO semantic_settings(key,value) VALUES ('enabled','0');
+INSERT OR IGNORE INTO semantic_settings(key,value) VALUES ('model_id','clip-vit-b32-qdrant-v1');
 
 
 CREATE TABLE IF NOT EXISTS generation_sessions (

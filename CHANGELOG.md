@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.18.0 — Semantic Recall
+
+- Added Migration v6 with a rebuildable local semantic embedding index keyed by asset fingerprint and embedding model.
+- Added local CLIP ViT-B/32 image and text encoders through FastEmbed for semantic text-to-image retrieval and image-to-image similarity.
+- Added keyword / semantic search modes, semantic similarity ranking, and an Inspector action to find images visually similar to the current asset.
+- Combined semantic retrieval with the existing Generation Explorer filters so model, collection, metadata source, orientation and generation parameters can narrow semantic results.
+- Added an AI Index manager with coverage, stale-item count, model/index disk usage, incremental rebuild progress, cancellation, index clearing and model-cache removal.
+- Semantic indexing is incremental: unchanged fingerprints are reused, while newly imported or externally changed images are re-embedded when semantic indexing is enabled.
+- Generalized the background job registry so import/source-sync and semantic indexing share consistent job IDs and cancellation primitives.
+- Added race-safe semantic progress handling and close-time cancellation that waits for active background work to finish.
+- Added a 50,000-record semantic linear-scan smoke test alongside existing FTS and generation-parameter performance coverage.
+- Semantic embeddings remain derived, disposable data; original images, metadata, Sidecars and user-authored library state remain authoritative.
+
 ## 0.17.0 — Generation Explorer
 
 - Added Migration v5 with a rebuildable structured generation index for Seed, Steps, Sampler, Scheduler, CFG and Denoise.

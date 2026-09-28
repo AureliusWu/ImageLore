@@ -1,8 +1,8 @@
-use crate::{db,generation,generation_index,metadata,models::{ImportProgress,ImportSummary},preview,sidecar,state::AppState};
+use crate::{db,generation,generation_index,jobs,metadata,models::{ImportProgress,ImportSummary},preview,sidecar,state::AppState};
 use rusqlite::params;
 use std::{
     path::{Path,PathBuf},
-    sync::{atomic::{AtomicBool,Ordering},Arc},
+    sync::atomic::{AtomicBool,Ordering},
 };
 use tauri::{AppHandle,Emitter,Manager,State};
 use walkdir::WalkDir;
@@ -200,9 +200,7 @@ pub(crate) fn start_job_with_finish<F>(
 )->Result<u64,String>
 where F:FnOnce(&AppState,&ImportSummary,bool)+Send+'static{
     let state=app.state::<AppState>();
-    let job_id=state.next_job_id.fetch_add(1,Ordering::Relaxed);
-    let cancel=Arc::new(AtomicBool::new(false));
-    state.import_jobs.lock().map_err(|e|e.to_string())?.insert(job_id,cancel.clone());
+    let(job_id,cancel)=jobs::register(state.inner())?;
 
     let app_for_thread=app.clone();
     std::thread::spawn(move||{
@@ -218,7 +216,7 @@ where F:FnOnce(&AppState,&ImportSummary,bool)+Send+'static{
             job_id,processed:0,total:0,added:summary.added,skipped:summary.skipped,duplicates:summary.duplicates,
             failed:summary.failed,current_name:String::new(),done:true,cancelled,last_id:summary.last_id
         });
-        if let Ok(mut jobs)=state.import_jobs.lock(){jobs.remove(&job_id);};
+        jobs::finish(state.inner(),job_id);
     });
 
     Ok(job_id)
@@ -239,11 +237,7 @@ pub fn start_import_dropped_paths(app:AppHandle,paths:Vec<String>)->Result<u64,S
 
 #[tauri::command]
 pub fn cancel_import(state:State<'_,AppState>,job_id:u64)->Result<bool,String>{
-    if let Some(flag)=state.import_jobs.lock().map_err(|e|e.to_string())?.get(&job_id){
-        flag.store(true,Ordering::Relaxed);
-        return Ok(true)
-    }
-    Ok(false)
+    jobs::cancel(state.inner(),job_id)
 }
 
 fn immediate(state:&AppState,roots:Vec<String>,recursive_dirs:bool)->Result<ImportSummary,String>{

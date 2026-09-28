@@ -1,17 +1,19 @@
 import { useMemo,useState } from "react";
-import type { BackupRecord,CollectionRecord,DuplicateGroup,FacetCount,LibraryHealth,ModelAlias,SavedFilter,SourceFolder } from "../types";
+import type { BackupRecord,CollectionRecord,DuplicateGroup,FacetCount,LibraryHealth,ModelAlias,SavedFilter,SemanticProgress,SemanticStatus,SourceFolder } from "../types";
 
 const bytes=(n:number)=>n<1024?n+" B":n<1024*1024?(n/1024).toFixed(1)+" KB":(n/1024/1024).toFixed(1)+" MB";
 
-export function LibraryManager({open,backups,tags,collections,duplicates,modelAliases,savedFilters,sourceFolders,sourceSyncing,health,onClose,onBackup,onRestore,onRenameTag,onDeleteTag,onRenameCollection,onDeleteCollection,onUpsertModelAlias,onDeleteModelAlias,onDeleteSavedFilter,onAddSourceFolder,onRemoveSourceFolder,onToggleSourceAutoSync,onSyncSourceFolders}:{
+export function LibraryManager({open,backups,tags,collections,duplicates,modelAliases,savedFilters,sourceFolders,sourceSyncing,health,semanticStatus,semanticIndexing,semanticProgress,onRebuildSemantic,onCancelSemantic,onClearSemantic,onDeleteSemanticModels,onClose,onBackup,onRestore,onRenameTag,onDeleteTag,onRenameCollection,onDeleteCollection,onUpsertModelAlias,onDeleteModelAlias,onDeleteSavedFilter,onAddSourceFolder,onRemoveSourceFolder,onToggleSourceAutoSync,onSyncSourceFolders}:{
   open:boolean;backups:BackupRecord[];tags:FacetCount[];collections:CollectionRecord[];duplicates:DuplicateGroup[];modelAliases:ModelAlias[];savedFilters:SavedFilter[];sourceFolders:SourceFolder[];sourceSyncing:boolean;health:LibraryHealth|null;
+  semanticStatus:SemanticStatus|null;semanticIndexing:boolean;semanticProgress:SemanticProgress;
+  onRebuildSemantic:()=>void;onCancelSemantic:()=>void;onClearSemantic:()=>void;onDeleteSemanticModels:()=>void;
   onClose:()=>void;onBackup:()=>void;onRestore:(name:string)=>void;
   onRenameTag:(oldName:string,newName:string)=>void;onDeleteTag:(name:string)=>void;
   onRenameCollection:(id:number,name:string)=>void;onDeleteCollection:(id:number)=>void;
   onUpsertModelAlias:(alias:string,canonical:string)=>void;onDeleteModelAlias:(alias:string)=>void;onDeleteSavedFilter:(id:number)=>void;
   onAddSourceFolder:()=>void;onRemoveSourceFolder:(id:number)=>void;onToggleSourceAutoSync:(id:number,enabled:boolean)=>void;onSyncSourceFolders:(ids:number[])=>void;
 }){
-  const[tab,setTab]=useState<"safety"|"sources"|"tags"|"collections"|"intelligence"|"duplicates"|"health">("safety");
+  const[tab,setTab]=useState<"safety"|"sources"|"tags"|"collections"|"intelligence"|"semantic"|"duplicates"|"health">("safety");
   const[tagSource,setTagSource]=useState("");const[tagTarget,setTagTarget]=useState("");
   const[alias,setAlias]=useState("");const[canonical,setCanonical]=useState("");
   const collectionMap=useMemo(()=>new Map(collections.map(x=>[x.id,x])),[collections]);
@@ -24,6 +26,7 @@ export function LibraryManager({open,backups,tags,collections,duplicates,modelAl
       <button className={tab==="tags"?"active":""} onClick={()=>setTab("tags")}>标签</button>
       <button className={tab==="collections"?"active":""} onClick={()=>setTab("collections")}>集合</button>
       <button className={tab==="intelligence"?"active":""} onClick={()=>setTab("intelligence")}>模型/视图</button>
+      <button className={tab==="semantic"?"active":""} onClick={()=>setTab("semantic")}>AI 索引</button>
       <button className={tab==="duplicates"?"active":""} onClick={()=>setTab("duplicates")}>重复 {duplicates.length?"("+duplicates.length+")":""}</button>
       <button className={tab==="health"?"active":""} onClick={()=>setTab("health")}>健康</button>
     </nav>
@@ -49,6 +52,25 @@ export function LibraryManager({open,backups,tags,collections,duplicates,modelAl
         <div className="manager-list compact">{modelAliases.map(x=><div className="manager-row" key={x.alias}><div><strong>{x.canonical}</strong><span>{x.alias}</span></div><button className="danger-compact" onClick={()=>onDeleteModelAlias(x.alias)}>删除</button></div>)}</div>
         <div className="manager-toolbar section-gap"><div><strong>保存视图</strong><span>保存当前搜索、标签、模型和集合条件，随时恢复。</span></div></div>
         <div className="manager-list compact">{savedFilters.length?savedFilters.map(x=><div className="manager-row" key={x.id}><div><strong>{x.name}</strong><span>{[x.filter.query,x.filter.tag,x.filter.model].filter(Boolean).join(" · ")||"无文本条件"}</span></div><button className="danger-compact" onClick={()=>onDeleteSavedFilter(x.id)}>删除</button></div>):<p className="muted">还没有保存视图，可在左侧筛选器中保存。</p>}</div>
+      </section>:null}
+      {tab==="semantic"?<section>
+        <div className="manager-toolbar"><div><strong>Semantic Recall</strong><span>本地 CLIP 图文向量索引。原图不会上传；Embedding 可删除、可重建。</span></div><div className="manager-toolbar-actions">{semanticIndexing?<button className="button secondary" onClick={onCancelSemantic}>取消索引</button>:<button className="button primary" onClick={onRebuildSemantic}>{semanticStatus?.indexed?"更新索引":"启用并建立索引"}</button>}</div></div>
+        {semanticStatus?<>
+          <div className="semantic-status-grid">
+            <div><strong>{semanticStatus.indexed}</strong><span>已索引</span></div>
+            <div><strong>{semanticStatus.total}</strong><span>可索引图片</span></div>
+            <div><strong>{semanticStatus.stale}</strong><span>待增量更新</span></div>
+            <div><strong>{bytes(semanticStatus.index_bytes)}</strong><span>向量索引</span></div>
+            <div><strong>{bytes(semanticStatus.model_bytes)}</strong><span>模型缓存</span></div>
+            <div><strong>{semanticStatus.model_ready?"就绪":semanticStatus.vision_ready?"视觉已就绪":"未完整下载"}</strong><span>模型状态</span></div>
+          </div>
+          <div className="semantic-model-card">
+            <div><strong>CLIP ViT-B/32</strong><span>{semanticStatus.model_id}</span><small>视觉编码器 + 文本编码器共享 512 维空间；首次使用会下载本地模型，之后可离线运行。</small></div>
+            <div className="semantic-model-flags"><span className={semanticStatus.vision_ready?"ready":""}>视觉 {semanticStatus.vision_ready?"✓":"—"}</span><span className={semanticStatus.text_ready?"ready":""}>文本 {semanticStatus.text_ready?"✓":"—"}</span></div>
+          </div>
+          {semanticIndexing?<div className="semantic-progress-card"><div><strong>正在建立索引</strong><span>{semanticProgress.processed+" / "+semanticProgress.total}</span></div><progress max={Math.max(1,semanticProgress.total)} value={semanticProgress.processed}/><small>{semanticProgress.current_name||"正在收尾…"}</small></div>:null}
+          <div className="semantic-actions"><button disabled={semanticIndexing||!semanticStatus.indexed} onClick={onClearSemantic}>清空索引</button><button className="danger-compact" disabled={semanticIndexing||!semanticStatus.model_bytes} onClick={onDeleteSemanticModels}>删除模型缓存</button></div>
+        </>:<p className="muted">正在读取语义索引状态…</p>}
       </section>:null}
       {tab==="duplicates"?<section><div className="manager-toolbar"><div><strong>重复内容报告</strong><span>新导入的完全相同文件会按 SHA-256 自动跳过。</span></div></div><div className="manager-list">{duplicates.length?duplicates.map(g=><div className="duplicate-row" key={g.fingerprint}><strong>{g.count+" 个相同内容"}</strong><span>{g.names.join(" · ")}</span><small>{g.fingerprint.slice(0,24)+"…"}</small></div>):<p className="muted">当前资料库没有发现重复内容。</p>}</div></section>:null}
       {tab==="health"?<section><div className="manager-toolbar"><div><strong>Library Health</strong><span>快速发现会影响可追溯性和长期维护的问题。</span></div></div>
