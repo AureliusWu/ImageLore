@@ -145,7 +145,7 @@ fn install_trusted(cache:&Path,spec:TrustedModelSpec)->Result<PathBuf,String>{
     let target=trusted_dir(cache,spec);
     if validate_trusted(&target,spec).is_ok(){return Ok(target)}
 
-    fs::create_dir_all(cache).map_err(|e|e.to_string())?;
+    fs::create_dir_all(cache.join("trusted")).map_err(|e|e.to_string())?;
     let hub_cache=cache.join("hf");
     let api=ApiBuilder::new()
         .with_cache_dir(hub_cache)
@@ -200,6 +200,7 @@ fn install_trusted(cache:&Path,spec:TrustedModelSpec)->Result<PathBuf,String>{
 
     if let Err(error)=install_result{
         let _=fs::remove_dir_all(&stage);
+        let _=fs::remove_dir_all(&hub_cache);
         return Err(error)
     }
 
@@ -212,6 +213,7 @@ fn install_trusted(cache:&Path,spec:TrustedModelSpec)->Result<PathBuf,String>{
         return Err(format!("可信模型原子安装失败：{error}"))
     }
     if backup.exists(){let _=fs::remove_dir_all(&backup);}
+    let _=fs::remove_dir_all(&hub_cache);
     Ok(target)
 }
 
