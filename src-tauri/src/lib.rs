@@ -9,6 +9,7 @@ mod migrations;
 mod metadata;
 mod models;
 mod preview;
+mod semantic;
 mod sidecar;
 mod sources;
 mod state;
@@ -127,7 +128,14 @@ pub fn run(){
             sources::add_source_folder,
             sources::remove_source_folder,
             sources::set_source_auto_sync,
-            sources::start_sync_sources
+            sources::start_sync_sources,
+            semantic::semantic_status,
+            semantic::start_semantic_index,
+            semantic::cancel_semantic_index,
+            semantic::semantic_search_text,
+            semantic::semantic_search_similar,
+            semantic::clear_semantic_index,
+            semantic::delete_semantic_models
         ])
         .run(tauri::generate_context!())
         .expect("error while running ImageLore");
