@@ -1,4 +1,4 @@
-# ImageLore v0.18.0
+# ImageLore v0.18.1
 
 ![ImageLore 应用预览](docs/og.svg)
 
@@ -22,7 +22,9 @@ ImageLore 是一个 local-first 的 AI 视觉生成记忆库，用来保存图�
 - 后台导入任务、实时进度与取消
 - SHA-256 精确重复内容检测与自动跳过
 - Prompt、Negative Prompt、模型、标签自动保存
-- Prompt Revision 历史版本
+- Prompt Revision 历史版本；保存版本会原子写入当前编辑内容，避免 autosave 竞态
+- 图库右键菜单可直接在文件管理器中定位原图
+- Semantic Security Hardening：固定 CLIP revision、ONNX SHA-256 / 大小校验、可信缓存原子安装
 - Collection 与多父 Generation Lineage
 - 全库搜索式父图选择器
 - 父子 Prompt Diff

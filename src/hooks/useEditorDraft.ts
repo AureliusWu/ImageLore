@@ -68,6 +68,37 @@ export function useEditorDraft(
     await saving.current;
   },[onSaved,onTagsSaved,setStatus]);
 
+  const saveRevision=useCallback(async(note="")=>{
+    const snapshot={...draft.current};
+    const assetId=snapshot.assetId;
+    if(assetId===null)return null;
+    window.clearTimeout(timer.current);
+    let saved:AssetRecord|null=null;
+    saving.current=saving.current.then(async()=>{
+      if(draft.current.assetId!==assetId)return;
+      setStatus("正在保存提示词版本…");
+      const latest=await api.savePromptRevision(
+        assetId,
+        {prompt:snapshot.prompt,negative_prompt:snapshot.negative,model:snapshot.model},
+        parseTags(snapshot.tagsText),
+        note
+      );
+      saved=latest;
+      baseline.current={assetId:latest.id,prompt:latest.prompt,negative:latest.negative_prompt,model:latest.model,tagsText:latest.tags.join(", ")};
+      if(draft.current.assetId===latest.id){
+        onSaved(latest);
+        if(draft.current.prompt===snapshot.prompt&&draft.current.negative===snapshot.negative&&draft.current.model===snapshot.model&&draft.current.tagsText===snapshot.tagsText){
+          draft.current={...baseline.current};
+          setPromptState(latest.prompt);setNegativeState(latest.negative_prompt);setModelState(latest.model);setTagsTextState(latest.tags.join(", "));
+        }
+      }
+      onTagsSaved();
+      setStatus("提示词版本已保存");
+    }).catch(e=>setStatus(`保存版本失败：${String(e)}`));
+    await saving.current;
+    return saved;
+  },[onSaved,onTagsSaved,setStatus]);
+
   useEffect(()=>{
     if(!draft.current.assetId)return;
     const base=baseline.current,current=draft.current;
@@ -80,5 +111,5 @@ export function useEditorDraft(
 
   useEffect(()=>()=>{window.clearTimeout(timer.current);void flush()},[flush]);
 
-  return{prompt,negative,model,tagsText,setPrompt,setNegative,setModel,setTagsText,flush,load:hydrate};
+  return{prompt,negative,model,tagsText,setPrompt,setNegative,setModel,setTagsText,flush,saveRevision,load:hydrate};
 }

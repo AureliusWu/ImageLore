@@ -82,6 +82,30 @@ pub fn add_revision(state:State<'_,AppState>, id:i64, note:String) -> Result<boo
 }
 
 #[tauri::command]
+pub fn save_prompt_revision(state:State<'_,AppState>,id:i64,patch:PromptPatch,tags:Vec<String>,note:String)->Result<AssetRecord,String>{
+    let mut conn=state.db.lock().map_err(|e|e.to_string())?;
+    let stamp=db::now();
+    let tx=conn.transaction().map_err(|e|e.to_string())?;
+    tx.execute(
+        "INSERT INTO prompt_state(asset_id,prompt,negative_prompt,model,updated_at) VALUES(?1,?2,?3,?4,?5)
+         ON CONFLICT(asset_id) DO UPDATE SET prompt=excluded.prompt,negative_prompt=excluded.negative_prompt,model=excluded.model,updated_at=excluded.updated_at",
+        params![id,patch.prompt,patch.negative_prompt,patch.model,stamp]
+    ).map_err(|e|e.to_string())?;
+    db::replace_tags_raw(&tx,id,&tags)?;
+    tx.execute("UPDATE assets SET updated_at=?1 WHERE id=?2",params![stamp,id]).map_err(|e|e.to_string())?;
+    db::reindex_asset(&tx,id)?;
+    let asset=db::get_asset(&tx,id)?;
+    let tags_json=serde_json::to_string(&asset.tags).map_err(|e|e.to_string())?;
+    tx.execute(
+        "INSERT INTO prompt_revisions(asset_id,prompt,negative_prompt,model,tags_json,note,created_at)
+         VALUES(?1,?2,?3,?4,?5,?6,?7)",
+        params![id,asset.prompt,asset.negative_prompt,asset.model,tags_json,note,stamp]
+    ).map_err(|e|e.to_string())?;
+    tx.commit().map_err(|e|e.to_string())?;
+    db::get_asset(&conn,id)
+}
+
+#[tauri::command]
 pub fn list_revisions(state:State<'_,AppState>, id:i64) -> Result<Vec<Revision>,String> {
     let conn=state.db.lock().map_err(|e|e.to_string())?;
     let mut st=conn.prepare("SELECT id,asset_id,prompt,negative_prompt,model,tags_json,note,created_at FROM prompt_revisions WHERE asset_id=?1 ORDER BY created_at DESC,id DESC").map_err(|e|e.to_string())?;

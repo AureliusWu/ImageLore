@@ -1,9 +1,15 @@
 use crate::{db,jobs,models::{LibraryFilter,SemanticHit,SemanticProgress,SemanticStatus},state::AppState};
-use fastembed::{EmbeddingModel,ImageEmbedding,ImageEmbeddingModel,ImageInitOptions,TextEmbedding,TextInitOptions};
+use fastembed::{
+    ImageEmbedding,ImageInitOptionsUserDefined,InitOptionsUserDefined,Pooling,TextEmbedding,
+    TokenizerFiles,UserDefinedEmbeddingModel,UserDefinedImageEmbeddingModel,
+};
+use hf_hub::{api::sync::ApiBuilder,Repo,RepoType};
 use rusqlite::{params,OptionalExtension};
+use sha2::{Digest,Sha256};
 use std::{
     collections::{HashMap,HashSet},
-    fs,
+    fs::{self,File},
+    io::Read,
     path::{Path,PathBuf},
     sync::atomic::Ordering,
 };
@@ -12,8 +18,50 @@ use walkdir::WalkDir;
 
 pub const MODEL_ID:&str="clip-vit-b32-qdrant-v1";
 const DIMENSIONS:usize=512;
+const TRUST_MANIFEST_VERSION:u32=1;
+
+#[derive(Clone,Copy)]
+struct SupportFile{path:&'static str,max_bytes:u64}
+
+#[derive(Clone,Copy)]
+struct TrustedModelSpec{
+    name:&'static str,
+    repo:&'static str,
+    revision:&'static str,
+    onnx_sha256:&'static str,
+    onnx_size:u64,
+    support:&'static [SupportFile],
+}
+
+const VISION_SUPPORT:&[SupportFile]=&[
+    SupportFile{path:"preprocessor_config.json",max_bytes:64*1024},
+];
+const TEXT_SUPPORT:&[SupportFile]=&[
+    SupportFile{path:"tokenizer.json",max_bytes:8*1024*1024},
+    SupportFile{path:"config.json",max_bytes:64*1024},
+    SupportFile{path:"special_tokens_map.json",max_bytes:64*1024},
+    SupportFile{path:"tokenizer_config.json",max_bytes:64*1024},
+];
+
+const VISION_SPEC:TrustedModelSpec=TrustedModelSpec{
+    name:"vision",
+    repo:"Qdrant/clip-ViT-B-32-vision",
+    revision:"e0c24ed0fa57fa3e4f97f30de74c51d944036ace",
+    onnx_sha256:"c68d3d9a200ddd2a8c8a5510b576d4c94d1ae383bf8b36dd8c084f94e1fb4d63",
+    onnx_size:351_686_194,
+    support:VISION_SUPPORT,
+};
+const TEXT_SPEC:TrustedModelSpec=TrustedModelSpec{
+    name:"text",
+    repo:"Qdrant/clip-ViT-B-32-text",
+    revision:"48ca1db27cb4063eb311ec2aa7f087a808112876",
+    onnx_sha256:"4dbe762b11e36488304471e439cde89da053ad7acaddbf9e096745d142ec8d8b",
+    onnx_size:254_102_519,
+    support:TEXT_SUPPORT,
+};
 
 fn cache_dir(state:&AppState)->PathBuf{state.models_dir.join("semantic")}
+fn trusted_dir(cache:&Path,spec:TrustedModelSpec)->PathBuf{cache.join("trusted").join(spec.name)}
 
 fn dir_size(path:&Path)->u64{
     if !path.exists(){return 0}
@@ -56,24 +104,143 @@ fn score(a:&[f32],b:&[f32])->f32{
     a.iter().zip(b).map(|(x,y)|x*y).sum()
 }
 
+fn sha256_file(path:&Path)->Result<String,String>{
+    let mut file=File::open(path).map_err(|e|e.to_string())?;
+    let mut hasher=Sha256::new();
+    let mut buffer=[0u8;1024*1024];
+    loop{
+        let read=file.read(&mut buffer).map_err(|e|e.to_string())?;
+        if read==0{break}
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hasher.finalize().iter().map(|b|format!("{b:02x}")).collect())
+}
+
+fn validate_json(path:&Path,max_bytes:u64)->Result<(),String>{
+    let meta=fs::metadata(path).map_err(|e|format!("模型配套文件缺失 {}：{e}",path.display()))?;
+    if meta.len()==0||meta.len()>max_bytes{
+        return Err(format!("模型配套文件大小异常：{} ({} bytes)",path.display(),meta.len()))
+    }
+    let data=fs::read(path).map_err(|e|e.to_string())?;
+    serde_json::from_slice::<serde_json::Value>(&data)
+        .map_err(|e|format!("模型配套 JSON 无效 {}：{e}",path.display()))?;
+    Ok(())
+}
+
+fn validate_trusted(dir:&Path,spec:TrustedModelSpec)->Result<(),String>{
+    let onnx=dir.join("model.onnx");
+    let meta=fs::metadata(&onnx).map_err(|e|format!("可信模型缺失 {}：{e}",onnx.display()))?;
+    if meta.len()!=spec.onnx_size{
+        return Err(format!("模型大小校验失败：{}，期望 {} bytes，实际 {} bytes",spec.name,spec.onnx_size,meta.len()))
+    }
+    let digest=sha256_file(&onnx)?;
+    if digest!=spec.onnx_sha256{
+        return Err(format!("模型 SHA-256 校验失败：{}。已拒绝加载。",spec.name))
+    }
+    for file in spec.support{validate_json(&dir.join(file.path),file.max_bytes)?}
+    Ok(())
+}
+
+fn install_trusted(cache:&Path,spec:TrustedModelSpec)->Result<PathBuf,String>{
+    let target=trusted_dir(cache,spec);
+    if validate_trusted(&target,spec).is_ok(){return Ok(target)}
+
+    fs::create_dir_all(cache.join("trusted")).map_err(|e|e.to_string())?;
+    let hub_cache=cache.join("hf");
+    let api=ApiBuilder::new()
+        .with_cache_dir(hub_cache.clone())
+        .with_progress(false)
+        .build()
+        .map_err(|e|format!("无法初始化固定版本模型下载器：{e}"))?;
+    let repo=api.repo(Repo::with_revision(
+        spec.repo.to_string(),RepoType::Model,spec.revision.to_string()
+    ));
+
+    let stage=cache.join(format!(".trusted-{}-{}",spec.name,std::process::id()));
+    if stage.exists(){fs::remove_dir_all(&stage).map_err(|e|e.to_string())?}
+    fs::create_dir_all(&stage).map_err(|e|e.to_string())?;
+
+    let install_result=(||->Result<(),String>{
+        let source_model=repo.get("model.onnx")
+            .map_err(|e|format!("固定版本模型下载失败 {}@{}：{e}",spec.repo,spec.revision))?;
+        let source_meta=fs::metadata(&source_model).map_err(|e|e.to_string())?;
+        if source_meta.len()!=spec.onnx_size{
+            return Err(format!("下载模型大小不符合可信清单：期望 {} bytes，实际 {} bytes",spec.onnx_size,source_meta.len()))
+        }
+        let source_digest=sha256_file(&source_model)?;
+        if source_digest!=spec.onnx_sha256{
+            return Err(format!("下载模型 SHA-256 与可信清单不一致：{}。已拒绝安装。",spec.name))
+        }
+        fs::copy(&source_model,stage.join("model.onnx")).map_err(|e|e.to_string())?;
+
+        for support in spec.support{
+            let source=repo.get(support.path)
+                .map_err(|e|format!("固定版本配套文件下载失败 {}：{e}",support.path))?;
+            let meta=fs::metadata(&source).map_err(|e|e.to_string())?;
+            if meta.len()==0||meta.len()>support.max_bytes{
+                return Err(format!("配套文件大小超过安全上限：{} ({} bytes)",support.path,meta.len()))
+            }
+            fs::copy(&source,stage.join(support.path)).map_err(|e|e.to_string())?;
+            validate_json(&stage.join(support.path),support.max_bytes)?;
+        }
+
+        let manifest=serde_json::json!({
+            "manifest_version":TRUST_MANIFEST_VERSION,
+            "model_id":MODEL_ID,
+            "component":spec.name,
+            "repository":spec.repo,
+            "revision":spec.revision,
+            "onnx_sha256":spec.onnx_sha256,
+            "onnx_size":spec.onnx_size
+        });
+        fs::write(stage.join("trusted-manifest.json"),serde_json::to_vec_pretty(&manifest).map_err(|e|e.to_string())?)
+            .map_err(|e|e.to_string())?;
+        validate_trusted(&stage,spec)
+    })();
+
+    if let Err(error)=install_result{
+        let _=fs::remove_dir_all(&stage);
+        let _=fs::remove_dir_all(&hub_cache);
+        return Err(error)
+    }
+
+    let backup=cache.join(format!(".trusted-{}-old",spec.name));
+    if backup.exists(){let _=fs::remove_dir_all(&backup);}
+    if target.exists(){fs::rename(&target,&backup).map_err(|e|format!("无法替换旧模型缓存：{e}"))?}
+    if let Err(error)=fs::rename(&stage,&target){
+        if backup.exists(){let _=fs::rename(&backup,&target);}
+        let _=fs::remove_dir_all(&stage);
+        return Err(format!("可信模型原子安装失败：{error}"))
+    }
+    if backup.exists(){let _=fs::remove_dir_all(&backup);}
+    let _=fs::remove_dir_all(&hub_cache);
+    Ok(target)
+}
+
 fn image_model(cache:PathBuf)->Result<ImageEmbedding,String>{
-    fs::create_dir_all(&cache).map_err(|e|e.to_string())?;
-    ImageEmbedding::try_new(
-        ImageInitOptions::new(ImageEmbeddingModel::ClipVitB32)
-            .with_cache_dir(cache)
-            .with_show_download_progress(false)
-            .with_intra_threads(2)
-    ).map_err(|e|format!("本地视觉模型加载失败：{e}"))
+    let dir=install_trusted(&cache,VISION_SPEC)?;
+    let onnx=fs::read(dir.join("model.onnx")).map_err(|e|e.to_string())?;
+    let preprocessor=fs::read(dir.join("preprocessor_config.json")).map_err(|e|e.to_string())?;
+    let model=UserDefinedImageEmbeddingModel::new(onnx,preprocessor);
+    ImageEmbedding::try_new_from_user_defined(
+        model,ImageInitOptionsUserDefined::new().with_intra_threads(2)
+    ).map_err(|e|format!("可信视觉模型加载失败：{e}"))
 }
 
 fn text_vector(cache:PathBuf,query:String)->Result<Vec<f32>,String>{
-    fs::create_dir_all(&cache).map_err(|e|e.to_string())?;
-    let mut model=TextEmbedding::try_new(
-        TextInitOptions::new(EmbeddingModel::ClipVitB32)
-            .with_cache_dir(cache)
-            .with_show_download_progress(false)
-            .with_intra_threads(2)
-    ).map_err(|e|format!("本地文本模型加载失败：{e}"))?;
+    let dir=install_trusted(&cache,TEXT_SPEC)?;
+    let tokenizer=TokenizerFiles{
+        tokenizer_file:fs::read(dir.join("tokenizer.json")).map_err(|e|e.to_string())?,
+        config_file:fs::read(dir.join("config.json")).map_err(|e|e.to_string())?,
+        special_tokens_map_file:fs::read(dir.join("special_tokens_map.json")).map_err(|e|e.to_string())?,
+        tokenizer_config_file:fs::read(dir.join("tokenizer_config.json")).map_err(|e|e.to_string())?,
+    };
+    let model=UserDefinedEmbeddingModel::new(
+        fs::read(dir.join("model.onnx")).map_err(|e|e.to_string())?,tokenizer
+    ).with_pooling(Pooling::Mean);
+    let mut model=TextEmbedding::try_new_from_user_defined(
+        model,InitOptionsUserDefined::new().with_max_length(77).with_intra_threads(2)
+    ).map_err(|e|format!("可信文本模型加载失败：{e}"))?;
     let mut rows=model.embed(vec![query],None).map_err(|e|format!("语义查询编码失败：{e}"))?;
     let vector=rows.pop().ok_or("语义模型没有返回查询向量")?;
     Ok(normalize(vector))
@@ -165,7 +332,7 @@ pub fn start_semantic_index(app:AppHandle)->Result<u64,String>{
         };
 
         let mut indexed=0i64;
-        let mut skipped=0i64;
+        let skipped=0i64;
         let mut failed=0i64;
         let mut processed=0usize;
 
@@ -322,6 +489,31 @@ pub fn delete_semantic_models(state:State<'_,AppState>)->Result<bool,String>{
 #[cfg(test)]
 mod tests{
     use super::*;
+
+    #[test]
+    fn sha256_file_matches_known_digest(){
+        let path=std::env::temp_dir().join(format!("imagelore-semantic-sha-{}.bin",std::process::id()));
+        fs::write(&path,b"abc").unwrap();
+        let digest=sha256_file(&path).unwrap();
+        let _=fs::remove_file(&path);
+        assert_eq!(digest,"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    }
+
+    #[test]
+    fn trusted_model_rejects_wrong_digest(){
+        static EMPTY:&[SupportFile]=&[];
+        let root=std::env::temp_dir().join(format!("imagelore-semantic-trust-{}",std::process::id()));
+        let _=fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("model.onnx"),b"abc").unwrap();
+        let spec=TrustedModelSpec{
+            name:"test",repo:"unused",revision:"unused",
+            onnx_sha256:"0000000000000000000000000000000000000000000000000000000000000000",
+            onnx_size:3,support:EMPTY,
+        };
+        assert!(validate_trusted(&root,spec).unwrap_err().contains("SHA-256"));
+        let _=fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn vector_blob_round_trip_and_cosine(){

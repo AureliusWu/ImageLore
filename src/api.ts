@@ -80,6 +80,11 @@ async function mockCall<T>(command:string,args:Record<string,unknown>):Promise<T
     case "batch_add_tags":return true as T;
     case "delete_asset":{mockAssets=mockAssets.filter(x=>x.id!==Number(args.id));return true as T;}
     case "add_revision":return true as T;
+    case "save_prompt_revision":{
+      const id=Number(args.id),patch=args.patch as PromptPatch,tags=args.tags as string[];
+      mockAssets=mockAssets.map(x=>x.id===id?{...x,...patch,tags,updated_at:Math.floor(Date.now()/1000)}:x);
+      return mockAssets.find(x=>x.id===id) as T;
+    }
     case "list_revisions":return [] as T;
     case "restore_revision":return mockAssets[0] as T;
     case "lineage":return {parents:[],children:[]} as T;
@@ -159,6 +164,7 @@ export const api={
   toggleFavorite:(id:number)=>call<AssetRecord>("toggle_favorite",{id}),
   deleteAsset:(id:number)=>call<boolean>("delete_asset",{id}),
   addRevision:(id:number,note="")=>call<boolean>("add_revision",{id,note}),
+  savePromptRevision:(id:number,patch:PromptPatch,tags:string[],note="")=>call<AssetRecord>("save_prompt_revision",{id,patch,tags,note}),
   revisions:(id:number)=>call<Revision[]>("list_revisions",{id}),
   restoreRevision:(revisionId:number)=>call<AssetRecord>("restore_revision",{revisionId}),
   lineage:(id:number)=>call<Lineage>("lineage",{id}),
