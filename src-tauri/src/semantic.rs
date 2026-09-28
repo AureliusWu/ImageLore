@@ -491,6 +491,31 @@ mod tests{
     use super::*;
 
     #[test]
+    fn sha256_file_matches_known_digest(){
+        let path=std::env::temp_dir().join(format!("imagelore-semantic-sha-{}.bin",std::process::id()));
+        fs::write(&path,b"abc").unwrap();
+        let digest=sha256_file(&path).unwrap();
+        let _=fs::remove_file(&path);
+        assert_eq!(digest,"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    }
+
+    #[test]
+    fn trusted_model_rejects_wrong_digest(){
+        static EMPTY:&[SupportFile]=&[];
+        let root=std::env::temp_dir().join(format!("imagelore-semantic-trust-{}",std::process::id()));
+        let _=fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("model.onnx"),b"abc").unwrap();
+        let spec=TrustedModelSpec{
+            name:"test",repo:"unused",revision:"unused",
+            onnx_sha256:"0000000000000000000000000000000000000000000000000000000000000000",
+            onnx_size:3,support:EMPTY,
+        };
+        assert!(validate_trusted(&root,spec).unwrap_err().contains("SHA-256"));
+        let _=fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn vector_blob_round_trip_and_cosine(){
         let source=normalize(vec![1.0,2.0,3.0,4.0]);
         let decoded=from_blob(&to_blob(&source));
