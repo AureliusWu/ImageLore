@@ -53,9 +53,34 @@ pub struct LibraryFilter {
     pub model: Option<String>,
     #[serde(default)]
     pub collection_id: Option<i64>,
+    #[serde(default)]
+    pub metadata_type: Option<String>,
+    #[serde(default)]
+    pub sampler: Option<String>,
+    #[serde(default)]
+    pub scheduler: Option<String>,
+    #[serde(default)]
+    pub seed: Option<String>,
+    #[serde(default)]
+    pub steps_min: Option<i64>,
+    #[serde(default)]
+    pub steps_max: Option<i64>,
+    #[serde(default)]
+    pub cfg_min: Option<f64>,
+    #[serde(default)]
+    pub cfg_max: Option<f64>,
+    #[serde(default)]
+    pub denoise_min: Option<f64>,
+    #[serde(default)]
+    pub denoise_max: Option<f64>,
+    #[serde(default)]
+    pub orientation: Option<String>,
+    #[serde(default = "default_sort")]
+    pub sort: String,
 }
 
 fn default_view() -> String { "all".to_string() }
+fn default_sort() -> String { "smart".to_string() }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct LibraryPage {
@@ -86,6 +111,9 @@ pub struct LibraryFacets {
     pub tags: Vec<FacetCount>,
     pub models: Vec<FacetCount>,
     pub collections: Vec<CollectionRecord>,
+    pub metadata_types: Vec<FacetCount>,
+    pub samplers: Vec<FacetCount>,
+    pub schedulers: Vec<FacetCount>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
