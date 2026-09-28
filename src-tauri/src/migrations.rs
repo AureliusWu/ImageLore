@@ -209,15 +209,17 @@ mod tests{
         let conn=Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE app_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
-             INSERT INTO app_meta VALUES('schema_version','5');"
+             INSERT INTO app_meta VALUES('schema_version','5');
+             CREATE TABLE assets(id INTEGER PRIMARY KEY);"
         ).unwrap();
         apply(&conn).unwrap();
         let version:String=conn.query_row("SELECT value FROM app_meta WHERE key='schema_version'",[],|r|r.get(0)).unwrap();
         assert_eq!(version,"6");
         let enabled:String=conn.query_row("SELECT value FROM semantic_settings WHERE key='enabled'",[],|r|r.get(0)).unwrap();
         assert_eq!(enabled,"0");
+        conn.execute("INSERT INTO assets(id) VALUES(1)",[]).unwrap();
         conn.execute(
-            "INSERT INTO semantic_embeddings(asset_id,model_id,dimensions,vector,fingerprint,indexed_at) VALUES(1,'clip',2,X'00000000','abc',1)",[]
+            "INSERT INTO semantic_embeddings(asset_id,model_id,dimensions,vector,fingerprint,indexed_at) VALUES(1,'clip',1,X'00000000','abc',1)",[]
         ).unwrap();
     }
 
