@@ -43,7 +43,7 @@ fn prepare_state()->Result<AppState,String>{
 }
 
 fn write_startup_error(message:&str){
-    let root=dirs::data_local_dir().map(|x|x.join("ImageLore")).unwrap_or_else(std::env::temp_dir);
+    let root=db::error_log_root();
     let _=fs::create_dir_all(&root);
     let _=fs::write(root.join("startup-error.log"),message);
 }

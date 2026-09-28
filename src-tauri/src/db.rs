@@ -7,13 +7,86 @@ pub fn now() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64
 }
 
+const DATA_DIR_NAME:&str="app.imagelore.desktop";
+const LEGACY_DATA_DIR_NAME:&str="ImageLore";
+
+fn copy_dir_all(source:&Path,target:&Path)->Result<(),String>{
+    fs::create_dir_all(target).map_err(|e|e.to_string())?;
+    for entry in fs::read_dir(source).map_err(|e|e.to_string())?{
+        let entry=entry.map_err(|e|e.to_string())?;
+        let src=entry.path();
+        let dst=target.join(entry.file_name());
+        if entry.file_type().map_err(|e|e.to_string())?.is_dir(){
+            copy_dir_all(&src,&dst)?;
+        }else{
+            if let Some(parent)=dst.parent(){fs::create_dir_all(parent).map_err(|e|e.to_string())?;}
+            fs::copy(&src,&dst).map_err(|e|e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+fn move_entry(source:&Path,target:&Path)->Result<(),String>{
+    if !source.exists(){return Ok(())}
+    if target.exists(){
+        if source.is_dir()&&target.is_dir(){
+            for entry in fs::read_dir(source).map_err(|e|e.to_string())?{
+                let entry=entry.map_err(|e|e.to_string())?;
+                move_entry(&entry.path(),&target.join(entry.file_name()))?;
+            }
+            let _=fs::remove_dir(source);
+        }
+        // Existing destination data is always authoritative. Never overwrite it.
+        return Ok(())
+    }
+    if let Some(parent)=target.parent(){fs::create_dir_all(parent).map_err(|e|e.to_string())?;}
+    if fs::rename(source,target).is_ok(){return Ok(())}
+    if source.is_dir(){
+        copy_dir_all(source,target)?;
+        fs::remove_dir_all(source).map_err(|e|e.to_string())?;
+    }else{
+        fs::copy(source,target).map_err(|e|e.to_string())?;
+        fs::remove_file(source).map_err(|e|e.to_string())?;
+    }
+    Ok(())
+}
+
+fn migrate_legacy_data(base:&Path,root:&Path)->Result<(),String>{
+    let legacy=base.join(LEGACY_DATA_DIR_NAME);
+    if !legacy.exists()||legacy==root{return Ok(())}
+    fs::create_dir_all(root).map_err(|e|e.to_string())?;
+
+    if !root.join("library.sqlite3").exists(){
+        for name in ["library.sqlite3","library.sqlite3-wal","library.sqlite3-shm"]{
+            move_entry(&legacy.join(name),&root.join(name))?;
+        }
+    }
+
+    for name in ["backups","models","restore.pending.sqlite3","restore.next.sqlite3","startup-error.log"]{
+        move_entry(&legacy.join(name),&root.join(name))?;
+    }
+
+    // Thumbnail/preview cache is fully derived. Rebuild it in the new data root
+    // instead of carrying stale cache files through an installer upgrade.
+    let legacy_cache=legacy.join("cache");
+    if legacy_cache.exists(){let _=fs::remove_dir_all(legacy_cache);}
+    Ok(())
+}
+
 pub fn data_root() -> Result<(PathBuf, PathBuf), String> {
     let base = dirs::data_local_dir().ok_or("无法定位本地应用数据目录")?;
-    let root = base.join("ImageLore");
+    let root = base.join(DATA_DIR_NAME);
+    migrate_legacy_data(&base,&root)?;
     let cache = root.join("cache");
     fs::create_dir_all(cache.join("thumbnails")).map_err(|e| e.to_string())?;
     fs::create_dir_all(cache.join("previews")).map_err(|e| e.to_string())?;
     Ok((root, cache))
+}
+
+pub fn error_log_root()->PathBuf{
+    dirs::data_local_dir()
+        .map(|x|x.join(DATA_DIR_NAME))
+        .unwrap_or_else(std::env::temp_dir)
 }
 
 pub fn init_db(path: &Path) -> Result<Connection, String> {
@@ -368,6 +441,40 @@ mod tests{
         let conn=Connection::open_in_memory().unwrap();
         conn.execute_batch(include_str!("../schema.sql")).unwrap();
         conn
+    }
+
+    #[test]
+    fn legacy_data_migration_moves_persistent_state_out_of_install_root(){
+        let token=format!("imagelore-upgrade-test-{}-{}",std::process::id(),now());
+        let base=std::env::temp_dir().join(token);
+        let legacy=base.join(LEGACY_DATA_DIR_NAME);
+        let root=base.join(DATA_DIR_NAME);
+        fs::create_dir_all(legacy.join("backups")).unwrap();
+        fs::create_dir_all(legacy.join("models")).unwrap();
+        fs::create_dir_all(legacy.join("cache").join("thumbnails")).unwrap();
+        fs::create_dir_all(root.join("backups")).unwrap();
+        fs::create_dir_all(root.join("models")).unwrap();
+        fs::write(root.join("backups").join("newer.sqlite3"),b"newer").unwrap();
+        fs::write(root.join("models").join("newer.onnx"),b"newer-model").unwrap();
+        fs::write(legacy.join("library.sqlite3"),b"db").unwrap();
+        fs::write(legacy.join("library.sqlite3-wal"),b"wal").unwrap();
+        fs::write(legacy.join("backups").join("keep.sqlite3"),b"backup").unwrap();
+        fs::write(legacy.join("models").join("model.onnx"),b"model").unwrap();
+        fs::write(legacy.join("cache").join("thumbnails").join("old.webp"),b"cache").unwrap();
+
+        migrate_legacy_data(&base,&root).unwrap();
+
+        assert_eq!(fs::read(root.join("library.sqlite3")).unwrap(),b"db");
+        assert_eq!(fs::read(root.join("library.sqlite3-wal")).unwrap(),b"wal");
+        assert!(root.join("backups").join("keep.sqlite3").exists());
+        assert!(root.join("backups").join("newer.sqlite3").exists());
+        assert!(root.join("models").join("model.onnx").exists());
+        assert!(root.join("models").join("newer.onnx").exists());
+        assert!(!legacy.join("library.sqlite3").exists());
+        assert!(!legacy.join("backups").exists());
+        assert!(!legacy.join("models").exists());
+        assert!(!legacy.join("cache").exists());
+        let _=fs::remove_dir_all(base);
     }
 
     #[test]
