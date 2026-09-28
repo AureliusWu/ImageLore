@@ -27,7 +27,18 @@ fn copy_dir_all(source:&Path,target:&Path)->Result<(),String>{
 }
 
 fn move_entry(source:&Path,target:&Path)->Result<(),String>{
-    if !source.exists()||target.exists(){return Ok(())}
+    if !source.exists(){return Ok(())}
+    if target.exists(){
+        if source.is_dir()&&target.is_dir(){
+            for entry in fs::read_dir(source).map_err(|e|e.to_string())?{
+                let entry=entry.map_err(|e|e.to_string())?;
+                move_entry(&entry.path(),&target.join(entry.file_name()))?;
+            }
+            let _=fs::remove_dir(source);
+        }
+        // Existing destination data is always authoritative. Never overwrite it.
+        return Ok(())
+    }
     if let Some(parent)=target.parent(){fs::create_dir_all(parent).map_err(|e|e.to_string())?;}
     if fs::rename(source,target).is_ok(){return Ok(())}
     if source.is_dir(){
@@ -441,6 +452,10 @@ mod tests{
         fs::create_dir_all(legacy.join("backups")).unwrap();
         fs::create_dir_all(legacy.join("models")).unwrap();
         fs::create_dir_all(legacy.join("cache").join("thumbnails")).unwrap();
+        fs::create_dir_all(root.join("backups")).unwrap();
+        fs::create_dir_all(root.join("models")).unwrap();
+        fs::write(root.join("backups").join("newer.sqlite3"),b"newer").unwrap();
+        fs::write(root.join("models").join("newer.onnx"),b"newer-model").unwrap();
         fs::write(legacy.join("library.sqlite3"),b"db").unwrap();
         fs::write(legacy.join("library.sqlite3-wal"),b"wal").unwrap();
         fs::write(legacy.join("backups").join("keep.sqlite3"),b"backup").unwrap();
@@ -452,7 +467,9 @@ mod tests{
         assert_eq!(fs::read(root.join("library.sqlite3")).unwrap(),b"db");
         assert_eq!(fs::read(root.join("library.sqlite3-wal")).unwrap(),b"wal");
         assert!(root.join("backups").join("keep.sqlite3").exists());
+        assert!(root.join("backups").join("newer.sqlite3").exists());
         assert!(root.join("models").join("model.onnx").exists());
+        assert!(root.join("models").join("newer.onnx").exists());
         assert!(!legacy.join("library.sqlite3").exists());
         assert!(!legacy.join("backups").exists());
         assert!(!legacy.join("models").exists());
