@@ -3,10 +3,17 @@ import { useCallback, useEffect, useState } from "react";
 export type PreviewMode="fit"|"actual";
 type Side="left"|"right";
 
+const storedNumber=(key:string,fallback:number,min:number,max:number)=>{
+  const raw=localStorage.getItem(key);
+  const value=raw===null?fallback:Number(raw);
+  return Number.isFinite(value)?Math.min(max,Math.max(min,value)):fallback;
+};
+const storedPreview=():PreviewMode=>localStorage.getItem("imagelore.preview")==="actual"?"actual":"fit";
+
 export function useWorkspaceLayout(){
-  const[previewMode,setPreviewMode]=useState<PreviewMode>(()=>(localStorage.getItem("imagelore.preview")||"fit") as PreviewMode);
-  const[leftWidth,setLeftWidth]=useState(()=>Number(localStorage.getItem("imagelore.left")||348));
-  const[rightWidth,setRightWidth]=useState(()=>Number(localStorage.getItem("imagelore.right")||510));
+  const[previewMode,setPreviewMode]=useState<PreviewMode>(storedPreview);
+  const[leftWidth,setLeftWidth]=useState(()=>storedNumber("imagelore.left",348,280,590));
+  const[rightWidth,setRightWidth]=useState(()=>storedNumber("imagelore.right",510,410,780));
 
   useEffect(()=>localStorage.setItem("imagelore.preview",previewMode),[previewMode]);
   useEffect(()=>localStorage.setItem("imagelore.left",String(leftWidth)),[leftWidth]);

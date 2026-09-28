@@ -22,18 +22,53 @@ let mockSources:SourceFolder[]=[{id:1,path:"D:/AI/outputs",name:"outputs",auto_s
 
 const toSummary=(a:AssetRecord):AssetSummary=>({id:a.id,path:a.path,name:a.name,favorite:a.favorite,width:a.width,height:a.height,format:a.format,metadata_type:a.metadata_type,fingerprint:a.fingerprint,file_mtime:a.file_mtime,missing:a.missing,updated_at:a.updated_at});
 
+const generationOf=(a:AssetRecord)=>{try{return JSON.parse(a.generation_json||"{}") as Record<string,unknown>}catch{return{}}};
+const numeric=(value:unknown)=>{const n=Number(value);return Number.isFinite(n)?n:null};
+
 function filtered(filter:LibraryFilter){
   const q=filter.query.trim().toLowerCase();
-  return mockAssets.filter(a=>(!q||[a.name,a.prompt,a.negative_prompt,a.model,...a.tags].join(" ").toLowerCase().includes(q))
-    &&(filter.view!=="favorites"||!!a.favorite)&&(filter.view!=="missing"||!!a.missing)
-    &&(!filter.tag||a.tags.includes(filter.tag))&&(!filter.model||a.model===filter.model));
+  const rows=mockAssets.filter(a=>{
+    const g=generationOf(a),steps=numeric(g.steps),cfg=numeric(g.cfg_scale),denoise=numeric(g.denoise);
+    const orientation=a.width&&a.height?(a.width===a.height?"square":a.width>a.height?"landscape":"portrait"):null;
+    return (!q||[a.name,a.prompt,a.negative_prompt,a.model,...a.tags].join(" ").toLowerCase().includes(q))
+      &&(filter.view!=="favorites"||!!a.favorite)&&(filter.view!=="missing"||!!a.missing)
+      &&(!filter.tag||a.tags.includes(filter.tag))&&(!filter.model||a.model===filter.model)
+      &&(!filter.metadata_type||a.metadata_type===filter.metadata_type)
+      &&(!filter.sampler||String(g.sampler||"").toLowerCase()===filter.sampler.toLowerCase())
+      &&(!filter.scheduler||String(g.scheduler||"").toLowerCase()===filter.scheduler.toLowerCase())
+      &&(!filter.seed||String(g.seed||"")===filter.seed)
+      &&(filter.steps_min==null||steps!=null&&steps>=filter.steps_min)
+      &&(filter.steps_max==null||steps!=null&&steps<=filter.steps_max)
+      &&(filter.cfg_min==null||cfg!=null&&cfg>=filter.cfg_min)
+      &&(filter.cfg_max==null||cfg!=null&&cfg<=filter.cfg_max)
+      &&(filter.denoise_min==null||denoise!=null&&denoise>=filter.denoise_min)
+      &&(filter.denoise_max==null||denoise!=null&&denoise<=filter.denoise_max)
+      &&(!filter.orientation||orientation===filter.orientation);
+  });
+  const sort=filter.sort||"smart";
+  return rows.sort((a,b)=>{
+    if(sort==="updated_desc")return b.updated_at-a.updated_at;
+    if(sort==="updated_asc")return a.updated_at-b.updated_at;
+    if(sort==="created_desc")return b.created_at-a.created_at;
+    if(sort==="created_asc")return a.created_at-b.created_at;
+    if(sort==="name_asc")return a.name.localeCompare(b.name);
+    if(sort==="name_desc")return b.name.localeCompare(a.name);
+    if(sort==="resolution_desc")return (b.width||0)*(b.height||0)-(a.width||0)*(a.height||0);
+    if(sort==="size_desc")return (b.file_size||0)-(a.file_size||0);
+    return b.favorite-a.favorite||b.updated_at-a.updated_at;
+  });
 }
 
 async function mockCall<T>(command:string,args:Record<string,unknown>):Promise<T>{
   await new Promise(r=>setTimeout(r,20));
   switch(command){
     case "library_page":{const filter=args.filter as LibraryFilter;const offset=Number(args.offset||0),limit=Number(args.limit||200);const all=filtered(filter);return {items:all.slice(offset,offset+limit).map(toSummary),total:all.length,offset,limit} as T;}
-    case "library_facets":return {tags:[{name:"character",count:2},{name:"aero",count:1},{name:"study",count:1}],models:[{name:"GPT Image",count:3},{name:"Flux",count:2}],collections:mockCollections} as T;
+    case "library_facets":return {
+      tags:[{name:"character",count:2},{name:"aero",count:1},{name:"study",count:1}],
+      models:[{name:"GPT Image",count:3},{name:"Flux",count:2}],collections:mockCollections,
+      metadata_types:[{name:"manual",count:5},{name:"a1111",count:1}],
+      samplers:[{name:"DPM++ 2M",count:1}],schedulers:[]
+    } as T;
     case "get_asset":return mockAssets.find(x=>x.id===Number(args.id)) as T;
     case "preview_cache_path":return (demoImages.get(Number(args.id))||demoSvg("Preview","#73c7e5","#71bb6a")) as T;
     case "update_prompt":{const id=Number(args.id),patch=args.patch as PromptPatch;mockAssets=mockAssets.map(x=>x.id===id?{...x,...patch,updated_at:Math.floor(Date.now()/1000)}:x);return mockAssets.find(x=>x.id===id) as T;}

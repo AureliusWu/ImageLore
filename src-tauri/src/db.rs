@@ -134,7 +134,7 @@ fn fts_query(input: &str) -> String {
 }
 
 fn filter_parts(filter: &LibraryFilter) -> (String, String, Vec<SqlValue>) {
-    let mut joins = String::new();
+    let mut joins = " LEFT JOIN generation_index gi ON gi.asset_id=a.id ".to_string();
     let mut where_parts = vec!["1=1".to_string()];
     let mut args = Vec::<SqlValue>::new();
 
@@ -174,6 +174,34 @@ fn filter_parts(filter: &LibraryFilter) -> (String, String, Vec<SqlValue>) {
         where_parts.push("EXISTS(SELECT 1 FROM collection_assets ca WHERE ca.asset_id=a.id AND ca.collection_id=?)".into());
         args.push(SqlValue::Integer(collection_id));
     }
+    if let Some(value)=filter.metadata_type.as_ref().filter(|x|!x.trim().is_empty()){
+        where_parts.push("a.metadata_type=? COLLATE NOCASE".into());
+        args.push(SqlValue::Text(value.clone()));
+    }
+    if let Some(value)=filter.sampler.as_ref().filter(|x|!x.trim().is_empty()){
+        where_parts.push("COALESCE(gi.sampler,'')=? COLLATE NOCASE".into());
+        args.push(SqlValue::Text(value.clone()));
+    }
+    if let Some(value)=filter.scheduler.as_ref().filter(|x|!x.trim().is_empty()){
+        where_parts.push("COALESCE(gi.scheduler,'')=? COLLATE NOCASE".into());
+        args.push(SqlValue::Text(value.clone()));
+    }
+    if let Some(value)=filter.seed.as_ref().filter(|x|!x.trim().is_empty()){
+        where_parts.push("COALESCE(gi.seed,'')=?".into());
+        args.push(SqlValue::Text(value.trim().to_string()));
+    }
+    if let Some(value)=filter.steps_min{where_parts.push("gi.steps>=?".into());args.push(SqlValue::Integer(value))}
+    if let Some(value)=filter.steps_max{where_parts.push("gi.steps<=?".into());args.push(SqlValue::Integer(value))}
+    if let Some(value)=filter.cfg_min{where_parts.push("gi.cfg_scale>=?".into());args.push(SqlValue::Real(value))}
+    if let Some(value)=filter.cfg_max{where_parts.push("gi.cfg_scale<=?".into());args.push(SqlValue::Real(value))}
+    if let Some(value)=filter.denoise_min{where_parts.push("gi.denoise>=?".into());args.push(SqlValue::Real(value))}
+    if let Some(value)=filter.denoise_max{where_parts.push("gi.denoise<=?".into());args.push(SqlValue::Real(value))}
+    match filter.orientation.as_deref(){
+        Some("landscape")=>where_parts.push("a.width IS NOT NULL AND a.height IS NOT NULL AND a.width>a.height".into()),
+        Some("portrait")=>where_parts.push("a.width IS NOT NULL AND a.height IS NOT NULL AND a.height>a.width".into()),
+        Some("square")=>where_parts.push("a.width IS NOT NULL AND a.height IS NOT NULL AND a.width=a.height".into()),
+        _=>{}
+    }
     (joins, where_parts.join(" AND "), args)
 }
 
@@ -185,7 +213,18 @@ pub fn library_page(conn: &Connection, filter: &LibraryFilter, offset: i64, limi
     let count_sql=format!("SELECT COUNT(DISTINCT a.id) FROM assets a LEFT JOIN prompt_state ps ON ps.asset_id=a.id {} WHERE {}",joins,where_sql);
     let total:i64=conn.query_row(&count_sql,params_from_iter(args.clone()),|r|r.get(0)).map_err(|e|e.to_string())?;
 
-    let order=if filter.view=="recent"{"a.updated_at DESC,a.id DESC"}else{"a.favorite DESC,a.updated_at DESC,a.id DESC"};
+    let order=match filter.sort.as_str(){
+        "updated_desc"=>"a.updated_at DESC,a.id DESC",
+        "updated_asc"=>"a.updated_at ASC,a.id ASC",
+        "created_desc"=>"a.created_at DESC,a.id DESC",
+        "created_asc"=>"a.created_at ASC,a.id ASC",
+        "name_asc"=>"a.name COLLATE NOCASE ASC,a.id ASC",
+        "name_desc"=>"a.name COLLATE NOCASE DESC,a.id DESC",
+        "resolution_desc"=>"(COALESCE(a.width,0)*COALESCE(a.height,0)) DESC,a.updated_at DESC,a.id DESC",
+        "size_desc"=>"COALESCE(a.file_size,0) DESC,a.updated_at DESC,a.id DESC",
+        _ if filter.view=="recent"=>"a.updated_at DESC,a.id DESC",
+        _=>"a.favorite DESC,a.updated_at DESC,a.id DESC"
+    };
     let sql=format!("{} {} WHERE {} ORDER BY {} LIMIT ? OFFSET ?",SELECT_SUMMARY,joins,where_sql,order);
     let mut page_args=args;page_args.push(SqlValue::Integer(limit));page_args.push(SqlValue::Integer(offset));
     let mut st=conn.prepare(&sql).map_err(|e|e.to_string())?;
@@ -215,7 +254,25 @@ pub fn facets(conn: &Connection) -> Result<LibraryFacets, String> {
     ).map_err(|e|e.to_string())?;
     let models=model_st.query_map([],|r|Ok(FacetCount{name:r.get(0)?,count:r.get(1)?})).map_err(|e|e.to_string())?.filter_map(Result::ok).collect();
 
-    Ok(LibraryFacets { tags, models, collections: collections(conn)? })
+    let mut metadata_st=conn.prepare(
+        "SELECT metadata_type,COUNT(*) FROM assets GROUP BY metadata_type ORDER BY COUNT(*) DESC,metadata_type COLLATE NOCASE"
+    ).map_err(|e|e.to_string())?;
+    let metadata_types=metadata_st.query_map([],|r|Ok(FacetCount{name:r.get(0)?,count:r.get(1)?}))
+        .map_err(|e|e.to_string())?.filter_map(Result::ok).collect();
+
+    let mut sampler_st=conn.prepare(
+        "SELECT sampler,COUNT(*) FROM generation_index WHERE sampler<>'' GROUP BY sampler COLLATE NOCASE ORDER BY COUNT(*) DESC,sampler COLLATE NOCASE LIMIT 100"
+    ).map_err(|e|e.to_string())?;
+    let samplers=sampler_st.query_map([],|r|Ok(FacetCount{name:r.get(0)?,count:r.get(1)?}))
+        .map_err(|e|e.to_string())?.filter_map(Result::ok).collect();
+
+    let mut scheduler_st=conn.prepare(
+        "SELECT scheduler,COUNT(*) FROM generation_index WHERE scheduler<>'' GROUP BY scheduler COLLATE NOCASE ORDER BY COUNT(*) DESC,scheduler COLLATE NOCASE LIMIT 100"
+    ).map_err(|e|e.to_string())?;
+    let schedulers=scheduler_st.query_map([],|r|Ok(FacetCount{name:r.get(0)?,count:r.get(1)?}))
+        .map_err(|e|e.to_string())?.filter_map(Result::ok).collect();
+
+    Ok(LibraryFacets { tags, models, collections: collections(conn)?, metadata_types, samplers, schedulers })
 }
 
 pub fn asset_exists_by_path(conn: &Connection, path: &str) -> Result<Option<i64>, String> {
@@ -241,25 +298,34 @@ pub fn asset_exists_by_fingerprint(conn:&Connection,fingerprint:&str)->Result<Op
 
 pub fn duplicate_groups(conn:&Connection)->Result<Vec<crate::models::DuplicateGroup>,String>{
     let mut st=conn.prepare(
-        "SELECT fingerprint,COUNT(*) FROM assets WHERE fingerprint<>'' GROUP BY fingerprint HAVING COUNT(*)>1 ORDER BY COUNT(*) DESC"
+        "SELECT a.fingerprint,d.n,a.id,a.name
+         FROM assets a
+         JOIN (
+           SELECT fingerprint,COUNT(*) AS n
+           FROM assets
+           WHERE fingerprint<>''
+           GROUP BY fingerprint
+           HAVING COUNT(*)>1
+         ) d ON d.fingerprint=a.fingerprint
+         ORDER BY d.n DESC,a.fingerprint,a.id"
     ).map_err(|e|e.to_string())?;
-    let fingerprints:Vec<(String,i64)>=st.query_map([],|r|Ok((r.get(0)?,r.get(1)?)))
+    let rows:Vec<(String,i64,i64,String)>=st.query_map([],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))
         .map_err(|e|e.to_string())?.filter_map(Result::ok).collect();
-    let mut groups=Vec::new();
-    for(fingerprint,count)in fingerprints{
-        let mut item_st=conn.prepare("SELECT id,name FROM assets WHERE fingerprint=?1 ORDER BY id").map_err(|e|e.to_string())?;
-        let items:Vec<(i64,String)>=item_st.query_map(params![fingerprint.clone()],|r|Ok((r.get(0)?,r.get(1)?)))
-            .map_err(|e|e.to_string())?.filter_map(Result::ok).collect();
-        groups.push(crate::models::DuplicateGroup{
-            fingerprint,
-            count,
-            asset_ids:items.iter().map(|x|x.0).collect(),
-            names:items.into_iter().map(|x|x.1).collect(),
-        });
+
+    let mut groups:Vec<crate::models::DuplicateGroup>=Vec::new();
+    for(fingerprint,count,id,name)in rows{
+        match groups.last_mut(){
+            Some(group) if group.fingerprint==fingerprint=>{
+                group.asset_ids.push(id);
+                group.names.push(name);
+            }
+            _=>groups.push(crate::models::DuplicateGroup{
+                fingerprint,count,asset_ids:vec![id],names:vec![name],
+            })
+        }
     }
     Ok(groups)
 }
-
 
 #[cfg(test)]
 mod tests{

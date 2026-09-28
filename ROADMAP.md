@@ -57,6 +57,16 @@
 - 复用后台导入进度、取消与重复检测
 - Migration v4
 
+## v0.17.0 — Generation Explorer ✅
+- Migration v5 + 可重建的结构化 Generation Index
+- Seed / Steps / Sampler / Scheduler / CFG / Denoise 高级筛选
+- 元数据来源与横图 / 竖图 / 方图筛选
+- 图库排序与 Active Filter chips
+- Saved View 2.0 保存完整筛选与排序
+- 批量收藏、元数据重读与 Generation Session 分配
+- 50k 图库筛选性能 smoke test
+- 布局缓存、缩略图异步、关闭导入任务与重复组查询稳定性修复
+
 ## v1.0.0 — Stable Local Library
 - Windows 代码签名与自动更新
 - 启动故障恢复与 rotating logs

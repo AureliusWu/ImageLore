@@ -1,4 +1,4 @@
-use crate::{db, metadata, models::*, preview, sidecar, state::AppState};
+use crate::{db, generation_index, metadata, models::*, preview, sidecar, state::AppState};
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
 use std::{collections::{HashMap, HashSet}, fs, path::{Path, PathBuf}, process::Command};
@@ -208,6 +208,7 @@ pub fn rescan_metadata(state:State<'_,AppState>,id:i64)->Result<AssetRecord,Stri
     if old.prompt.is_empty()&&old.negative_prompt.is_empty()&&old.model.is_empty(){
         tx.execute("UPDATE prompt_state SET prompt=?1,negative_prompt=?2,model=?3,updated_at=?4 WHERE asset_id=?5",params![extract.prompt,extract.negative_prompt,extract.model,stamp,id]).map_err(|e|e.to_string())?;
     }
+    generation_index::upsert(&tx,id,&extract.generation_json)?;
     db::reindex_asset(&tx,id)?;
     tx.commit().map_err(|e|e.to_string())?;
     let refreshed=db::get_asset(&conn,id)?;

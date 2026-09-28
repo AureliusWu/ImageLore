@@ -86,3 +86,24 @@
 .source-empty strong{display:block;font-size:14px;color:#356277}
 .source-empty p{max-width:520px;margin:8px auto 14px;font-size:11px;line-height:1.6;color:#728d96}
 @media(max-width:900px){.manager-tabs{grid-template-columns:repeat(4,1fr)}.source-row{align-items:flex-start;flex-wrap:wrap}.source-row>div{flex:1 1 100%}.manager-toolbar{align-items:flex-start;flex-direction:column}.manager-toolbar-actions{width:100%}}
+
+
+/* v0.17 Generation Explorer */
+.advanced-filter{margin:0 10px 8px;border:1px solid rgba(68,135,153,.16);border-radius:12px;background:rgba(255,255,255,.46);overflow:hidden}
+.advanced-filter>summary{list-style:none;cursor:pointer;display:flex;align-items:center;justify-content:space-between;padding:8px 10px;font-size:9px;font-weight:700;color:#426f81;user-select:none}
+.advanced-filter>summary::-webkit-details-marker{display:none}
+.advanced-filter>summary b{min-width:18px;height:18px;padding:0 5px;border-radius:999px;display:grid;place-items:center;background:#e0f4f7;color:#2f7e98;font-size:8px}
+.advanced-filter-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;padding:0 9px 9px;border-top:1px solid rgba(68,135,153,.1);padding-top:9px}
+.advanced-filter-grid label{display:flex;flex-direction:column;gap:4px;min-width:0}
+.advanced-filter-grid label>span{font-size:8px;color:#6b8a96;font-weight:650}
+.advanced-filter-grid input,.advanced-filter-grid select,.generation-batch select{min-width:0;height:30px;border:1px solid #cfe1e5;border-radius:8px;background:rgba(255,255,255,.88);color:#345f70;padding:0 7px;font-size:9px;outline:none}
+.advanced-filter-grid input:focus,.advanced-filter-grid select:focus,.generation-batch select:focus{border-color:#83c5d5;box-shadow:0 0 0 2px rgba(92,185,210,.1)}
+.advanced-filter-grid .clear-filter{align-self:end;height:30px}
+.filter-chips{display:flex;flex-wrap:wrap;gap:5px;padding:0 10px 8px}
+.filter-chips button{border:1px solid #bfe0e7;background:#ecf9fb;color:#31768d;border-radius:999px;padding:4px 7px;font-size:8px;display:inline-flex;align-items:center;gap:5px}
+.filter-chips button:hover{background:#fff}
+.filter-chips button span{font-weight:800;color:#6c98a7}
+.saved-view-bar{grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto}
+.generation-batch{flex-wrap:wrap}
+.generation-batch select{max-width:150px}
+@media(max-width:1180px){.advanced-filter-grid{grid-template-columns:1fr}.saved-view-bar{grid-template-columns:1fr 1fr}.saved-view-bar>button{grid-column:1/-1}}
