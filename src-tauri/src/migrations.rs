@@ -2,7 +2,7 @@ use crate::generation_index;
 use rusqlite::{params,Connection,OptionalExtension};
 use sha2::{Digest,Sha256};
 
-const LATEST:i64=6;
+const LATEST:i64=7;
 
 fn set_version(conn:&Connection,version:i64)->Result<(),String>{
     conn.execute(
@@ -28,6 +28,15 @@ fn has_column(conn:&Connection,table:&str,column:&str)->Result<bool,String>{
         if name==column{return Ok(true)}
     }
     Ok(false)
+}
+
+fn has_table(conn:&Connection,table:&str)->Result<bool,String>{
+    let count:i64=conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE name=?1",
+        params![table],
+        |r|r.get(0)
+    ).map_err(|e|e.to_string())?;
+    Ok(count>0)
 }
 
 fn migrate_v3(conn:&Connection)->Result<(),String>{
@@ -150,6 +159,43 @@ fn migrate_v6(conn:&Connection)->Result<(),String>{
     ).map_err(|e|e.to_string())
 }
 
+fn migrate_v7(conn:&Connection)->Result<(),String>{
+    conn.execute_batch(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS asset_cjk_search USING fts5(
+           asset_id UNINDEXED,
+           text,
+           tokenize='trigram'
+         );"
+    ).map_err(|e|e.to_string())?;
+
+    let can_backfill=
+        has_column(conn,"assets","name")? &&
+        has_table(conn,"prompt_state")? &&
+        has_table(conn,"tags")? &&
+        has_table(conn,"asset_tags")?;
+    if can_backfill{
+        conn.execute("DELETE FROM asset_cjk_search",[]).map_err(|e|e.to_string())?;
+        conn.execute(
+            "INSERT INTO asset_cjk_search(rowid,asset_id,text)
+             SELECT a.id,a.id,
+                    a.name || char(31) ||
+                    COALESCE(ps.prompt,'') || char(31) ||
+                    COALESCE(ps.negative_prompt,'') || char(31) ||
+                    COALESCE(ps.model,'') || char(31) ||
+                    COALESCE((
+                      SELECT GROUP_CONCAT(t.name,' ')
+                      FROM asset_tags at
+                      JOIN tags t ON t.id=at.tag_id
+                      WHERE at.asset_id=a.id
+                    ),'')
+             FROM assets a
+             LEFT JOIN prompt_state ps ON ps.asset_id=a.id",
+            []
+        ).map_err(|e|e.to_string())?;
+    }
+    Ok(())
+}
+
 pub fn apply(conn:&Connection)->Result<(),String>{
     conn.execute_batch("CREATE TABLE IF NOT EXISTS app_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);").map_err(|e|e.to_string())?;
     let current:Option<String>=conn.query_row(
@@ -197,12 +243,50 @@ pub fn apply(conn:&Connection)->Result<(),String>{
         set_version(conn,version)?;
     }
 
+    if version<7{
+        migrate_v7(conn)?;
+        version=7;
+        set_version(conn,version)?;
+    }
+
     Ok(())
 }
 
 #[cfg(test)]
 mod tests{
     use super::*;
+
+    #[test]
+    fn migration_v7_adds_cjk_trigram_index(){
+        let conn=Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE app_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+             INSERT INTO app_meta VALUES('schema_version','6');
+             CREATE TABLE assets(id INTEGER PRIMARY KEY,name TEXT NOT NULL);
+             CREATE TABLE prompt_state(
+               asset_id INTEGER PRIMARY KEY,
+               prompt TEXT NOT NULL DEFAULT '',
+               negative_prompt TEXT NOT NULL DEFAULT '',
+               model TEXT NOT NULL DEFAULT ''
+             );
+             CREATE TABLE tags(id INTEGER PRIMARY KEY,name TEXT NOT NULL);
+             CREATE TABLE asset_tags(asset_id INTEGER NOT NULL,tag_id INTEGER NOT NULL);
+             INSERT INTO assets(id,name) VALUES(1,'蓝色大肥鱼.png');
+             INSERT INTO prompt_state(asset_id,prompt,negative_prompt,model)
+             VALUES(1,'夜晚卧室中的蓝发角色','','GPT Image');
+             INSERT INTO tags(id,name) VALUES(1,'海洋少女');
+             INSERT INTO asset_tags(asset_id,tag_id) VALUES(1,1);"
+        ).unwrap();
+        apply(&conn).unwrap();
+        let version:String=conn.query_row("SELECT value FROM app_meta WHERE key='schema_version'",[],|r|r.get(0)).unwrap();
+        assert_eq!(version,"7");
+        let hit:i64=conn.query_row(
+            "SELECT asset_id FROM asset_cjk_search WHERE asset_cjk_search MATCH ?1",
+            params!["\"蓝色大肥鱼\""],
+            |r|r.get(0)
+        ).unwrap();
+        assert_eq!(hit,1);
+    }
 
     #[test]
     fn migration_v6_adds_semantic_tables(){
@@ -214,7 +298,7 @@ mod tests{
         ).unwrap();
         apply(&conn).unwrap();
         let version:String=conn.query_row("SELECT value FROM app_meta WHERE key='schema_version'",[],|r|r.get(0)).unwrap();
-        assert_eq!(version,"6");
+        assert_eq!(version,"7");
         let enabled:String=conn.query_row("SELECT value FROM semantic_settings WHERE key='enabled'",[],|r|r.get(0)).unwrap();
         assert_eq!(enabled,"0");
         conn.execute("INSERT INTO assets(id) VALUES(1)",[]).unwrap();
@@ -236,7 +320,7 @@ mod tests{
         ).unwrap();
         apply(&conn).unwrap();
         let version:String=conn.query_row("SELECT value FROM app_meta WHERE key='schema_version'",[],|r|r.get(0)).unwrap();
-        assert_eq!(version,"6");
+        assert_eq!(version,"7");
         let row:(String,i64,String,f64)=conn.query_row(
             "SELECT seed,steps,sampler,cfg_scale FROM generation_index WHERE asset_id=1",[],
             |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))
@@ -256,7 +340,7 @@ mod tests{
         ).unwrap();
         apply(&conn).unwrap();
         let version:String=conn.query_row("SELECT value FROM app_meta WHERE key='schema_version'",[],|r|r.get(0)).unwrap();
-        assert_eq!(version,"6");
+        assert_eq!(version,"7");
         conn.execute(
             "INSERT INTO source_folders(path,name,created_at,updated_at) VALUES('D:/AI','AI',1,1)",[]
         ).unwrap();
