@@ -3,7 +3,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-dialog";
 import { api,isTauri } from "./api";
 import { APP_VERSION } from "./version";
-import type { AssetRecord,AssetSession,AssetSummary,BackupRecord,DuplicateGroup,GenerationSession,ImportSummary,LibraryFacets,LibraryFilter,LibraryHealth,Lineage,ModelAlias,SavedFilter,SourceFolder } from "./types";
+import type { AssetRecord,AssetSession,AssetSummary,BackupRecord,DuplicateGroup,GenerationSession,ImportSummary,LibraryFacets,LibraryFilter,LibraryHealth,Lineage,ModelAlias,SavedFilter,SearchMode,SemanticStatus,SourceFolder } from "./types";
 import { useDebouncedValue } from "./hooks/useDebouncedValue";
 import { useEditorDraft } from "./hooks/useEditorDraft";
 import { useNativeDrop } from "./hooks/useNativeDrop";
@@ -16,6 +16,7 @@ import { AppDialogs,type AppModalState } from "./components/AppDialogs";
 import { LibraryManager } from "./components/LibraryManager";
 import { ParentPicker } from "./components/ParentPicker";
 import { useImportJob } from "./hooks/useImportJob";
+import { useSemanticJob } from "./hooks/useSemanticJob";
 import { useCloseGuard } from "./hooks/useCloseGuard";
 
 const PAGE_SIZE=240;
@@ -27,7 +28,13 @@ export default function App(){
   const[version,setVersion]=useState(APP_VERSION);
   const[status,setStatus]=useState("就绪");
   const[filter,setFilter]=useState<LibraryFilter>({query:"",view:"all",tag:null,model:null,collection_id:null,sort:"smart"});
-  const debouncedQuery=useDebouncedValue(filter.query,180);
+  const[searchMode,setSearchMode]=useState<SearchMode>("keyword");
+  const[similarSource,setSimilarSource]=useState<{id:number;name:string}|null>(null);
+  const[semanticScores,setSemanticScores]=useState<Map<number,number>>(new Map());
+  const[semanticStatus,setSemanticStatus]=useState<SemanticStatus|null>(null);
+  const keywordQuery=useDebouncedValue(filter.query,180);
+  const semanticQuery=useDebouncedValue(filter.query,550);
+  const debouncedQuery=searchMode==="semantic"?semanticQuery:keywordQuery;
   const effectiveFilter=useMemo(()=>({...filter,query:debouncedQuery}),[filter,debouncedQuery]);
 
   const[assets,setAssets]=useState<AssetSummary[]>([]);
@@ -71,6 +78,7 @@ export default function App(){
   const refreshSessions=useCallback(()=>api.sessions().then(setSessions).catch(()=>setSessions([])),[]);
   const refreshSavedFilters=useCallback(()=>api.savedFilters().then(setSavedFilters).catch(()=>setSavedFilters([])),[]);
   const refreshSources=useCallback(()=>api.sourceFolders().then(setSourceFolders).catch(()=>setSourceFolders([])),[]);
+  const refreshSemanticStatus=useCallback(()=>api.semanticStatus().then(setSemanticStatus).catch(()=>setSemanticStatus(null)),[]);
   const onEditorSaved=useCallback((a:AssetRecord)=>setCurrent(prev=>prev?.id===a.id?a:prev),[]);
   const editor=useEditorDraft(current,onEditorSaved,refreshFacets,setStatus);
   const{prompt,negative,model,tagsText,setPrompt,setNegative,setModel,setTagsText,flush:flushEditor,load:loadEditor}=editor;
@@ -95,22 +103,39 @@ export default function App(){
     if(seq!==refreshSeq.current)return;
     setLoading(true);
     try{
-      const page=await api.page(effectiveFilter,0,PAGE_SIZE);
-      if(seq!==refreshSeq.current)return;
-      const preferredVisible=preferId&&page.items.some(x=>x.id===preferId)?preferId:undefined;
-      const nextId=preferredVisible??(current?.id&&page.items.some(x=>x.id===current.id)?current.id:page.items[0]?.id);
+      let items:AssetSummary[]=[];let nextTotal=0;
+      if(searchMode==="semantic"&&(similarSource||effectiveFilter.query.trim())){
+        const semanticFilter={...effectiveFilter,query:""};
+        const hits=similarSource
+          ?await api.semanticSearchSimilar(similarSource.id,semanticFilter,PAGE_SIZE)
+          :await api.semanticSearchText(effectiveFilter.query,semanticFilter,PAGE_SIZE);
+        if(seq!==refreshSeq.current)return;
+        items=hits.map(x=>x.asset);nextTotal=hits.length;
+        setSemanticScores(new Map(hits.map(x=>[x.asset.id,x.score])));
+      }else{
+        const page=await api.page(effectiveFilter,0,PAGE_SIZE);
+        if(seq!==refreshSeq.current)return;
+        items=page.items;nextTotal=page.total;setSemanticScores(new Map());
+      }
+      const preferredVisible=preferId&&items.some(x=>x.id===preferId)?preferId:undefined;
+      const nextId=preferredVisible??(current?.id&&items.some(x=>x.id===current.id)?current.id:items[0]?.id);
       const next=nextId?await api.get(nextId).catch(()=>null):null;
       if(seq!==refreshSeq.current)return;
-      setAssets(page.items);setTotal(page.total);
+      setAssets(items);setTotal(nextTotal);
       setCurrent(next);loadEditor(next);setSelected(next?new Set([next.id]):new Set());
+      if(searchMode==="semantic"&&(similarSource||effectiveFilter.query.trim()))setStatus("语义召回完成");
     }catch(e){
-      if(seq===refreshSeq.current)setStatus(`图库加载失败：${String(e)}`);
+      if(seq===refreshSeq.current){
+        setSemanticScores(new Map());
+        setStatus(searchMode==="semantic"?"语义搜索失败："+String(e):"图库加载失败："+String(e));
+      }
     }finally{
       if(seq===refreshSeq.current)setLoading(false);
     }
-  },[effectiveFilter,current?.id,flushEditor,loadEditor]);
+  },[effectiveFilter,searchMode,similarSource,current?.id,flushEditor,loadEditor]);
 
   const loadMore=useCallback(async()=>{
+    if(searchMode==="semantic"&&(similarSource||effectiveFilter.query.trim()))return;
     if(loading||assets.length>=total)return;
     const seq=refreshSeq.current;
     setLoading(true);
@@ -124,11 +149,11 @@ export default function App(){
     }finally{
       if(seq===refreshSeq.current)setLoading(false);
     }
-  },[loading,assets,effectiveFilter,total]);
+  },[loading,assets,effectiveFilter,total,searchMode,similarSource]);
 
   useEffect(()=>{if(isTauri)getVersion().then(setVersion).catch(()=>setVersion(APP_VERSION))},[]);
-  useEffect(()=>{void refresh()},[effectiveFilter]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(()=>{void refreshFacets()},[refreshFacets]);
+  useEffect(()=>{void refresh()},[effectiveFilter,searchMode,similarSource?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(()=>{void refreshFacets();void refreshSemanticStatus()},[refreshFacets,refreshSemanticStatus]);
   useEffect(()=>{void refreshSessions();void refreshSavedFilters()},[refreshSessions,refreshSavedFilters]);
   useEffect(()=>{if(isTauri)void api.ensureAutoBackup().catch(e=>setStatus("自动备份失败："+String(e)))},[]);
   useEffect(()=>{
