@@ -202,11 +202,14 @@ mod tests{
         let conn=Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE app_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
-             INSERT INTO app_meta VALUES('schema_version','3');"
+             INSERT INTO app_meta VALUES('schema_version','3');
+             CREATE TABLE assets(
+               id INTEGER PRIMARY KEY,path TEXT NOT NULL,generation_json TEXT NOT NULL DEFAULT '{}'
+             );"
         ).unwrap();
         apply(&conn).unwrap();
         let version:String=conn.query_row("SELECT value FROM app_meta WHERE key='schema_version'",[],|r|r.get(0)).unwrap();
-        assert_eq!(version,"4");
+        assert_eq!(version,"5");
         conn.execute(
             "INSERT INTO source_folders(path,name,created_at,updated_at) VALUES('D:/AI','AI',1,1)",[]
         ).unwrap();
