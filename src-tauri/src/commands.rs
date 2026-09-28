@@ -64,6 +64,7 @@ pub fn delete_asset(state:State<'_,AppState>, id:i64) -> Result<bool,String> {
         let tx=conn.transaction().map_err(|e|e.to_string())?;
         tx.execute("DELETE FROM assets WHERE id=?1",params![id]).map_err(|e|e.to_string())?;
         tx.execute("DELETE FROM asset_search WHERE asset_id=?1",params![id]).map_err(|e|e.to_string())?;
+        tx.execute("DELETE FROM asset_cjk_search WHERE rowid=?1",params![id]).map_err(|e|e.to_string())?;
         tx.commit().map_err(|e|e.to_string())?;
         fingerprint
     };

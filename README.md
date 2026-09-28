@@ -1,4 +1,4 @@
-# ImageLore v0.18.1
+# ImageLore v0.19.0
 
 ![ImageLore 应用预览](docs/og.svg)
 
@@ -30,7 +30,7 @@ ImageLore 是一个 local-first 的 AI 视觉生成记忆库，用来保存图�
 - 父子 Prompt Diff
 - Tag 重命名 / 合并 / 删除
 - Collection 重命名 / 删除
-- SQLite FTS + CJK 子串搜索
+- SQLite FTS + CJK 子串搜索；3 字及以上 CJK 查询使用本地 trigram 候选索引加速，最终仍以原有子串规则校验
 - 虚拟化图库 + 持久化 WebP 缓存
 - 本地 asset protocol 图片传输，不再通过 Base64 IPC 搬运大图
 - 1 GB 缓存治理

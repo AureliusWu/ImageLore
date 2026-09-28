@@ -14,6 +14,9 @@ con.execute("INSERT INTO asset_tags(asset_id,tag_id,created_at) VALUES(?,?,?)",(
 con.execute("INSERT INTO asset_search(asset_id,name,prompt,negative_prompt,model,tags) VALUES(?,?,?,?,?,?)",(aid,'Blue Character.png','blue hair marine character','low quality','GPT Image','character'))
 hit=con.execute("SELECT asset_id FROM asset_search WHERE asset_search MATCH ?",('"blue"*',)).fetchone()
 assert hit and hit[0]==aid
+con.execute("INSERT INTO asset_cjk_search(rowid,asset_id,text) VALUES(?,?,?)",(aid,aid,'蓝色大肥鱼 夜晚卧室 海洋少女'))
+cjk_hit=con.execute("SELECT asset_id FROM asset_cjk_search WHERE asset_cjk_search MATCH ?",('"蓝色大肥鱼"',)).fetchone()
+assert cjk_hit and cjk_hit[0]==aid
 con.execute("INSERT INTO collections(name,description,created_at,updated_at) VALUES(?,?,?,?)",('Study','',now,now))
 cid=con.execute('select id from collections').fetchone()[0]
 con.execute("INSERT INTO collection_assets(collection_id,asset_id,created_at) VALUES(?,?,?)",(cid,aid,now))
@@ -27,7 +30,7 @@ con.execute("INSERT INTO source_folders(path,name,auto_sync,last_scan_at,created
 con.execute("INSERT INTO generation_index(asset_id,seed,steps,sampler,scheduler,cfg_scale,denoise) VALUES(?,?,?,?,?,?,?)",(aid,'4120039',28,'DPM++ 2M','karras',5.5,0.72))
 con.execute("INSERT INTO semantic_embeddings(asset_id,model_id,dimensions,vector,fingerprint,indexed_at) VALUES(?,?,?,?,?,?)",(aid,'clip-vit-b32-qdrant-v1',2,b'12345678','schema-fp',now))
 con.commit()
-assert con.execute("select value from app_meta where key='schema_version'").fetchone()[0]=='6'
+assert con.execute("select value from app_meta where key='schema_version'").fetchone()[0]=='7'
 assert con.execute("select portable_id from assets where id=?",(aid,)).fetchone()[0]=='il-schema-smoke'
 assert con.execute("select count(*) from generation_sessions").fetchone()[0]==1
 assert con.execute("select count(*) from saved_filters").fetchone()[0]==1
