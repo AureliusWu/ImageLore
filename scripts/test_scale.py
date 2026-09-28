@@ -8,8 +8,8 @@ con.executescript(schema)
 now=1760000000
 con.executemany("INSERT INTO assets(path,name,created_at,updated_at) VALUES(?,?,?,?)",[(f'/tmp/{i}.png',f'asset {i}',now+i%100,now+i%100) for i in range(N)])
 rows=con.execute('select id,name from assets').fetchall()
-con.executemany("INSERT INTO prompt_state(asset_id,prompt,negative_prompt,model,updated_at) VALUES(?,?,?,?,?)",[(i,f'prompt blue character {i}','','GPT Image' if i%2 else 'Flux',now) for i,_ in rows])
-con.executemany("INSERT INTO asset_search(asset_id,name,prompt,negative_prompt,model,tags) VALUES(?,?,?,?,?,?)",[(i,name,f'prompt blue character {i}','','GPT Image' if i%2 else 'Flux','') for i,name in rows])
+con.executemany("INSERT INTO prompt_state(asset_id,prompt,negative_prompt,model,updated_at) VALUES(?,?,?,?,?)",[(i,f'prompt blue character 蓝发角色 {i}','','GPT Image' if i%2 else 'Flux',now) for i,_ in rows])
+con.executemany("INSERT INTO asset_search(asset_id,name,prompt,negative_prompt,model,tags) VALUES(?,?,?,?,?,?)",[(i,name,f'prompt blue character 蓝发角色 {i}','','GPT Image' if i%2 else 'Flux','') for i,name in rows])
 con.executemany("INSERT INTO asset_cjk_search(rowid,asset_id,text) VALUES(?,?,?)",[
     (i,i,f'{name} 蓝发角色 海洋少女 夜晚卧室 prompt {i}') for i,name in rows
 ])
