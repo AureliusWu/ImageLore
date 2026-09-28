@@ -92,6 +92,7 @@ pub fn run(){
             commands::toggle_favorite,
             commands::delete_asset,
             commands::add_revision,
+            commands::save_prompt_revision,
             commands::list_revisions,
             commands::restore_revision,
             commands::add_relation,
