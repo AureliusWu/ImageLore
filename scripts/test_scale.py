@@ -1,5 +1,5 @@
 from pathlib import Path
-import sqlite3,time
+import sqlite3,time,struct,math
 root=Path(__file__).resolve().parents[1]
 schema=(root/'src-tauri/schema.sql').read_text(encoding='utf-8')
 N=50000
@@ -13,6 +13,13 @@ con.executemany("INSERT INTO asset_search(asset_id,name,prompt,negative_prompt,m
 con.executemany("INSERT INTO generation_index(asset_id,seed,steps,sampler,scheduler,cfg_scale,denoise) VALUES(?,?,?,?,?,?,?)",[
     (i,str(100000+i),20+i%31,'DPM++ 2M' if i%3 else 'Euler','karras' if i%2 else 'normal',3.0+(i%50)/10,0.5+(i%20)/100)
     for i,_ in rows
+])
+def semantic_blob(i):
+    values=[((i*(j+3))%97)/97.0 for j in range(16)]
+    norm=math.sqrt(sum(v*v for v in values)) or 1.0
+    return struct.pack('<16f',*(v/norm for v in values))
+con.executemany("INSERT INTO semantic_embeddings(asset_id,model_id,dimensions,vector,fingerprint,indexed_at) VALUES(?,?,?,?,?,?)",[
+    (i,'clip-vit-b32-qdrant-v1',16,semantic_blob(i),f'fp-{i}',now) for i,_ in rows
 ])
 con.commit()
 t=time.perf_counter()
@@ -29,5 +36,16 @@ advanced=con.execute("""
 advanced_elapsed=time.perf_counter()-t
 assert advanced
 assert advanced_elapsed < 1.0
+query=[1/math.sqrt(16)]*16
+t=time.perf_counter()
+semantic_rows=con.execute("SELECT asset_id,vector FROM semantic_embeddings WHERE model_id=? AND dimensions=?",('clip-vit-b32-qdrant-v1',16)).fetchall()
+scores=[]
+for aid,blob in semantic_rows:
+    vector=struct.unpack('<16f',blob)
+    scores.append((sum(a*b for a,b in zip(query,vector)),aid))
+top=sorted(scores,reverse=True)[:240]
+semantic_elapsed=time.perf_counter()-t
+assert len(semantic_rows)==N and len(top)==240
+assert semantic_elapsed < 3.0
 con.close()
-print(f'ImageLore 50k search smoke test: PASS (FTS {fts_elapsed:.4f}s, generation {advanced_elapsed:.4f}s)')
+print(f'ImageLore 50k search smoke test: PASS (FTS {fts_elapsed:.4f}s, generation {advanced_elapsed:.4f}s, semantic-linear {semantic_elapsed:.4f}s)')
