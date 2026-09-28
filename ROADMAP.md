@@ -67,6 +67,16 @@
 - 50k 图库筛选性能 smoke test
 - 布局缓存、缩略图异步、关闭导入任务与重复组查询稳定性修复
 
+## v0.18.0 — Semantic Recall ✅
+- Migration v6 + 可重建 Semantic Embedding Index
+- FastEmbed / CLIP ViT-B/32 本地图文共同向量空间
+- 自然语言描述找图与视觉相似图片搜索
+- Semantic Recall 与 Generation Explorer 结构化筛选组合
+- 关键词 / 语义双搜索模式与相似度结果提示
+- AI 索引管理、增量更新、进度、取消与模型缓存治理
+- Import / Source Sync 与 Semantic Index 共用后台任务注册/取消底座
+- 50k 图库线性语义扫描性能 smoke test
+
 ## v1.0.0 — Stable Local Library
 - Windows 代码签名与自动更新
 - 启动故障恢复与 rotating logs

@@ -205,6 +205,16 @@ fn filter_parts(filter: &LibraryFilter) -> (String, String, Vec<SqlValue>) {
     (joins, where_parts.join(" AND "), args)
 }
 
+pub(crate) fn filtered_summaries(conn:&Connection,filter:&LibraryFilter,limit:i64)->Result<Vec<AssetSummary>,String>{
+    let(joins,where_sql,mut args)=filter_parts(filter);
+    let limit=limit.clamp(1,100_000);
+    let sql=format!("{} {} WHERE {} GROUP BY a.id LIMIT ?",SELECT_SUMMARY,joins,where_sql);
+    args.push(SqlValue::Integer(limit));
+    let mut st=conn.prepare(&sql).map_err(|e|e.to_string())?;
+    let rows=st.query_map(params_from_iter(args),row_summary).map_err(|e|e.to_string())?;
+    Ok(rows.filter_map(Result::ok).collect())
+}
+
 pub fn library_page(conn: &Connection, filter: &LibraryFilter, offset: i64, limit: i64) -> Result<LibraryPage, String> {
     let offset=offset.max(0);
     let limit=limit.clamp(20,500);

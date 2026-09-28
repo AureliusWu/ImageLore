@@ -1,5 +1,5 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import type { AssetRecord, AssetSession, AssetSummary, BackupRecord, CollectionRecord, DuplicateGroup, GenerationSession, ImportSummary, LibraryFacets, LibraryFilter, LibraryHealth, LibraryPage, Lineage, ModelAlias, PromptPatch, Revision, SavedFilter, SourceFolder } from "./types";
+import type { AssetRecord, AssetSession, AssetSummary, BackupRecord, CollectionRecord, DuplicateGroup, GenerationSession, ImportSummary, LibraryFacets, LibraryFilter, LibraryHealth, LibraryPage, Lineage, ModelAlias, PromptPatch, Revision, SavedFilter, SemanticHit, SemanticStatus, SourceFolder } from "./types";
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -112,6 +112,25 @@ async function mockCall<T>(command:string,args:Record<string,unknown>):Promise<T
     case "remove_source_folder":{mockSources=mockSources.filter(x=>x.id!==Number(args.id));return true as T;}
     case "set_source_auto_sync":{const id=Number(args.id),enabled=Boolean(args.enabled);mockSources=mockSources.map(x=>x.id===id?{...x,auto_sync:enabled}:x);return mockSources.find(x=>x.id===id) as T;}
     case "start_sync_sources":return 1 as T;
+    case "semantic_status":return {model_id:"clip-vit-b32-qdrant-v1",enabled:true,model_ready:true,vision_ready:true,text_ready:true,indexed:mockAssets.length,total:mockAssets.length,stale:0,model_bytes:620000000,index_bytes:mockAssets.length*2048} as T;
+    case "start_semantic_index":return 2 as T;
+    case "cancel_semantic_index":return true as T;
+    case "semantic_search_text":{
+      const query=String(args.query||"").toLowerCase();
+      const filter=args.filter as LibraryFilter;
+      const ranked=filtered({...filter,query:""}).map((asset,index)=>{
+        const hay=[asset.name,asset.prompt,asset.negative_prompt,asset.model,...asset.tags].join(" ").toLowerCase();
+        const score=hay.includes(query)?0.96:0.82-index*0.03;
+        return {asset:toSummary(asset),score};
+      }).sort((a,b)=>b.score-a.score);
+      return ranked.slice(0,Number(args.limit||240)) as T;
+    }
+    case "semantic_search_similar":{
+      const id=Number(args.assetId),filter=args.filter as LibraryFilter;
+      const ranked=filtered({...filter,query:""}).filter(a=>a.id!==id).map((asset,index)=>({asset:toSummary(asset),score:0.94-index*0.04}));
+      return ranked.slice(0,Number(args.limit||240)) as T;
+    }
+    case "clear_semantic_index":case "delete_semantic_models":return true as T;
     case "open_external":case "open_containing_folder":return true as T;
     default:throw new Error(`Unknown mock command: ${command}`);
   }
@@ -179,5 +198,12 @@ export const api={
   refreshMissing:()=>call<number>("refresh_missing"),
   relocateMissing:(root:string)=>call<number>("relocate_missing",{root}),
   openExternal:(id:number)=>call<boolean>("open_external",{id}),
-  openFolder:(id:number)=>call<boolean>("open_containing_folder",{id})
+  openFolder:(id:number)=>call<boolean>("open_containing_folder",{id}),
+  semanticStatus:()=>call<SemanticStatus>("semantic_status"),
+  startSemanticIndex:()=>call<number>("start_semantic_index"),
+  cancelSemanticIndex:(jobId:number)=>call<boolean>("cancel_semantic_index",{jobId}),
+  semanticSearchText:(query:string,filter:LibraryFilter,limit=240)=>call<SemanticHit[]>("semantic_search_text",{query,filter,limit}),
+  semanticSearchSimilar:(assetId:number,filter:LibraryFilter,limit=240)=>call<SemanticHit[]>("semantic_search_similar",{assetId,filter,limit}),
+  clearSemanticIndex:()=>call<boolean>("clear_semantic_index"),
+  deleteSemanticModels:()=>call<boolean>("delete_semantic_models")
 };
