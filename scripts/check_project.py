@@ -22,6 +22,7 @@ assert tauri['identifier']=='app.imagelore.desktop'
 assert tauri['bundle']['windows']['nsis']['installMode']=='currentUser'
 assert tauri['bundle']['windows']['nsis']['startMenuFolder']=='ImageLore'
 assert tauri['bundle']['windows']['allowDowngrades'] is False
+assert tauri['app']['security']['assetProtocol']['scope']==['$LOCALDATA/app.imagelore.desktop/cache/**']
 runtime='\n'.join(p.read_text(encoding='utf-8', errors='ignore') for p in (root/'src-tauri/src').glob('*.rs'))
 assert 'PromptDock' not in runtime and 'imagelore.db' not in runtime and '.promptdock.json' not in runtime
 assert 'library.sqlite3' in runtime
