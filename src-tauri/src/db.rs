@@ -312,7 +312,7 @@ pub fn duplicate_groups(conn:&Connection)->Result<Vec<crate::models::DuplicateGr
     let rows:Vec<(String,i64,i64,String)>=st.query_map([],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))
         .map_err(|e|e.to_string())?.filter_map(Result::ok).collect();
 
-    let mut groups=Vec::new();
+    let mut groups:Vec<crate::models::DuplicateGroup>=Vec::new();
     for(fingerprint,count,id,name)in rows{
         match groups.last_mut(){
             Some(group) if group.fingerprint==fingerprint=>{
