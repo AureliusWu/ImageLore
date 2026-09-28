@@ -98,7 +98,7 @@ $entries = @(
 Assert-True ($entries.Count -eq 1) "Expected exactly one ImageLore installed-app entry, found $($entries.Count)"
 
 $exeVersion = (Get-Item (Join-Path $newInstallDir "ImageLore.exe")).VersionInfo.ProductVersion
-Assert-True ($exeVersion -like "$CurrentVersion*") "Installed executable version is not $CurrentVersion: $exeVersion"
+Assert-True ($exeVersion -like "$CurrentVersion*") "Installed executable version is not ${CurrentVersion}: $exeVersion"
 
 Assert-True (Test-Path $startMenuLink) "Start menu shortcut missing after upgrade"
 $shell = New-Object -ComObject WScript.Shell
