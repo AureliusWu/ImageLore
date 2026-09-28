@@ -19,14 +19,14 @@ import { useImportJob } from "./hooks/useImportJob";
 import { useCloseGuard } from "./hooks/useCloseGuard";
 
 const PAGE_SIZE=240;
-const emptyFacets:LibraryFacets={tags:[],models:[],collections:[]};
+const emptyFacets:LibraryFacets={tags:[],models:[],collections:[],metadata_types:[],samplers:[],schedulers:[]};
 const emptyLineage:Lineage={parents:[],children:[]};
 const parseTags=(text:string)=>[...new Set(text.split(/[,，]/).map(x=>x.trim()).filter(Boolean))];
 
 export default function App(){
   const[version,setVersion]=useState(APP_VERSION);
   const[status,setStatus]=useState("就绪");
-  const[filter,setFilter]=useState<LibraryFilter>({query:"",view:"all",tag:null,model:null,collection_id:null});
+  const[filter,setFilter]=useState<LibraryFilter>({query:"",view:"all",tag:null,model:null,collection_id:null,sort:"smart"});
   const debouncedQuery=useDebouncedValue(filter.query,180);
   const effectiveFilter=useMemo(()=>({...filter,query:debouncedQuery}),[filter,debouncedQuery]);
 
@@ -127,7 +127,7 @@ export default function App(){
   },[loading,assets,effectiveFilter,total]);
 
   useEffect(()=>{if(isTauri)getVersion().then(setVersion).catch(()=>setVersion(APP_VERSION))},[]);
-  useEffect(()=>{void refresh()},[debouncedQuery,filter.view,filter.tag,filter.model,filter.collection_id]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(()=>{void refresh()},[effectiveFilter]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(()=>{void refreshFacets()},[refreshFacets]);
   useEffect(()=>{void refreshSessions();void refreshSavedFilters()},[refreshSessions,refreshSavedFilters]);
   useEffect(()=>{if(isTauri)void api.ensureAutoBackup().catch(e=>setStatus("自动备份失败："+String(e)))},[]);
@@ -280,6 +280,34 @@ export default function App(){
     await startImportJob(ids.length===1?"正在同步来源目录…":"正在同步全部来源目录…",()=>api.startSyncSources(ids));
   };
   const setSession=async(sessionId:number|null)=>{if(!current)return;try{await api.setAssetSession(current.id,sessionId,assetSession?.asset_note||"");setAssetSession(await api.assetSession(current.id));await refreshSessions();setStatus(sessionId?"已加入生成会话":"已移出生成会话")}catch(e){setStatus("生成会话更新失败："+String(e))}};
+  const selectedIds=()=>selected.size?[...selected]:current?[current.id]:[];
+  const batchFavorite=async(favorite:boolean)=>{
+    const ids=selectedIds();if(!ids.length)return;
+    try{
+      for(const id of ids){
+        const item=assets.find(x=>x.id===id);const value=item?.favorite??(current?.id===id?current.favorite:0);
+        if(Boolean(value)!==favorite)await api.toggleFavorite(id);
+      }
+      await refresh(current?.id);setStatus(favorite?`已收藏 ${ids.length} 项`:`已取消收藏 ${ids.length} 项`);
+    }catch(e){setStatus("批量收藏失败："+String(e))}
+  };
+  const batchRescan=async()=>{
+    const ids=selectedIds();if(!ids.length)return;
+    try{
+      setStatus(`正在重读 ${ids.length} 项元数据…`);
+      for(const id of ids)await api.rescan(id);
+      await refreshFacets();await refresh(current?.id);setStatus(`已重读 ${ids.length} 项元数据`);
+    }catch(e){setStatus("批量重读失败："+String(e))}
+  };
+  const batchSession=async(sessionId:number|null)=>{
+    const ids=selectedIds();if(!ids.length)return;
+    try{
+      for(const id of ids)await api.setAssetSession(id,sessionId,"");
+      await refreshSessions();
+      if(current&&ids.includes(current.id))setAssetSession(await api.assetSession(current.id));
+      setStatus(sessionId?`已将 ${ids.length} 项加入 Generation Session`:`已将 ${ids.length} 项移出 Generation Session`);
+    }catch(e){setStatus("批量分配 Session 失败："+String(e))}
+  };
   const createSession=async()=>{if(!current)return;const name=window.prompt("新建 Generation Session","");if(!name?.trim())return;const note=window.prompt("会话说明（可留空）","")||"";try{const session=await api.createSession(name.trim(),note);await api.setAssetSession(current.id,session.id,"");await refreshSessions();setAssetSession(await api.assetSession(current.id));setStatus("Generation Session 已创建")}catch(e){setStatus("新建会话失败："+String(e))}};
   const editSessionNote=async()=>{if(!current||!assetSession)return;const note=window.prompt("当前图片在此会话中的备注",assetSession.asset_note||"");if(note===null)return;try{await api.setAssetSession(current.id,assetSession.session_id,note);setAssetSession(await api.assetSession(current.id));setStatus("会话备注已保存")}catch(e){setStatus("会话备注保存失败："+String(e))}};
   const editRelationNote=async(relationId:number,currentNote:string)=>{const note=window.prompt("Branch Note",currentNote);if(note===null||!current)return;try{await api.updateRelationNote(relationId,note);setLineage(await api.lineage(current.id));setStatus("分支备注已保存")}catch(e){setStatus("分支备注保存失败："+String(e))}};
@@ -317,7 +345,7 @@ export default function App(){
     {drop.active?<div className="drop-overlay" aria-live="polite"><div className="drop-card"><span className="drop-orb">⇩</span><strong>松开鼠标即可导入</strong><p>{drop.count?`检测到 ${drop.count} 个项目`:"正在识别拖入内容"} · 支持图片和文件夹</p><small>文件夹会递归扫描；已存在的图片会自动跳过</small></div></div>:null}
     <AppHeader version={version} query={filter.query} onQuery={query=>setFilter(f=>({...f,query}))} onImport={chooseImages} onFolder={chooseFolder}/>
     <main className="workspace" style={{gridTemplateColumns:`${leftWidth}px 8px minmax(360px,1fr) 8px ${rightWidth}px`}}>
-      <LibraryPane assets={assets} total={total} currentId={current?.id} selected={selected} loading={loading} filter={filter} facets={facets} savedFilters={savedFilters} onFilter={setFilter} onAsset={onAsset} onLoadMore={loadMore} onBatchTags={()=>{setDialogText("");setModal({kind:"batch-tags"})}} onCollection={openCollection} onClearSelection={()=>setSelected(new Set())} onRefreshMissing={refreshMissing} onManage={openManager} onSaveView={saveCurrentView} onApplySavedView={applySavedView}/>
+      <LibraryPane assets={assets} total={total} currentId={current?.id} selected={selected} loading={loading} filter={filter} facets={facets} savedFilters={savedFilters} sessions={sessions} onFilter={setFilter} onAsset={onAsset} onLoadMore={loadMore} onBatchTags={()=>{setDialogText("");setModal({kind:"batch-tags"})}} onBatchFavorite={batchFavorite} onBatchRescan={batchRescan} onBatchSession={batchSession} onCollection={openCollection} onClearSelection={()=>setSelected(new Set())} onRefreshMissing={refreshMissing} onManage={openManager} onSaveView={saveCurrentView} onApplySavedView={applySavedView}/>
       <div className="splitter" onPointerDown={drag("left")}/>
       <PreviewPane asset={current} src={preview} mode={previewMode} onMode={setPreviewMode} onImport={chooseImages} onOpen={()=>current&&api.openExternal(current.id)} onFolder={()=>current&&api.openFolder(current.id)}/>
       <div className="splitter" onPointerDown={drag("right")}/>
