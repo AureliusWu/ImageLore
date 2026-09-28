@@ -35,7 +35,10 @@ export default function App(){
   const keywordQuery=useDebouncedValue(filter.query,180);
   const semanticQuery=useDebouncedValue(filter.query,550);
   const debouncedQuery=searchMode==="semantic"?semanticQuery:keywordQuery;
-  const effectiveFilter=useMemo(()=>({...filter,query:debouncedQuery}),[filter,debouncedQuery]);
+  const effectiveFilter=useMemo(()=>({...filter,query:debouncedQuery}),[
+    debouncedQuery,filter.view,filter.tag,filter.model,filter.collection_id,filter.metadata_type,filter.sampler,filter.scheduler,filter.seed,
+    filter.steps_min,filter.steps_max,filter.cfg_min,filter.cfg_max,filter.denoise_min,filter.denoise_max,filter.orientation,filter.sort
+  ]);
 
   const[assets,setAssets]=useState<AssetSummary[]>([]);
   const[total,setTotal]=useState(0);
