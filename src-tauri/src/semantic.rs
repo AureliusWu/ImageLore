@@ -148,7 +148,7 @@ fn install_trusted(cache:&Path,spec:TrustedModelSpec)->Result<PathBuf,String>{
     fs::create_dir_all(cache.join("trusted")).map_err(|e|e.to_string())?;
     let hub_cache=cache.join("hf");
     let api=ApiBuilder::new()
-        .with_cache_dir(hub_cache)
+        .with_cache_dir(hub_cache.clone())
         .with_progress(false)
         .build()
         .map_err(|e|format!("无法初始化固定版本模型下载器：{e}"))?;
@@ -332,7 +332,7 @@ pub fn start_semantic_index(app:AppHandle)->Result<u64,String>{
         };
 
         let mut indexed=0i64;
-        let mut skipped=0i64;
+        let skipped=0i64;
         let mut failed=0i64;
         let mut processed=0usize;
 
