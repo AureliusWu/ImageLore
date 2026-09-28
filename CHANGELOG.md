@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.19.0 — Search Scale
+
+- Added Migration v7 with a local FTS5 trigram candidate index for CJK-heavy libraries.
+- CJK search terms with 3 or more characters now use the trigram index to narrow candidates before the existing substring checks verify the final result, preserving prior search semantics.
+- One- and two-character CJK terms keep the existing substring fallback so short-query behavior remains unchanged.
+- Prompt, Negative Prompt, model, tags and relocated file names keep the trigram index synchronized through the existing asset reindex path.
+- Asset deletion now removes both classic FTS and CJK trigram search rows.
+- Extended fresh-schema, migration and 50,000-record performance coverage with an indexed CJK search smoke test.
+
+
 ## 0.18.1 — Editor & Semantic Security Hardening
 
 - Added a gallery right-click context menu to locate the selected image in the system file manager.
