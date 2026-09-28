@@ -77,10 +77,22 @@
 - Import / Source Sync 与 Semantic Index 共用后台任务注册/取消底座
 - 50k 图库线性语义扫描性能 smoke test
 
+## v0.18.1 — Editor & Semantic Security Hardening ✅
+- 图库右键打开文件所在位置
+- Prompt Revision 原子保存，消除 autosave 竞态
+- 固定 CLIP revision + ONNX SHA-256 / 大小可信校验
+- 模型 staging / trusted cache 原子安装与配套 JSON 边界校验
+
+## v0.19.0 — Search Scale ✅
+- Migration v7 + CJK FTS5 trigram 候选索引
+- 3 字及以上 CJK 查询先走 trigram 收窄，再以既有 LIKE 子串规则复核
+- 1–2 字 CJK 查询保持原有兼容路径
+- Prompt / Model / Tag / 文件名变化与删除保持搜索索引一致
+- 50k 图库 CJK 索引搜索性能 smoke test
+
 ## v1.0.0 — Stable Local Library
 - Windows 代码签名与自动更新
 - 启动故障恢复与 rotating logs
 - 大图库 50k+ 性能验收
-- CJK n-gram / trigram 搜索索引
 - 正式 Backup / Restore 灾难恢复验收
 - 稳定迁移兼容性测试矩阵
