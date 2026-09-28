@@ -28,7 +28,7 @@
       "assetProtocol": {
         "enable": true,
         "scope": [
-          "$LOCALDATA/ImageLore/cache/**"
+          "$LOCALDATA/app.imagelore.desktop/cache/**"
         ]
       }
     }
