@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.17.0 — Generation Explorer
+
+- Added Migration v5 with a rebuildable structured generation index for Seed, Steps, Sampler, Scheduler, CFG and Denoise.
+- Existing libraries backfill the generation index automatically; imports, source sync and metadata rescans keep it updated.
+- Added advanced library filters for generation parameters, metadata source and image orientation.
+- Added explicit library sorting by update/import time, file name, resolution and file size.
+- Upgraded Saved Views to preserve advanced filters and sorting while remaining compatible with existing saved filters.
+- Added active filter chips and batch actions for favorite state, metadata rescan and Generation Session assignment.
+- Raised the synthetic search smoke test to 50,000 records with generation-parameter queries.
+- Hardened corrupted workspace layout recovery and prevented stale thumbnail promises from writing after unmount.
+- Close-time import cancellation now waits for the import completion event before destroying the window.
+- Reworked duplicate-group retrieval from N+1 queries to a single grouped query.
+
+
 ## 0.16.0 — Source Sync
 
 - Hardened version metadata so `VERSION` automatically drives npm, Tauri, Cargo, runtime, README, UI preview and OG SVG; CI now rejects drift or a non-idempotent sync.
