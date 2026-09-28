@@ -45,8 +45,9 @@ pub fn upsert(conn:&Connection,asset_id:i64,generation_json:&str)->Result<(),Str
 pub fn rebuild_all(conn:&Connection)->Result<usize,String>{
     let rows:Vec<(i64,String)>={
         let mut st=conn.prepare("SELECT id,generation_json FROM assets ORDER BY id").map_err(|e|e.to_string())?;
-        st.query_map([],|r|Ok((r.get(0)?,r.get(1)?)))
-            .map_err(|e|e.to_string())?.filter_map(Result::ok).collect()
+        let mapped=st.query_map([],|r|Ok((r.get(0)?,r.get(1)?))).map_err(|e|e.to_string())?;
+        let collected=mapped.filter_map(Result::ok).collect();
+        collected
     };
     for(id,json)in &rows{upsert(conn,*id,json)?}
     Ok(rows.len())
