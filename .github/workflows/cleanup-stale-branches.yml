@@ -1,0 +1,34 @@
+name: One-time stale branch cleanup
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/cleanup-stale-branches.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Delete verified stale branches
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push origin --delete \
+            fix/v0.15.1-consistency \
+            showcase/v0.15.2 \
+            feature/v0.16.0-source-sync \
+            chore/version-sync-hardening \
+            feature/v0.17.0-generation-explorer \
+            feature/v0.18.0-semantic-recall \
+            fix/v0.18.1-security-editor \
+            feature/v0.19.0-search-scale \
+            build/windows
