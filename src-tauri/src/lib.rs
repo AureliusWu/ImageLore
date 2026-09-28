@@ -4,6 +4,7 @@ mod db;
 mod importer;
 mod generation;
 mod generation_index;
+mod jobs;
 mod migrations;
 mod metadata;
 mod models;
@@ -21,7 +22,9 @@ fn prepare_state()->Result<AppState,String>{
     let(data_dir,cache_dir)=db::data_root()?;
     let database_path=data_dir.join("library.sqlite3");
     let backups_dir=data_dir.join("backups");
+    let models_dir=data_dir.join("models");
     fs::create_dir_all(&backups_dir).map_err(|e|e.to_string())?;
+    fs::create_dir_all(&models_dir).map_err(|e|e.to_string())?;
     backup::apply_pending_restore(&database_path,&data_dir,&backups_dir)?;
     let connection=db::init_db(&database_path)?;
     let cache_cleanup=cache_dir.clone();
@@ -32,7 +35,8 @@ fn prepare_state()->Result<AppState,String>{
         cache_dir,
         database_path,
         backups_dir,
-        import_jobs:Mutex::new(std::collections::HashMap::new()),
+        models_dir,
+        jobs:Mutex::new(std::collections::HashMap::new()),
         next_job_id:std::sync::atomic::AtomicU64::new(1),
     })
 }
