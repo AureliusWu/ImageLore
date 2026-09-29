@@ -1,4 +1,4 @@
-use crate::models::VisualDnaPatch;
+use crate::{models::VisualDnaPatch,references::ReferenceInput};
 use serde_json::Value;
 use std::{fs,path::{Path,PathBuf}};
 
@@ -75,6 +75,24 @@ pub fn session(value:&Value)->Option<SessionRef>{
     })
 }
 
+pub fn references(value:&Value)->Vec<ReferenceInput>{
+    let mut items=Vec::<Value>::new();
+    if let Some(array)=value.get("references").and_then(Value::as_array){items.extend(array.iter().cloned());}
+    if let Some(single)=value.get("reference").filter(|x|x.is_object()){items.push(single.clone());}
+    items.into_iter().filter_map(|item|{
+        let text=|key:&str|item.get(key).and_then(Value::as_str).unwrap_or("").to_string();
+        let source_url=text("source_url");
+        let page_url=text("page_url");
+        if source_url.trim().is_empty()&&page_url.trim().is_empty(){return None}
+        let metadata_json=item.get("metadata").or_else(||item.get("reference_meta"))
+            .map(|x|serde_json::to_string(x).unwrap_or_else(|_|"{}".into())).unwrap_or_else(||"{}".into());
+        Some(ReferenceInput{
+            source_url,page_url,page_title:text("page_title"),source_type:text("source_type"),
+            metadata_json,captured_at:item.get("captured_at").and_then(Value::as_i64).unwrap_or(0),
+        })
+    }).collect()
+}
+
 pub fn visual_dna(value:&Value)->Option<VisualDnaPatch>{
     let item=value.get("visual_dna")?;
     let field=|key:&str|item.get(key).and_then(Value::as_str).unwrap_or("").to_string();
@@ -99,6 +117,18 @@ pub fn visual_dna(value:&Value)->Option<VisualDnaPatch>{
 #[cfg(test)]
 mod tests{
     use super::*;
+
+    #[test]
+    fn reads_web_reference_from_v3_sidecar(){
+        let value:Value=serde_json::from_str(r#"{
+          "schema":"imagelore.sidecar.v3",
+          "reference":{"source_url":"https://cdn.example/a.png","page_url":"https://example/post","page_title":"Inspiration","source_type":"browser-extension","captured_at":42,"metadata":{"host":"example"}}
+        }"#).unwrap();
+        let refs=references(&value);
+        assert_eq!(refs.len(),1);
+        assert_eq!(refs[0].page_title,"Inspiration");
+        assert!(refs[0].metadata_json.contains("example"));
+    }
 
     #[test]
     fn reads_optional_visual_dna_from_v3_sidecar(){

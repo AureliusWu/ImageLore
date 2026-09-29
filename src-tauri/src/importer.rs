@@ -1,4 +1,4 @@
-use crate::{db,generation,generation_index,jobs,metadata,models::{ImportProgress,ImportSummary,VisualDnaPatch},preview,sidecar,state::AppState,visual_dna};
+use crate::{db,generation,generation_index,jobs,metadata,models::{ImportProgress,ImportSummary,VisualDnaPatch},preview,references,sidecar,state::AppState,visual_dna};
 use rusqlite::params;
 use std::{
     path::{Path,PathBuf},
@@ -27,6 +27,7 @@ struct PreparedAsset{
     parents:Vec<sidecar::ParentRef>,
     session:Option<sidecar::SessionRef>,
     visual_dna:Option<VisualDnaPatch>,
+    references:Vec<references::ReferenceInput>,
 }
 
 enum InsertOutcome{Added(i64),Existing(i64),Duplicate(i64)}
@@ -61,6 +62,7 @@ fn prepare(path:&Path)->Option<PreparedAsset>{
     let parents=saved.as_ref().map(sidecar::parents).unwrap_or_default();
     let session=saved.as_ref().and_then(sidecar::session);
     let visual_dna=saved.as_ref().and_then(sidecar::visual_dna);
+    let references=saved.as_ref().map(sidecar::references).unwrap_or_default();
     let fingerprint=metadata::fingerprint(&canonical);
     let requested_portable=saved.as_ref().map(sidecar::portable_id).unwrap_or_default();
     let portable_id=if requested_portable.is_empty(){
@@ -71,7 +73,7 @@ fn prepare(path:&Path)->Option<PreparedAsset>{
         path:canonical.to_string_lossy().to_string(),name,width:info.width,height:info.height,
         file_size:info.file_size,format:info.format,mime_type:info.mime_type,
         metadata_type:extract.metadata_type,generation_json:extract.generation_json,
-        fingerprint,portable_id,file_mtime:info.file_mtime,prompt,negative_prompt,model,tags,parents,session,visual_dna,
+        fingerprint,portable_id,file_mtime:info.file_mtime,prompt,negative_prompt,model,tags,parents,session,visual_dna,references,
     })
 }
 
@@ -80,6 +82,7 @@ fn merge_context(conn:&rusqlite::Connection,id:i64,item:&PreparedAsset)->Result<
     generation::assign_session_by_name(conn,id,item.session.as_ref())?;
     generation::queue_parent_refs(conn,&portable_id,&item.parents)?;
     visual_dna::merge_imported(conn,id,item.visual_dna.as_ref())?;
+    references::merge_imported(conn,id,&item.references)?;
     Ok(())
 }
 
@@ -117,6 +120,7 @@ fn insert_new(state:&AppState,item:PreparedAsset)->Result<InsertOutcome,String>{
     if let Some(id)=db::asset_exists_by_fingerprint(&conn,&item.fingerprint)?{
         let tx=conn.transaction().map_err(|e|e.to_string())?;
         merge_context(&tx,id,&item)?;
+        db::reindex_asset(&tx,id)?;
         tx.commit().map_err(|e|e.to_string())?;
         return Ok(InsertOutcome::Duplicate(id))
     }

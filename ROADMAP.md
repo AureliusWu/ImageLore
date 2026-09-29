@@ -140,10 +140,22 @@
 - 为浏览器 Save to ImageLore 预留 source URL / reference metadata
 - Migration v10 + Node / Rust Remix 回归测试
 
-## v0.25.0 — Save to ImageLore
-- 浏览器扩展 / 分享入口保存网页图片、来源 URL、页面标题与参考元数据
-- 保存时可直接形成 Reference Card，并选择是否进入某个 Remix 草稿
-- 与本地重复检测、Visual DNA、Image to Prompt、Generation Lineage 串成完整采集链
+## v0.25.0 — Save to ImageLore ✅
+- Chrome / Edge Manifest V3 图片右键收藏
+- Downloads/ImageLore Inbox + 同名 Sidecar 作为无服务桥接
+- Migration v11 + 多来源 Reference Source 持久化
+- SHA-256 重复图片合并来源，不重复创建资产
+- Reference Card：页面 / 原图 / 标题 / 时间 / 采集用途
+- Reference 来源进入 FTS / CJK 搜索与 Sidecar v3
+- 启动和窗口重新聚焦时同步 Inbox，不常驻 watcher
+- 浏览器扩展 + Migration / Schema / Merge / Contract 回归测试
+
+## v0.26.0 — Stability Acceptance
+- 50k+ 大图库端到端性能验收：图库、关键词、CJK、Visual DNA、Reference、Remix
+- Backup / Restore 灾难恢复验收与故障注入矩阵
+- 稳定 Migration 兼容矩阵，覆盖支持的历史数据库版本 → 当前版本
+- 对启动恢复、Sidecar、来源同步和 AI 派生数据做长期一致性验收
+- 为 v1.0 代码签名 / 自动更新前建立可量化发布门槛
 
 ## v1.0.0 — Stable Local Library
 - Windows 代码签名与自动更新

@@ -260,6 +260,16 @@ pub fn export_sidecar(state:State<'_,AppState>,id:i64)->Result<String,String>{
         }).map_err(|e|e.to_string())?.filter_map(Result::ok).collect();
         let visual_dna=crate::visual_dna::get(&conn,id)?;
         let visual_dna=if crate::visual_dna::record_is_empty(&visual_dna){Value::Null}else{serde_json::to_value(visual_dna).map_err(|e|e.to_string())?};
+        let references=crate::references::list(&conn,id)?.into_iter().map(|item|{
+            json!({
+                "source_url":item.source_url,
+                "page_url":item.page_url,
+                "page_title":item.page_title,
+                "source_type":item.source_type,
+                "captured_at":item.captured_at,
+                "metadata":serde_json::from_str::<Value>(&item.metadata_json).unwrap_or(Value::Object(Default::default()))
+            })
+        }).collect::<Vec<_>>();
         let session:Option<Value>=conn.query_row(
             "SELECT s.name,s.note,a.note FROM asset_sessions a JOIN generation_sessions s ON s.id=a.session_id WHERE a.asset_id=?1",
             params![id],
@@ -276,6 +286,7 @@ pub fn export_sidecar(state:State<'_,AppState>,id:i64)->Result<String,String>{
             "metadata_type":asset.metadata_type,
             "generation":serde_json::from_str::<Value>(&asset.generation_json).unwrap_or(Value::String(asset.generation_json.clone())),
             "visual_dna":visual_dna,
+            "references":references,
             "session":session,
             "parents":parents
         });

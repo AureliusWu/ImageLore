@@ -1,4 +1,4 @@
-# ImageLore v0.24.0
+# ImageLore v0.25.0
 
 ![ImageLore 应用预览](docs/og.svg)
 
@@ -26,6 +26,8 @@ ImageLore 是一个 local-first 的 AI 视觉生成记忆库，用来保存图�
 - Prompt Card：把 Prompt、模型、尺寸、Visual DNA 与谱系上下文汇总成一张研发卡片
 - Image to Prompt：从当前图片生成结构化 Visual DNA 与可生成 Prompt
 - Remix Workspace：从多张参考图选择 Visual DNA 片段并组合新 Prompt，结果自动进入 Generation Lineage
+- Save to ImageLore：Chrome / Edge 右键收藏网页图片与来源上下文，自动进入本地 Reference Inbox
+- Reference Card：保留来源页面、原图 URL、页面标题、采集时间与用途；重复图片会合并多个来源
 - Image to Prompt：调用可配置的 OpenAI-compatible 视觉模型，把当前图片拆成结构化 Visual DNA + 可生成 Prompt
 - AI 分析结果保留 Provider / 模型 / 时间；默认只补充 Visual DNA 空字段，可载入 Prompt 编辑器或保存为独立 Revision
 - Vision API Key 仅保存在当前进程内存，也可由 IMAGELORE_VISION_API_KEY 环境变量提供，不写入 SQLite / Sidecar / 日志
@@ -119,3 +121,10 @@ npm run version:patch
 npm run version:minor
 npm run version:major
 ```
+
+
+## Save to ImageLore 浏览器扩展
+
+仓库内的 `browser-extension/` 是 Chrome / Edge Manifest V3 扩展。开发模式加载后，可在网页图片上右键选择「保存到 ImageLore」或「保存到 ImageLore · Remix 参考」。
+
+扩展把图片和同名 `.imagelore.json` Sidecar 保存到系统下载目录下的 `ImageLore Inbox`。在 ImageLore 的「资料库管理 → 来源目录」点击「准备浏览器 Inbox」后，该目录会作为本地 Source Folder 管理；启动和重新聚焦 ImageLore 时会同步一次，不常驻监听文件系统。

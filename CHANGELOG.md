@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.25.0 — Save to ImageLore
+
+- Added a Chrome / Edge Manifest V3 companion extension with image context-menu actions for normal references and Remix references.
+- Browser captures save the image plus a same-name `.imagelore.json` Sidecar into `Downloads/ImageLore Inbox`, preserving source image URL, page URL, page title, capture time and capture intent.
+- Added Migration v11 with persistent `reference_sources` so one local asset can retain multiple web origins without duplicating the image record.
+- Reference provenance now participates in standard FTS, CJK trigram candidate search and final substring verification.
+- Existing SHA-256 duplicate handling merges newly captured web origins into the existing asset.
+- Added Reference Cards in the Inspector with page/original-image links and capture context.
+- Added a Library Manager action to prepare the browser Inbox as a Source Folder; the Inbox is scanned at startup and when ImageLore regains focus instead of using a permanent filesystem watcher.
+- Sidecar v3 export now round-trips web reference provenance.
+- Added browser-extension regression tests plus v11 migration, fresh-schema, source-merge and command-contract coverage.
+
 ## 0.24.0 — Remix Workspace
 
 - Added Migration v10 with persistent Remix drafts and provenance-aware reference sources.

@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Save to ImageLore</title>
+<style>
+body{width:300px;margin:0;padding:14px;font:13px/1.55 system-ui,-apple-system,"Microsoft YaHei",sans-serif;color:#315966;background:#f5fbf8}
+h1{font-size:15px;margin:0 0 6px}p{margin:5px 0;color:#607d84}.card{padding:10px;border:1px solid #d4e6e2;border-radius:10px;background:#fff}.status{margin-top:10px;font-size:12px}.ok{color:#327c67}.err{color:#a54b4b}button{width:100%;margin-top:10px;padding:8px;border:1px solid #bedbd8;border-radius:8px;background:#fff;color:#367a87;cursor:pointer}small{display:block;margin-top:8px;color:#82979b}
+</style>
+</head>
+<body>
+<h1>Save to ImageLore</h1>
+<div class="card">
+<p>在网页图片上右键，选择「保存到 ImageLore」。</p>
+<p>图片和来源 Sidecar 会进入 <b>Downloads/ImageLore Inbox</b>。</p>
+<div id="status" class="status">尚未保存网页图片。</div>
+<button id="downloads">打开下载目录</button>
+<small>回到 ImageLore 后会自动同步 Inbox；也可在「资料库管理 → 来源目录」手动同步。</small>
+</div>
+<script type="module" src="popup.js"></script>
+</body></html>

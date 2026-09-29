@@ -3,7 +3,7 @@ import type { BackupRecord,CollectionRecord,DiagnosticStatus,DuplicateGroup,Face
 
 const bytes=(n:number)=>n<1024?n+" B":n<1024*1024?(n/1024).toFixed(1)+" KB":(n/1024/1024).toFixed(1)+" MB";
 
-export function LibraryManager({open,backups,tags,collections,duplicates,modelAliases,savedFilters,sourceFolders,sourceSyncing,health,diagnostics,visionSettings,semanticStatus,semanticIndexing,semanticProgress,onRebuildSemantic,onCancelSemantic,onClearSemantic,onDeleteSemanticModels,onClose,onBackup,onRestore,onOpenDataFolder,onOpenLogsFolder,onSaveVisionSettings,onSetVisionApiKey,onRenameTag,onDeleteTag,onRenameCollection,onDeleteCollection,onUpsertModelAlias,onDeleteModelAlias,onDeleteSavedFilter,onAddSourceFolder,onRemoveSourceFolder,onToggleSourceAutoSync,onSyncSourceFolders}:{
+export function LibraryManager({open,backups,tags,collections,duplicates,modelAliases,savedFilters,sourceFolders,sourceSyncing,health,diagnostics,visionSettings,semanticStatus,semanticIndexing,semanticProgress,onRebuildSemantic,onCancelSemantic,onClearSemantic,onDeleteSemanticModels,onClose,onBackup,onRestore,onOpenDataFolder,onOpenLogsFolder,onSaveVisionSettings,onSetVisionApiKey,onRenameTag,onDeleteTag,onRenameCollection,onDeleteCollection,onUpsertModelAlias,onDeleteModelAlias,onDeleteSavedFilter,onEnsureReferenceInbox,onAddSourceFolder,onRemoveSourceFolder,onToggleSourceAutoSync,onSyncSourceFolders}:{
   open:boolean;backups:BackupRecord[];tags:FacetCount[];collections:CollectionRecord[];duplicates:DuplicateGroup[];modelAliases:ModelAlias[];savedFilters:SavedFilter[];sourceFolders:SourceFolder[];sourceSyncing:boolean;health:LibraryHealth|null;diagnostics:DiagnosticStatus|null;visionSettings:VisionSettings|null;
   semanticStatus:SemanticStatus|null;semanticIndexing:boolean;semanticProgress:SemanticProgress;
   onRebuildSemantic:()=>void;onCancelSemantic:()=>void;onClearSemantic:()=>void;onDeleteSemanticModels:()=>void;
@@ -12,7 +12,7 @@ export function LibraryManager({open,backups,tags,collections,duplicates,modelAl
   onRenameTag:(oldName:string,newName:string)=>void;onDeleteTag:(name:string)=>void;
   onRenameCollection:(id:number,name:string)=>void;onDeleteCollection:(id:number)=>void;
   onUpsertModelAlias:(alias:string,canonical:string)=>void;onDeleteModelAlias:(alias:string)=>void;onDeleteSavedFilter:(id:number)=>void;
-  onAddSourceFolder:()=>void;onRemoveSourceFolder:(id:number)=>void;onToggleSourceAutoSync:(id:number,enabled:boolean)=>void;onSyncSourceFolders:(ids:number[])=>void;
+  onEnsureReferenceInbox:()=>void;onAddSourceFolder:()=>void;onRemoveSourceFolder:(id:number)=>void;onToggleSourceAutoSync:(id:number,enabled:boolean)=>void;onSyncSourceFolders:(ids:number[])=>void;
 }){
   const[tab,setTab]=useState<"safety"|"sources"|"tags"|"collections"|"intelligence"|"vision"|"semantic"|"duplicates"|"health">("safety");
   const[tagSource,setTagSource]=useState("");const[tagTarget,setTagTarget]=useState("");
@@ -46,6 +46,7 @@ export function LibraryManager({open,backups,tags,collections,duplicates,modelAl
         </div>:<p className="muted">正在读取诊断状态…</p>}
       </section>:null}
       {tab==="sources"?<section>
+        <div className="browser-inbox-card"><div><span className="eyebrow">SAVE TO IMAGELORE</span><strong>浏览器 Reference Inbox</strong><p>浏览器扩展把网页图片与来源 Sidecar 保存到 Downloads/ImageLore Inbox；ImageLore 启动和重新聚焦时会同步。</p></div><button className="button primary" disabled={sourceSyncing} onClick={onEnsureReferenceInbox}>{sourceFolders.some(x=>x.name==="ImageLore Inbox")?"确认并同步 Inbox":"准备浏览器 Inbox"}</button></div>
         <div className="manager-toolbar"><div><strong>资料源目录</strong><span>登记常用出图目录；自动同步只在 ImageLore 启动时扫描一次，不常驻监听系统。</span></div><div className="manager-toolbar-actions"><button className="button secondary" disabled={sourceSyncing||!sourceFolders.length} onClick={()=>onSyncSourceFolders(sourceFolders.map(x=>x.id))}>同步全部</button><button className="button primary" onClick={onAddSourceFolder}>＋ 添加目录</button></div></div>
         <div className="manager-list">{sourceFolders.length?sourceFolders.map(source=><div className="manager-row source-row" key={source.id}>
           <div><strong>{source.name}</strong><span title={source.path}>{source.path}</span><small>{source.last_scan_at?"上次扫描："+new Date(source.last_scan_at*1000).toLocaleString("zh-CN"):"尚未扫描"}</small></div>
