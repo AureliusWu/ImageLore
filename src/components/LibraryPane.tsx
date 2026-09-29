@@ -4,9 +4,10 @@ import type { AssetSummary,GenerationSession,LibraryFacets,LibraryFilter,Library
 const views:Array<[LibraryView,string,string]>=[["all","全部","▦"],["favorites","收藏","★"],["recent","最近","◷"],["missing","缺失","!"]];
 const numberValue=(value:string)=>value.trim()===""?null:Number(value);
 
-export function LibraryPane({assets,total,currentId,selected,loading,scores,filter,facets,savedFilters,sessions,onFilter,onAsset,onOpenAssetFolder,onLoadMore,onBatchTags,onBatchFavorite,onBatchRescan,onBatchSession,onCollection,onClearSelection,onRefreshMissing,onManage,onSaveView,onApplySavedView}:{
+export function LibraryPane({assets,total,currentId,selected,loading,scores,filter,facets,savedFilters,sessions,onFilter,onAsset,onOpenAsset,onOpenAssetFolder,onCopyAssetImage,onCopyAssetPath,onSaveAssetAs,onToggleAssetFavorite,onFindSimilarAsset,onLoadMore,onBatchTags,onBatchFavorite,onBatchRescan,onBatchSession,onCollection,onClearSelection,onRefreshMissing,onManage,onSaveView,onApplySavedView}:{
   assets:AssetSummary[];total:number;currentId?:number;selected:Set<number>;loading:boolean;scores?:Map<number,number>;filter:LibraryFilter;facets:LibraryFacets;savedFilters:SavedFilter[];sessions:GenerationSession[];
-  onFilter:(next:LibraryFilter)=>void;onAsset:(asset:AssetSummary,e:React.MouseEvent)=>void;onOpenAssetFolder:(asset:AssetSummary)=>void;onLoadMore:()=>void;
+  onFilter:(next:LibraryFilter)=>void;onAsset:(asset:AssetSummary,e:React.MouseEvent)=>void;onOpenAsset:(asset:AssetSummary)=>void;onOpenAssetFolder:(asset:AssetSummary)=>void;
+  onCopyAssetImage:(asset:AssetSummary)=>void;onCopyAssetPath:(asset:AssetSummary)=>void;onSaveAssetAs:(asset:AssetSummary)=>void;onToggleAssetFavorite:(asset:AssetSummary)=>void;onFindSimilarAsset:(asset:AssetSummary)=>void;onLoadMore:()=>void;
   onBatchTags:()=>void;onBatchFavorite:(favorite:boolean)=>void;onBatchRescan:()=>void;onBatchSession:(sessionId:number|null)=>void;
   onCollection:()=>void;onClearSelection:()=>void;onRefreshMissing:()=>void;onManage:()=>void;onSaveView:()=>void;onApplySavedView:(view:SavedFilter)=>void;
 }){
@@ -76,6 +77,6 @@ export function LibraryPane({assets,total,currentId,selected,loading,scores,filt
 
     {selected.size>1?<div className="selection-bar generation-batch"><strong>已选择 {selected.size} 项</strong><button onClick={onBatchTags}>标签</button><button onClick={()=>onBatchFavorite(true)}>收藏</button><button onClick={()=>onBatchFavorite(false)}>取消收藏</button><button onClick={onBatchRescan}>重读元数据</button><select defaultValue="" onChange={e=>{if(e.target.value!=="")onBatchSession(e.target.value==="none"?null:Number(e.target.value));e.currentTarget.value=""}}><option value="">分配 Session…</option><option value="none">移出 Session</option>{sessions.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select><button onClick={onCollection}>集合</button><button onClick={onClearSelection}>取消</button></div>:null}
 
-    {assets.length?<AssetGrid assets={assets} total={total} currentId={currentId} selected={selected} loading={loading} scores={scores} onAsset={onAsset} onOpenFolder={onOpenAssetFolder} onLoadMore={onLoadMore}/>:<div className="library-empty"><span className="empty-orb">✦</span><strong>没有符合条件的生成记录</strong><p>可以清除筛选，或导入新的图片与生成元数据。</p></div>}
+    {assets.length?<AssetGrid assets={assets} total={total} currentId={currentId} selected={selected} loading={loading} scores={scores} onAsset={onAsset} onOpen={onOpenAsset} onOpenFolder={onOpenAssetFolder} onCopyImage={onCopyAssetImage} onCopyPath={onCopyAssetPath} onSaveAs={onSaveAssetAs} onFavorite={onToggleAssetFavorite} onFindSimilar={onFindSimilarAsset} onLoadMore={onLoadMore}/>:<div className="library-empty"><span className="empty-orb">✦</span><strong>没有符合条件的生成记录</strong><p>可以清除筛选，或导入新的图片与生成元数据。</p></div>}
   </aside>
 }
