@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS app_meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
-INSERT OR IGNORE INTO app_meta(key,value) VALUES ('schema_version','9');
+INSERT OR IGNORE INTO app_meta(key,value) VALUES ('schema_version','10');
 
 CREATE TABLE IF NOT EXISTS assets (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
