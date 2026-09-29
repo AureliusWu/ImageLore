@@ -318,3 +318,22 @@ pub struct VisualDna {
     pub source:String,
     pub updated_at:i64,
 }
+
+#[derive(Debug,Clone,Serialize)]
+pub struct VisionSettings {
+    pub base_url:String,
+    pub model:String,
+    pub api_key_configured:bool,
+}
+
+#[derive(Debug,Clone,Serialize)]
+pub struct ImagePromptAnalysis {
+    pub id:i64,
+    pub asset_id:i64,
+    pub provider:String,
+    pub model:String,
+    pub summary:String,
+    pub prompt:String,
+    pub visual_dna:VisualDnaPatch,
+    pub created_at:i64,
+}

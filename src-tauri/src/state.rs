@@ -17,4 +17,5 @@ pub struct AppState {
     pub models_dir: PathBuf,
     pub jobs: Mutex<HashMap<u64,Arc<AtomicBool>>>,
     pub next_job_id: AtomicU64,
+    pub vision_api_key: Mutex<String>,
 }
