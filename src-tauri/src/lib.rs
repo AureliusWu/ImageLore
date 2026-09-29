@@ -12,6 +12,7 @@ mod models;
 mod preview;
 mod semantic;
 mod sidecar;
+mod visual_dna;
 mod sources;
 mod state;
 
@@ -98,6 +99,8 @@ pub fn run(){
             backup::stage_restore,
             commands::library_facets,
             commands::get_asset,
+            visual_dna::get_visual_dna,
+            visual_dna::update_visual_dna,
             importer::import_paths,
             importer::import_folder,
             importer::import_dropped_paths,
