@@ -168,3 +168,30 @@
 .image-stage.fit img{cursor:zoom-in}
 .image-stage.actual img{cursor:inherit}
 @media(max-width:1050px){.zoom-controls{display:none}}
+
+/* v0.21 inspector container responsiveness */
+.inspector-pane{container-type:inline-size;container-name:inspector}
+.record-head{gap:9px}.record-head>div{min-width:0;overflow:hidden}.record-head strong{max-width:100%}
+@container inspector (max-width:390px){
+  .record-head{padding:10px 11px}
+  .inspector-tabs{padding:5px 7px;gap:3px;grid-template-columns:repeat(3,minmax(0,1fr))}
+  .inspector-tabs button{min-width:0;padding:0 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .inspector-body{padding:11px 10px 16px}
+  .field-head{gap:8px}.field-actions{flex-wrap:wrap;justify-content:flex-end}
+  .two-col{grid-template-columns:1fr}
+  .tool-card>div:last-child{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+  .session-card{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+  .session-card>div{grid-column:1/-1}
+  .info-row{grid-template-columns:minmax(88px,.85fr) minmax(0,1.15fr)}
+  .lineage-actions{grid-template-columns:1fr 1fr}
+}
+@container inspector (max-width:315px){
+  .record-head .eyebrow{display:none}
+  .record-head strong{font-size:12px}
+  .inspector-tabs button span{display:none}
+  .field-head{display:block}.field-actions{justify-content:flex-start;margin-top:7px}
+  .tool-card>div:last-child{grid-template-columns:1fr}
+  .session-card{grid-template-columns:1fr}.session-card>div{grid-column:auto}
+  .lineage-actions{grid-template-columns:1fr}
+  .info-row{grid-template-columns:1fr}.info-row strong{text-align:left;word-break:break-word}
+}

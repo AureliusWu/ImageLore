@@ -16,7 +16,7 @@ export function InspectorPane({asset,tab,onTab,prompt,onPrompt,negative,onNegati
 }){
   const generation=useMemo<GenerationInfo>(()=>{try{return asset?JSON.parse(asset.generation_json||"{}"):{} }catch{return{}}},[asset?.generation_json]);
   return <aside className="inspector-pane panel glass-surface">
-    <div className="record-head"><div><span className="eyebrow">生成记录</span><strong>{asset?.name||"提示词与上下文"}</strong></div><button className={`favorite-button ${asset?.favorite?"on":""}`} disabled={!asset} onClick={onFavorite} title="收藏">{asset?.favorite?"★":"☆"}</button></div>
+    <div className="record-head"><div><span className="eyebrow">生成记录</span><strong title={asset?.name||"提示词与上下文"}>{asset?.name||"提示词与上下文"}</strong></div><button className={`favorite-button ${asset?.favorite?"on":""}`} disabled={!asset} onClick={onFavorite} title="收藏">{asset?.favorite?"★":"☆"}</button></div>
     <nav className="inspector-tabs"><button className={tab==="prompt"?"active":""} onClick={()=>onTab("prompt")}>✎ <span>提示词</span></button><button className={tab==="info"?"active":""} onClick={()=>onTab("info")}>ⓘ <span>生成信息</span></button><button className={tab==="lineage"?"active":""} onClick={()=>onTab("lineage")}>⑂ <span>谱系</span><b>{lineage.parents.length+lineage.children.length}</b></button></nav>
     <div className="inspector-body">
       {tab==="prompt"?<>
