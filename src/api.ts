@@ -1,5 +1,5 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import type { AssetRecord, AssetSession, AssetSummary, BackupRecord, CollectionRecord, DuplicateGroup, GenerationSession, ImportSummary, LibraryFacets, LibraryFilter, LibraryHealth, LibraryPage, Lineage, ModelAlias, PromptPatch, Revision, SavedFilter, SemanticHit, SemanticStatus, SourceFolder } from "./types";
+import type { AssetRecord, AssetSession, AssetSummary, BackupRecord, CollectionRecord, DiagnosticStatus, DuplicateGroup, GenerationSession, ImportSummary, LibraryFacets, LibraryFilter, LibraryHealth, LibraryPage, Lineage, ModelAlias, PromptPatch, Revision, SavedFilter, SemanticHit, SemanticStatus, SourceFolder, VisualDna, VisualDnaPatch } from "./types";
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -117,6 +117,8 @@ async function mockCall<T>(command:string,args:Record<string,unknown>):Promise<T
     case "remove_source_folder":{mockSources=mockSources.filter(x=>x.id!==Number(args.id));return true as T;}
     case "set_source_auto_sync":{const id=Number(args.id),enabled=Boolean(args.enabled);mockSources=mockSources.map(x=>x.id===id?{...x,auto_sync:enabled}:x);return mockSources.find(x=>x.id===id) as T;}
     case "start_sync_sources":return 1 as T;
+    case "get_visual_dna":return {subject:"",character:"",outfit:"",pose:"",expression:"",composition:"",camera:"",lighting:"",environment:"",palette:"",material:"",style:"",source:"manual",updated_at:0} as T;
+    case "update_visual_dna":return {...(args.value as VisualDnaPatch),updated_at:Math.floor(Date.now()/1000)} as T;
     case "semantic_status":return {model_id:"clip-vit-b32-qdrant-v1",enabled:true,model_ready:true,vision_ready:true,text_ready:true,indexed:mockAssets.length,total:mockAssets.length,stale:0,model_bytes:620000000,index_bytes:mockAssets.length*2048} as T;
     case "start_semantic_index":return 2 as T;
     case "cancel_semantic_index":return true as T;
@@ -136,7 +138,15 @@ async function mockCall<T>(command:string,args:Record<string,unknown>):Promise<T
       return ranked.slice(0,Number(args.limit||240)) as T;
     }
     case "clear_semantic_index":case "delete_semantic_models":return true as T;
-    case "open_external":case "open_containing_folder":case "copy_asset_to":return true as T;
+    case "diagnostics_status":return {
+      data_dir:"C:/Users/Demo/AppData/Local/app.imagelore.desktop",
+      database_path:"C:/Users/Demo/AppData/Local/app.imagelore.desktop/library.sqlite3",
+      backups_dir:"C:/Users/Demo/AppData/Local/app.imagelore.desktop/backups",
+      logs_dir:"C:/Users/Demo/AppData/Local/app.imagelore.desktop/logs",
+      active_log:"C:/Users/Demo/AppData/Local/app.imagelore.desktop/logs/imagelore.log",
+      active_log_size:4096,recovery_notice:null
+    } as T;
+    case "open_external":case "open_containing_folder":case "copy_asset_to":case "open_data_folder":case "open_logs_folder":return true as T;
     default:throw new Error(`Unknown mock command: ${command}`);
   }
 }
@@ -206,6 +216,11 @@ export const api={
   openExternal:(id:number)=>call<boolean>("open_external",{id}),
   openFolder:(id:number)=>call<boolean>("open_containing_folder",{id}),
   copyAssetTo:(id:number,destination:string)=>call<boolean>("copy_asset_to",{id,destination}),
+  visualDna:(id:number)=>call<VisualDna>("get_visual_dna",{id}),
+  updateVisualDna:(id:number,value:VisualDnaPatch)=>call<VisualDna>("update_visual_dna",{id,value}),
+  diagnosticsStatus:()=>call<DiagnosticStatus>("diagnostics_status"),
+  openDataFolder:()=>call<boolean>("open_data_folder"),
+  openLogsFolder:()=>call<boolean>("open_logs_folder"),
   semanticStatus:()=>call<SemanticStatus>("semantic_status"),
   startSemanticIndex:()=>call<number>("start_semantic_index"),
   cancelSemanticIndex:(jobId:number)=>call<boolean>("cancel_semantic_index",{jobId}),

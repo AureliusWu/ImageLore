@@ -1,23 +1,57 @@
-import { useMemo } from "react";
-import type { AssetRecord,AssetSession,GenerationInfo,GenerationSession,Lineage } from "../types";
+import { useEffect,useMemo,useState } from "react";
+import type { AssetRecord,AssetSession,GenerationInfo,GenerationSession,Lineage,VisualDna,VisualDnaPatch } from "../types";
 import { ComparePanel } from "./ComparePanel";
 
-export type InspectorTab="prompt"|"info"|"lineage";
+export type InspectorTab="prompt"|"dna"|"info"|"lineage";
 
 function InfoRow({label,value}:{label:string;value:unknown}){return <div className="info-row"><span>{label}</span><strong>{value===undefined||value===null||value===""?"—":String(value)}</strong></div>}
 const relationLabel=(value:string)=>({"derived_from":"派生","variation":"变体","edit":"编辑","upscale":"放大","reference":"参考"} as Record<string,string>)[value]||value;
+const emptyDna:VisualDnaPatch={subject:"",character:"",outfit:"",pose:"",expression:"",composition:"",camera:"",lighting:"",environment:"",palette:"",material:"",style:"",source:"manual"};
+const dnaFields:Array<[keyof Omit<VisualDnaPatch,"source">,string,string]>=[
+  ["subject","主体","人物、物体或画面核心"],
+  ["character","角色","角色身份、物种或固定设定"],
+  ["outfit","服装","服装结构、配饰与造型"],
+  ["pose","姿势","身体姿态与动作"],
+  ["expression","表情","眼神、嘴部与整体情绪"],
+  ["composition","构图","景别、视角与画面组织"],
+  ["camera","镜头","机位、焦段、景深与摄影语言"],
+  ["lighting","光线","光源、方向、软硬与时间感"],
+  ["environment","环境","场景、地点与背景元素"],
+  ["palette","色彩","主色、色温与调色倾向"],
+  ["material","材质","皮肤、布料、金属、玻璃等"],
+  ["style","风格","摄影、动漫、3D、年代或媒介语言"],
+];
+const sourceLabel=(value:string)=>({"manual":"手动","sidecar":"Sidecar","ai":"AI 分析"} as Record<string,string>)[value]||"手动";
 
-export function InspectorPane({asset,tab,onTab,prompt,onPrompt,negative,onNegative,model,onModel,tagsText,onTagsText,lineage,compareRecord,compareParentSrc,compareCurrentSrc,sessions,assetSession,onCompare,onCopy,onSaveRevision,onHistory,onFavorite,onFindSimilar,onRescan,onSidecar,onCollection,onRemove,onImportDerivative,onLinkParent,onSetSession,onCreateSession,onEditSessionNote,onEditRelationNote,promptRef}:{
-  asset:AssetRecord|null;tab:InspectorTab;onTab:(t:InspectorTab)=>void;prompt:string;onPrompt:(v:string)=>void;negative:string;onNegative:(v:string)=>void;model:string;onModel:(v:string)=>void;tagsText:string;onTagsText:(v:string)=>void;
+export function InspectorPane({asset,tab,onTab,visualDna,onSaveVisualDna,prompt,onPrompt,negative,onNegative,model,onModel,tagsText,onTagsText,lineage,compareRecord,compareParentSrc,compareCurrentSrc,sessions,assetSession,onCompare,onCopy,onSaveRevision,onHistory,onFavorite,onFindSimilar,onRescan,onSidecar,onCollection,onRemove,onImportDerivative,onLinkParent,onSetSession,onCreateSession,onEditSessionNote,onEditRelationNote,promptRef}:{
+  asset:AssetRecord|null;tab:InspectorTab;onTab:(t:InspectorTab)=>void;visualDna:VisualDna|null;onSaveVisualDna:(value:VisualDnaPatch)=>void|Promise<void>;
+  prompt:string;onPrompt:(v:string)=>void;negative:string;onNegative:(v:string)=>void;model:string;onModel:(v:string)=>void;tagsText:string;onTagsText:(v:string)=>void;
   lineage:Lineage;compareRecord:AssetRecord|null;compareParentSrc:string;compareCurrentSrc:string;sessions:GenerationSession[];assetSession:AssetSession|null;
   onCompare:(id:number)=>void;onCopy:()=>void;onSaveRevision:()=>void;onHistory:()=>void;onFavorite:()=>void;onFindSimilar:()=>void;onRescan:()=>void;onSidecar:()=>void;onCollection:()=>void;onRemove:()=>void;onImportDerivative:()=>void;onLinkParent:()=>void;
   onSetSession:(sessionId:number|null)=>void;onCreateSession:()=>void;onEditSessionNote:()=>void;onEditRelationNote:(relationId:number,currentNote:string)=>void;
   promptRef:React.RefObject<HTMLTextAreaElement|null>;
 }){
   const generation=useMemo<GenerationInfo>(()=>{try{return asset?JSON.parse(asset.generation_json||"{}"):{} }catch{return{}}},[asset?.generation_json]);
+  const[dnaDraft,setDnaDraft]=useState<VisualDnaPatch>(emptyDna);
+  const promptSummary=(prompt||"").trim().replace(/\s+/g," ").slice(0,180);
+  const dnaSummary=[
+    ["主体",visualDna?.subject],["角色",visualDna?.character],["服装",visualDna?.outfit],["姿势",visualDna?.pose],
+    ["构图",visualDna?.composition],["镜头",visualDna?.camera],["光线",visualDna?.lighting],["环境",visualDna?.environment],
+    ["色彩",visualDna?.palette],["风格",visualDna?.style]
+  ].filter(([,value])=>Boolean(value?.trim())).slice(0,6) as Array<[string,string]>;
+  const aspect=asset?.width&&asset.height?`${asset.width}:${asset.height}`:"—";
+  useEffect(()=>{
+    setDnaDraft(visualDna?{
+      subject:visualDna.subject,character:visualDna.character,outfit:visualDna.outfit,pose:visualDna.pose,
+      expression:visualDna.expression,composition:visualDna.composition,camera:visualDna.camera,lighting:visualDna.lighting,
+      environment:visualDna.environment,palette:visualDna.palette,material:visualDna.material,style:visualDna.style,source:visualDna.source||"manual"
+    }:emptyDna);
+  },[asset?.id,visualDna?.updated_at]);
+  const updateDna=(key:keyof Omit<VisualDnaPatch,"source">,value:string)=>setDnaDraft(prev=>({...prev,[key]:value,source:"manual"}));
+  const clearDna=()=>setDnaDraft({...emptyDna});
   return <aside className="inspector-pane panel glass-surface">
     <div className="record-head"><div><span className="eyebrow">生成记录</span><strong title={asset?.name||"提示词与上下文"}>{asset?.name||"提示词与上下文"}</strong></div><button className={`favorite-button ${asset?.favorite?"on":""}`} disabled={!asset} onClick={onFavorite} title="收藏">{asset?.favorite?"★":"☆"}</button></div>
-    <nav className="inspector-tabs"><button className={tab==="prompt"?"active":""} onClick={()=>onTab("prompt")}>✎ <span>提示词</span></button><button className={tab==="info"?"active":""} onClick={()=>onTab("info")}>ⓘ <span>生成信息</span></button><button className={tab==="lineage"?"active":""} onClick={()=>onTab("lineage")}>⑂ <span>谱系</span><b>{lineage.parents.length+lineage.children.length}</b></button></nav>
+    <nav className="inspector-tabs"><button className={tab==="prompt"?"active":""} onClick={()=>onTab("prompt")}>✎ <span>提示词</span></button><button className={tab==="dna"?"active":""} onClick={()=>onTab("dna")}>◇ <span>视觉 DNA</span></button><button className={tab==="info"?"active":""} onClick={()=>onTab("info")}>ⓘ <span>生成信息</span></button><button className={tab==="lineage"?"active":""} onClick={()=>onTab("lineage")}>⑂ <span>谱系</span><b>{lineage.parents.length+lineage.children.length}</b></button></nav>
     <div className="inspector-body">
       {tab==="prompt"?<>
         <div className="field-head"><div><label>提示词</label><span>主要生成指令</span></div><div className="field-actions"><button disabled={!asset} onClick={onCopy}>复制</button><button disabled={!asset} onClick={onHistory}>历史</button><button className="save-button" disabled={!asset} onClick={onSaveRevision}>保存版本</button></div></div>
@@ -28,6 +62,17 @@ export function InspectorPane({asset,tab,onTab,prompt,onPrompt,negative,onNegati
         <div className="tool-card"><div><strong>记录工具</strong><span>低频操作集中放在这里，保持编辑区清爽。</span></div><div><button disabled={!asset} onClick={onFindSimilar}>◎ 查找相似图片</button><button disabled={!asset} onClick={onRescan}>重新读取元数据</button><button disabled={!asset} onClick={onSidecar}>导出 Sidecar v3</button><button disabled={!asset} onClick={onCollection}>加入集合</button></div></div>
         <button className="danger-link" disabled={!asset} onClick={onRemove}>从 ImageLore 中移除这条记录</button>
       </>:null}
+      {tab==="dna"?<div className="dna-panel">
+        <div className="prompt-card">
+          <div className="prompt-card-head"><div><span className="eyebrow">PROMPT CARD</span><strong>{asset?.name||"未选择图片"}</strong></div><span className="dna-source">{sourceLabel(visualDna?.source||dnaDraft.source)}</span></div>
+          <div className="prompt-card-meta"><div><span>MODEL</span><strong>{model||asset?.model||"—"}</strong></div><div><span>SIZE</span><strong>{asset?.width&&asset.height?`${asset.width}×${asset.height}`:"—"}</strong></div><div><span>RATIO</span><strong>{aspect}</strong></div><div><span>LINEAGE</span><strong>{lineage.parents.length+" ↑ / "+lineage.children.length+" ↓"}</strong></div></div>
+          <div className="prompt-card-prompt"><span>PROMPT</span><p>{promptSummary||"当前没有 Prompt。"}</p></div>
+          <div className="prompt-card-dna"><span>VISUAL DNA</span>{dnaSummary.length?<div>{dnaSummary.map(([label,value])=><span key={label}><b>{label}</b>{value}</span>)}</div>:<p>还没有结构化视觉信息。可以在下面手动记录；下一阶段会由 Image-to-Prompt 自动填充。</p>}</div>
+        </div>
+        <div className="dna-hero"><div><span className="eyebrow">VISUAL DNA</span><strong>把“这张图为什么像它”变成可搜索的结构</strong><p>这些字段会进入本地关键词索引，也会随 Sidecar 保存；用于半年后仍能理解这张图的主体、构图、光线和风格。</p></div></div>
+        <div className="dna-grid">{dnaFields.map(([key,label,hint])=><label className="dna-field" key={key}><span>{label}<small>{hint}</small></span><textarea disabled={!asset} value={dnaDraft[key]} onChange={e=>updateDna(key,e.target.value)} rows={2} placeholder={"记录"+label+"…"}/></label>)}</div>
+        <div className="dna-actions"><button disabled={!asset} onClick={clearDna}>清空草稿</button><button className="button primary" disabled={!asset} onClick={()=>void onSaveVisualDna(dnaDraft)}>保存 Visual DNA</button></div>
+      </div>:null}
       {tab==="info"?<div className="info-list"><div className="info-hero"><span>i</span><div><strong>可复现上下文</strong><p>保留原始生成参数、稳定 Portable ID 与可移植 Sidecar。</p></div></div><InfoRow label="元数据来源" value={asset?.metadata_type}/><InfoRow label="模型" value={asset?.model}/><InfoRow label="尺寸" value={asset?.width&&asset.height?`${asset.width} × ${asset.height}`:"—"}/><InfoRow label="格式" value={asset?.format}/><InfoRow label="随机种子" value={generation.seed}/><InfoRow label="步数" value={generation.steps}/><InfoRow label="采样器" value={generation.sampler}/><InfoRow label="调度器" value={generation.scheduler}/><InfoRow label="CFG" value={generation.cfg_scale}/><InfoRow label="降噪强度" value={generation.denoise}/><InfoRow label="Portable ID" value={asset?.portable_id}/><InfoRow label="文件指纹" value={asset?.fingerprint?asset.fingerprint.slice(0,24)+"…":"—"}/><details><summary>原始生成 JSON</summary><pre>{asset?.generation_json||"{}"}</pre></details></div>:null}
       {tab==="lineage"?<div className="lineage-panel">
         <div className="lineage-hero"><span>⑂</span><div><strong>生成谱系</strong><p>记录生成会话、参考、编辑、变体和分支备注。</p></div></div>

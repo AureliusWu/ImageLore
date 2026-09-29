@@ -1,4 +1,4 @@
-# ImageLore v0.21.1
+# ImageLore v0.22.0
 
 ![ImageLore 应用预览](docs/og.svg)
 
@@ -22,6 +22,9 @@ ImageLore 是一个 local-first 的 AI 视觉生成记忆库，用来保存图�
 - 后台导入任务、实时进度与取消
 - SHA-256 精确重复内容检测与自动跳过
 - Prompt、Negative Prompt、模型、标签自动保存
+- Visual DNA：主体 / 角色 / 服装 / 姿势 / 表情 / 构图 / 镜头 / 光线 / 环境 / 色彩 / 材质 / 风格的结构化记录
+- Prompt Card：把 Prompt、模型、尺寸、Visual DNA 与谱系上下文汇总成一张研发卡片
+- Visual DNA 进入本地 FTS / CJK 搜索，并随 Sidecar v3 导入导出
 - Prompt Revision 历史版本；保存版本会原子写入当前编辑内容，避免 autosave 竞态
 - 图库右键菜单可直接在文件管理器中定位原图
 - Semantic Security Hardening：固定 CLIP revision、ONNX SHA-256 / 大小校验、可信缓存原子安装
@@ -37,6 +40,8 @@ ImageLore 是一个 local-first 的 AI 视觉生成记忆库，用来保存图�
 - A1111 / ComfyUI / NovelAI / InvokeAI / 通用 JSON Metadata Adapter
 - ComfyUI Prompt / Negative / Model / Seed / Steps / CFG / Sampler 等提取
 - 每 24 小时自动数据库备份、手动备份、完整性验证与安全恢复
+- 启动故障自动恢复：数据库无法打开时保留损坏原件，并尝试最近可验证备份
+- 本地 rotating logs：1 MB × 5 份，并在资料库管理中提供数据 / 日志目录入口
 - 缺失文件重定位
 - Sidecar v3：Portable ID + fingerprint 跨库谱系恢复
 - Generation Session 与 Branch Notes
@@ -50,19 +55,23 @@ ImageLore 是一个 local-first 的 AI 视觉生成记忆库，用来保存图�
 
 主数据库：
 
-`%LOCALAPPDATA%\ImageLore\library.sqlite3`
+`%LOCALAPPDATA%\app.imagelore.desktop\library.sqlite3`
 
 备份：
 
-`%LOCALAPPDATA%\ImageLore\backups\`
+`%LOCALAPPDATA%\app.imagelore.desktop\backups\`
 
 缓存：
 
-`%LOCALAPPDATA%\ImageLore\cache\`
+`%LOCALAPPDATA%\app.imagelore.desktop\cache\`
 
 本地语义模型：
 
-`%LOCALAPPDATA%\ImageLore\models\`
+`%LOCALAPPDATA%\app.imagelore.desktop\models\`
+
+诊断日志：
+
+`%LOCALAPPDATA%\app.imagelore.desktop\logs\`
 
 原始图片始终保留在原位置，不会复制进 SQLite；从 ImageLore 删除记录也不会删除原始图片。
 

@@ -2,7 +2,7 @@ use crate::generation_index;
 use rusqlite::{params,Connection,OptionalExtension};
 use sha2::{Digest,Sha256};
 
-const LATEST:i64=7;
+const LATEST:i64=8;
 
 fn set_version(conn:&Connection,version:i64)->Result<(),String>{
     conn.execute(
@@ -196,6 +196,76 @@ fn migrate_v7(conn:&Connection)->Result<(),String>{
     Ok(())
 }
 
+fn migrate_v8(conn:&Connection)->Result<(),String>{
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS visual_dna (
+           asset_id INTEGER PRIMARY KEY,
+           subject TEXT NOT NULL DEFAULT '',
+           character_name TEXT NOT NULL DEFAULT '',
+           outfit TEXT NOT NULL DEFAULT '',
+           pose TEXT NOT NULL DEFAULT '',
+           expression TEXT NOT NULL DEFAULT '',
+           composition TEXT NOT NULL DEFAULT '',
+           camera TEXT NOT NULL DEFAULT '',
+           lighting TEXT NOT NULL DEFAULT '',
+           environment TEXT NOT NULL DEFAULT '',
+           palette TEXT NOT NULL DEFAULT '',
+           material TEXT NOT NULL DEFAULT '',
+           style TEXT NOT NULL DEFAULT '',
+           search_text TEXT NOT NULL DEFAULT '',
+           source TEXT NOT NULL DEFAULT 'manual',
+           updated_at INTEGER NOT NULL DEFAULT 0,
+           FOREIGN KEY(asset_id) REFERENCES assets(id) ON DELETE CASCADE
+         );
+         DROP TABLE IF EXISTS asset_search;
+         CREATE VIRTUAL TABLE asset_search USING fts5(
+           asset_id UNINDEXED,
+           name,
+           prompt,
+           negative_prompt,
+           model,
+           tags,
+           visual_dna,
+           tokenize='unicode61 remove_diacritics 2'
+         );"
+    ).map_err(|e|e.to_string())?;
+
+    let can_backfill=
+        has_column(conn,"assets","name")? &&
+        has_table(conn,"prompt_state")? &&
+        has_table(conn,"tags")? &&
+        has_table(conn,"asset_tags")?;
+    if can_backfill{
+        conn.execute(
+            "INSERT INTO asset_search(asset_id,name,prompt,negative_prompt,model,tags,visual_dna)
+             SELECT a.id,a.name,COALESCE(ps.prompt,''),COALESCE(ps.negative_prompt,''),COALESCE(ps.model,''),
+                    COALESCE((SELECT GROUP_CONCAT(t.name,' ') FROM asset_tags at JOIN tags t ON t.id=at.tag_id WHERE at.asset_id=a.id),''),
+                    COALESCE(vd.search_text,'')
+             FROM assets a
+             LEFT JOIN prompt_state ps ON ps.asset_id=a.id
+             LEFT JOIN visual_dna vd ON vd.asset_id=a.id",
+            []
+        ).map_err(|e|e.to_string())?;
+
+        if has_table(conn,"asset_cjk_search")?{
+            conn.execute("DELETE FROM asset_cjk_search",[]).map_err(|e|e.to_string())?;
+            conn.execute(
+                "INSERT INTO asset_cjk_search(rowid,asset_id,text)
+                 SELECT a.id,a.id,
+                        a.name || char(31) || COALESCE(ps.prompt,'') || char(31) || COALESCE(ps.negative_prompt,'') ||
+                        char(31) || COALESCE(ps.model,'') || char(31) ||
+                        COALESCE((SELECT GROUP_CONCAT(t.name,' ') FROM asset_tags at JOIN tags t ON t.id=at.tag_id WHERE at.asset_id=a.id),'') ||
+                        char(31) || COALESCE(vd.search_text,'')
+                 FROM assets a
+                 LEFT JOIN prompt_state ps ON ps.asset_id=a.id
+                 LEFT JOIN visual_dna vd ON vd.asset_id=a.id",
+                []
+            ).map_err(|e|e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
 pub fn apply(conn:&Connection)->Result<(),String>{
     conn.execute_batch("CREATE TABLE IF NOT EXISTS app_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);").map_err(|e|e.to_string())?;
     let current:Option<String>=conn.query_row(
@@ -249,6 +319,12 @@ pub fn apply(conn:&Connection)->Result<(),String>{
         set_version(conn,version)?;
     }
 
+    if version<8{
+        migrate_v8(conn)?;
+        version=8;
+        set_version(conn,version)?;
+    }
+
     Ok(())
 }
 
@@ -279,7 +355,7 @@ mod tests{
         ).unwrap();
         apply(&conn).unwrap();
         let version:String=conn.query_row("SELECT value FROM app_meta WHERE key='schema_version'",[],|r|r.get(0)).unwrap();
-        assert_eq!(version,"7");
+        assert_eq!(version,"8");
         let hit:i64=conn.query_row(
             "SELECT asset_id FROM asset_cjk_search WHERE asset_cjk_search MATCH ?1",
             params!["\"蓝色大肥鱼\""],
@@ -298,7 +374,7 @@ mod tests{
         ).unwrap();
         apply(&conn).unwrap();
         let version:String=conn.query_row("SELECT value FROM app_meta WHERE key='schema_version'",[],|r|r.get(0)).unwrap();
-        assert_eq!(version,"7");
+        assert_eq!(version,"8");
         let enabled:String=conn.query_row("SELECT value FROM semantic_settings WHERE key='enabled'",[],|r|r.get(0)).unwrap();
         assert_eq!(enabled,"0");
         conn.execute("INSERT INTO assets(id) VALUES(1)",[]).unwrap();
@@ -320,7 +396,7 @@ mod tests{
         ).unwrap();
         apply(&conn).unwrap();
         let version:String=conn.query_row("SELECT value FROM app_meta WHERE key='schema_version'",[],|r|r.get(0)).unwrap();
-        assert_eq!(version,"7");
+        assert_eq!(version,"8");
         let row:(String,i64,String,f64)=conn.query_row(
             "SELECT seed,steps,sampler,cfg_scale FROM generation_index WHERE asset_id=1",[],
             |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))
@@ -340,7 +416,7 @@ mod tests{
         ).unwrap();
         apply(&conn).unwrap();
         let version:String=conn.query_row("SELECT value FROM app_meta WHERE key='schema_version'",[],|r|r.get(0)).unwrap();
-        assert_eq!(version,"7");
+        assert_eq!(version,"8");
         conn.execute(
             "INSERT INTO source_folders(path,name,created_at,updated_at) VALUES('D:/AI','AI',1,1)",[]
         ).unwrap();
@@ -377,4 +453,29 @@ mod tests{
         assert!(value.starts_with("il-"));
         assert_eq!(value.len(),35);
     }
+    #[test]
+    fn migration_v8_adds_visual_dna_and_search_column(){
+        let conn=Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE app_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+             INSERT INTO app_meta VALUES('schema_version','7');
+             CREATE TABLE assets(id INTEGER PRIMARY KEY,name TEXT NOT NULL);
+             CREATE TABLE prompt_state(asset_id INTEGER PRIMARY KEY,prompt TEXT NOT NULL DEFAULT '',negative_prompt TEXT NOT NULL DEFAULT '',model TEXT NOT NULL DEFAULT '');
+             CREATE TABLE tags(id INTEGER PRIMARY KEY,name TEXT NOT NULL);
+             CREATE TABLE asset_tags(asset_id INTEGER NOT NULL,tag_id INTEGER NOT NULL);
+             CREATE VIRTUAL TABLE asset_search USING fts5(asset_id UNINDEXED,name,prompt,negative_prompt,model,tags);
+             CREATE VIRTUAL TABLE asset_cjk_search USING fts5(asset_id UNINDEXED,text,tokenize='trigram');
+             INSERT INTO assets(id,name) VALUES(1,'reference.png');
+             INSERT INTO prompt_state(asset_id,prompt,negative_prompt,model) VALUES(1,'portrait','','GPT Image');"
+        ).unwrap();
+        apply(&conn).unwrap();
+        let version:String=conn.query_row("SELECT value FROM app_meta WHERE key='schema_version'",[],|r|r.get(0)).unwrap();
+        assert_eq!(version,"8");
+        conn.execute(
+            "INSERT INTO visual_dna(asset_id,environment,style,search_text,source,updated_at) VALUES(1,'千禧年电脑房','日系写实','千禧年电脑房 日系写实','manual',1)",[]
+        ).unwrap();
+        let columns:i64=conn.query_row("SELECT COUNT(*) FROM pragma_table_info('visual_dna')",[],|r|r.get(0)).unwrap();
+        assert!(columns>=16);
+    }
+
 }
