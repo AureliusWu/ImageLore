@@ -10,6 +10,7 @@ mod migrations;
 mod metadata;
 mod models;
 mod preview;
+mod remix;
 mod semantic;
 mod sidecar;
 mod visual_dna;
@@ -110,6 +111,10 @@ pub fn run(){
             vision::analyze_image_to_prompt,
             vision::apply_image_prompt_dna,
             vision::save_image_prompt_revision,
+            remix::latest_remix_draft,
+            remix::save_remix_draft,
+            remix::delete_remix_draft,
+            remix::apply_remix_lineage,
             importer::import_paths,
             importer::import_folder,
             importer::import_dropped_paths,

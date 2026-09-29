@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS app_meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
-INSERT OR IGNORE INTO app_meta(key,value) VALUES ('schema_version','9');
+INSERT OR IGNORE INTO app_meta(key,value) VALUES ('schema_version','10');
 
 CREATE TABLE IF NOT EXISTS assets (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -250,3 +250,27 @@ CREATE TABLE IF NOT EXISTS image_prompt_analyses (
   FOREIGN KEY(asset_id) REFERENCES assets(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_image_prompt_asset ON image_prompt_analyses(asset_id,created_at DESC,id DESC);
+
+CREATE TABLE IF NOT EXISTS remix_drafts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  base_asset_id INTEGER NOT NULL,
+  prompt TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  FOREIGN KEY(base_asset_id) REFERENCES assets(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_remix_base ON remix_drafts(base_asset_id,updated_at DESC,id DESC);
+
+CREATE TABLE IF NOT EXISTS remix_sources (
+  draft_id INTEGER NOT NULL,
+  asset_id INTEGER NOT NULL,
+  fields_json TEXT NOT NULL DEFAULT '[]',
+  source_url TEXT NOT NULL DEFAULT '',
+  reference_meta_json TEXT NOT NULL DEFAULT '{}',
+  position INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY(draft_id,asset_id),
+  FOREIGN KEY(draft_id) REFERENCES remix_drafts(id) ON DELETE CASCADE,
+  FOREIGN KEY(asset_id) REFERENCES assets(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_remix_sources_asset ON remix_sources(asset_id,draft_id);

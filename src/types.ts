@@ -78,3 +78,9 @@ export interface ImagePromptAnalysis {
   id:number;asset_id:number;provider:string;model:string;summary:string;prompt:string;
   visual_dna:VisualDnaPatch;created_at:number;
 }
+
+export interface RemixSourceInput { asset_id:number;fields:string[];source_url:string; }
+export interface RemixSource extends RemixSourceInput { asset_name:string;visual_dna:VisualDna; }
+export interface RemixDraft {
+  id:number;base_asset_id:number;prompt:string;created_at:number;updated_at:number;sources:RemixSource[];
+}

@@ -130,12 +130,20 @@
 - AI Prompt 可载入当前编辑器或保存为独立 Prompt Revision
 - Migration v9 + JSON / Provider / DNA merge / schema / contract 回归测试
 
-## v0.24.0 — Remix
+## v0.24.0 — Remix Workspace ✅
 - 从一张或多张参考图选择可复用 Visual DNA 片段
-- 按主体 / 服装 / 姿势 / 构图 / 光线 / 风格维度组合 Prompt
-- 生成 Remix 草稿，不修改原记录
-- Remix 来源进入 Generation Lineage，记录引用了哪些图片与哪些 DNA 字段
-- 为后续浏览器 Save to ImageLore 预留来源 URL / reference metadata
+- 按 12 维 Visual DNA 选择来源并组合 provenance-aware Prompt
+- Remix 草稿独立保存，不修改原记录
+- 导入结果自动写入 derived_from / reference Generation Lineage
+- 谱系备注记录实际使用的 DNA 字段；结果 Prompt 已存在时不覆盖
+- Generation Session 继承
+- 为浏览器 Save to ImageLore 预留 source URL / reference metadata
+- Migration v10 + Node / Rust Remix 回归测试
+
+## v0.25.0 — Save to ImageLore
+- 浏览器扩展 / 分享入口保存网页图片、来源 URL、页面标题与参考元数据
+- 保存时可直接形成 Reference Card，并选择是否进入某个 Remix 草稿
+- 与本地重复检测、Visual DNA、Image to Prompt、Generation Lineage 串成完整采集链
 
 ## v1.0.0 — Stable Local Library
 - Windows 代码签名与自动更新

@@ -33,7 +33,7 @@ con.execute("INSERT INTO semantic_embeddings(asset_id,model_id,dimensions,vector
 con.execute("UPDATE vision_settings SET model=?,updated_at=? WHERE id=1",('vision-model',now))
 con.execute("INSERT INTO image_prompt_analyses(asset_id,provider,model,summary,prompt,visual_dna_json,created_at) VALUES(?,?,?,?,?,?,?)",(aid,'openai-compatible','vision-model','summary','generated prompt','{}',now))
 con.commit()
-assert con.execute("select value from app_meta where key='schema_version'").fetchone()[0]=='9'
+assert con.execute("select value from app_meta where key='schema_version'").fetchone()[0]=='10'
 assert con.execute("select portable_id from assets where id=?",(aid,)).fetchone()[0]=='il-schema-smoke'
 assert con.execute("select count(*) from generation_sessions").fetchone()[0]==1
 assert con.execute("select count(*) from saved_filters").fetchone()[0]==1
@@ -47,4 +47,4 @@ assert con.execute("select prompt from image_prompt_analyses where asset_id=?",(
 dna_hit=con.execute("SELECT asset_id FROM asset_search WHERE asset_search MATCH ?",('"millennium"*',)).fetchone()
 assert dna_hit and dna_hit[0]==aid
 con.close()
-print('ImageLore v9 fresh schema: PASS')
+print('ImageLore v10 fresh schema: PASS')

@@ -2,7 +2,7 @@ use crate::generation_index;
 use rusqlite::{params,Connection,OptionalExtension};
 use sha2::{Digest,Sha256};
 
-const LATEST:i64=9;
+const LATEST:i64=10;
 
 fn set_version(conn:&Connection,version:i64)->Result<(),String>{
     conn.execute(
@@ -291,6 +291,33 @@ fn migrate_v9(conn:&Connection)->Result<(),String>{
     ).map_err(|e|e.to_string())
 }
 
+fn migrate_v10(conn:&Connection)->Result<(),String>{
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS remix_drafts (
+           id INTEGER PRIMARY KEY AUTOINCREMENT,
+           base_asset_id INTEGER NOT NULL,
+           prompt TEXT NOT NULL DEFAULT '',
+           created_at INTEGER NOT NULL,
+           updated_at INTEGER NOT NULL,
+           FOREIGN KEY(base_asset_id) REFERENCES assets(id) ON DELETE CASCADE
+         );
+         CREATE INDEX IF NOT EXISTS idx_remix_base ON remix_drafts(base_asset_id,updated_at DESC,id DESC);
+         CREATE TABLE IF NOT EXISTS remix_sources (
+           draft_id INTEGER NOT NULL,
+           asset_id INTEGER NOT NULL,
+           fields_json TEXT NOT NULL DEFAULT '[]',
+           source_url TEXT NOT NULL DEFAULT '',
+           reference_meta_json TEXT NOT NULL DEFAULT '{}',
+           position INTEGER NOT NULL DEFAULT 0,
+           created_at INTEGER NOT NULL,
+           PRIMARY KEY(draft_id,asset_id),
+           FOREIGN KEY(draft_id) REFERENCES remix_drafts(id) ON DELETE CASCADE,
+           FOREIGN KEY(asset_id) REFERENCES assets(id) ON DELETE CASCADE
+         );
+         CREATE INDEX IF NOT EXISTS idx_remix_sources_asset ON remix_sources(asset_id,draft_id);"
+    ).map_err(|e|e.to_string())
+}
+
 pub fn apply(conn:&Connection)->Result<(),String>{
     conn.execute_batch("CREATE TABLE IF NOT EXISTS app_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);").map_err(|e|e.to_string())?;
     let current:Option<String>=conn.query_row(
@@ -356,11 +383,36 @@ pub fn apply(conn:&Connection)->Result<(),String>{
         set_version(conn,version)?;
     }
 
+    if version<10{
+        migrate_v10(conn)?;
+        version=10;
+        set_version(conn,version)?;
+    }
+
     Ok(())
 }
 
 #[cfg(test)]
 mod tests{
+
+    #[test]
+    fn migration_v10_adds_remix_tables(){
+        let conn=Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE app_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+             INSERT INTO app_meta VALUES('schema_version','9');
+             CREATE TABLE assets(id INTEGER PRIMARY KEY);
+             INSERT INTO assets(id) VALUES(1);"
+        ).unwrap();
+        apply(&conn).unwrap();
+        let version:String=conn.query_row("SELECT value FROM app_meta WHERE key='schema_version'",[],|r|r.get(0)).unwrap();
+        assert_eq!(version,"10");
+        conn.execute("INSERT INTO remix_drafts(base_asset_id,prompt,created_at,updated_at) VALUES(1,'p',1,1)",[]).unwrap();
+        let draft=conn.last_insert_rowid();
+        conn.execute("INSERT INTO remix_sources(draft_id,asset_id,fields_json,created_at) VALUES(?1,1,'[\"subject\"]',1)",params![draft]).unwrap();
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM remix_sources",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+    }
+
 
     #[test]
     fn migration_v9_adds_image_to_prompt_tables(){
@@ -372,7 +424,7 @@ mod tests{
         ).unwrap();
         apply(&conn).unwrap();
         let version:String=conn.query_row("SELECT value FROM app_meta WHERE key='schema_version'",[],|r|r.get(0)).unwrap();
-        assert_eq!(version,"9");
+        assert_eq!(version,"10");
         let base:String=conn.query_row("SELECT base_url FROM vision_settings WHERE id=1",[],|r|r.get(0)).unwrap();
         assert_eq!(base,"https://api.openai.com/v1");
         conn.execute("INSERT INTO assets(id) VALUES(1)",[]).unwrap();
@@ -409,7 +461,7 @@ mod tests{
         ).unwrap();
         apply(&conn).unwrap();
         let version:String=conn.query_row("SELECT value FROM app_meta WHERE key='schema_version'",[],|r|r.get(0)).unwrap();
-        assert_eq!(version,"9");
+        assert_eq!(version,"10");
         let hit:i64=conn.query_row(
             "SELECT asset_id FROM asset_cjk_search WHERE asset_cjk_search MATCH ?1",
             params!["\"蓝色大肥鱼\""],
@@ -428,7 +480,7 @@ mod tests{
         ).unwrap();
         apply(&conn).unwrap();
         let version:String=conn.query_row("SELECT value FROM app_meta WHERE key='schema_version'",[],|r|r.get(0)).unwrap();
-        assert_eq!(version,"9");
+        assert_eq!(version,"10");
         let enabled:String=conn.query_row("SELECT value FROM semantic_settings WHERE key='enabled'",[],|r|r.get(0)).unwrap();
         assert_eq!(enabled,"0");
         conn.execute("INSERT INTO assets(id) VALUES(1)",[]).unwrap();
@@ -450,7 +502,7 @@ mod tests{
         ).unwrap();
         apply(&conn).unwrap();
         let version:String=conn.query_row("SELECT value FROM app_meta WHERE key='schema_version'",[],|r|r.get(0)).unwrap();
-        assert_eq!(version,"9");
+        assert_eq!(version,"10");
         let row:(String,i64,String,f64)=conn.query_row(
             "SELECT seed,steps,sampler,cfg_scale FROM generation_index WHERE asset_id=1",[],
             |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))
@@ -470,7 +522,7 @@ mod tests{
         ).unwrap();
         apply(&conn).unwrap();
         let version:String=conn.query_row("SELECT value FROM app_meta WHERE key='schema_version'",[],|r|r.get(0)).unwrap();
-        assert_eq!(version,"9");
+        assert_eq!(version,"10");
         conn.execute(
             "INSERT INTO source_folders(path,name,created_at,updated_at) VALUES('D:/AI','AI',1,1)",[]
         ).unwrap();
@@ -524,7 +576,7 @@ mod tests{
         ).unwrap();
         apply(&conn).unwrap();
         let version:String=conn.query_row("SELECT value FROM app_meta WHERE key='schema_version'",[],|r|r.get(0)).unwrap();
-        assert_eq!(version,"9");
+        assert_eq!(version,"10");
         conn.execute(
             "INSERT INTO visual_dna(asset_id,environment,style,search_text,source,updated_at) VALUES(1,'千禧年电脑房','日系写实','千禧年电脑房 日系写实','manual',1)",[]
         ).unwrap();
