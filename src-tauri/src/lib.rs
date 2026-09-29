@@ -113,6 +113,7 @@ pub fn run(){
             commands::relocate_missing,
             commands::open_external,
             commands::open_containing_folder,
+            commands::copy_asset_to,
             generation::generation_sessions,
             generation::create_generation_session,
             generation::asset_session,
