@@ -23,6 +23,7 @@ const PAGE_SIZE=240;
 const emptyFacets:LibraryFacets={tags:[],models:[],collections:[],metadata_types:[],samplers:[],schedulers:[]};
 const emptyLineage:Lineage={parents:[],children:[]};
 const parseTags=(text:string)=>[...new Set(text.split(/[,，]/).map(x=>x.trim()).filter(Boolean))];
+const isTextEntry=(target:EventTarget|null)=>target instanceof HTMLElement&&(target.matches("input,textarea,select")||target.isContentEditable);
 
 export default function App(){
   const[version,setVersion]=useState(APP_VERSION);
@@ -442,12 +443,25 @@ export default function App(){
   useEffect(()=>{
     const handler=(e:KeyboardEvent)=>{
       if(e.key==="Escape"){if(modal){setModal(null);return}if(parentOpen){setParentOpen(false);return}if(managerOpen){setManagerOpen(false);return}}
-      if(e.ctrlKey&&e.key.toLowerCase()==="f"){e.preventDefault();document.querySelector<HTMLInputElement>("#search")?.focus()}
-      if(e.key==="F6"){e.preventDefault();promptRef.current?.focus()}
-      if(e.key==="F7"){e.preventDefault();setPreviewMode(x=>x==="fit"?"actual":"fit")}
-      if(e.ctrlKey&&e.shiftKey&&e.key.toLowerCase()==="c"){e.preventDefault();copyPrompt()}
-      if(e.ctrlKey&&e.key.toLowerCase()==="s"){e.preventDefault();void saveRevision()}
-      if(e.ctrlKey&&e.key.toLowerCase()==="i"){e.preventDefault();void chooseImages()}
+      if(modal||parentOpen||managerOpen)return;
+      const typing=isTextEntry(e.target);
+      if(e.ctrlKey&&e.key.toLowerCase()==="f"){e.preventDefault();document.querySelector<HTMLInputElement>("#search")?.focus();return}
+      if(e.key==="F6"){e.preventDefault();promptRef.current?.focus();return}
+      if(e.key==="F7"){e.preventDefault();setPreviewMode(x=>x==="fit"?"actual":"fit");return}
+      if(e.ctrlKey&&e.shiftKey&&e.key.toLowerCase()==="c"){e.preventDefault();copyPrompt();return}
+      if(e.ctrlKey&&e.key.toLowerCase()==="s"){e.preventDefault();void saveRevision();return}
+      if(e.ctrlKey&&e.key.toLowerCase()==="i"){e.preventDefault();void chooseImages();return}
+      if(typing)return;
+      const key=e.key.toLowerCase();
+      if(key==="arrowleft"||key==="arrowright"||key==="j"||key==="k"){
+        e.preventDefault();if(!assets.length)return;
+        const index=current?assets.findIndex(x=>x.id===current.id):-1;
+        const forward=key==="arrowright"||key==="j";
+        const next=Math.max(0,Math.min(assets.length-1,index+(forward?1:-1)));
+        if(assets[next]&&assets[next].id!==current?.id)void selectRecord(assets[next].id);
+        return;
+      }
+      if(key==="f"&&!e.ctrlKey&&!e.metaKey&&!e.altKey){e.preventDefault();if(current)void toggleAssetFavorite(current);return}
       if(e.altKey&&(e.key==="ArrowUp"||e.key==="ArrowDown")){
         e.preventDefault();if(!current)return;
         const i=assets.findIndex(x=>x.id===current.id),n=e.key==="ArrowUp"?Math.max(0,i-1):Math.min(assets.length-1,i+1);
@@ -468,7 +482,7 @@ export default function App(){
       <div className="splitter" onPointerDown={drag("right")}/>
       <InspectorPane asset={current} tab={tab} onTab={setTab} prompt={prompt} onPrompt={setPrompt} negative={negative} onNegative={setNegative} model={model} onModel={setModel} tagsText={tagsText} onTagsText={setTagsText} lineage={lineage} compareRecord={compareRecord} compareParentSrc={compareParentSrc} compareCurrentSrc={compareCurrentSrc} sessions={sessions} assetSession={assetSession} onCompare={compare} onCopy={copyPrompt} onSaveRevision={saveRevision} onHistory={openHistory} onFavorite={toggleFavorite} onFindSimilar={findSimilar} onRescan={rescan} onSidecar={exportSidecar} onCollection={openCollection} onRemove={()=>setModal({kind:"remove"})} onImportDerivative={importDerivative} onLinkParent={openParentPicker} onSetSession={setSession} onCreateSession={createSession} onEditSessionNote={editSessionNote} onEditRelationNote={editRelationNote} promptRef={promptRef}/>
     </main>
-    <footer className="statusbar glass-surface"><span className={`runtime-dot ${isTauri?"native":"preview"}`}/><strong>{isTauri?"桌面版":"浏览器预览"}</strong><span>v{version}</span><span className="status-message">{status}</span>{importActive?<><progress max={Math.max(1,importProgress.total)} value={importProgress.processed}/><button onClick={cancelImportJob}>取消导入</button></>:null}{semanticActive?<><progress max={Math.max(1,semanticProgress.total)} value={semanticProgress.processed}/><button onClick={cancelSemanticIndex}>取消索引</button></>:null}<span>已加载 {assets.length}/{total}</span><button onClick={repairMissing} title="根据文件指纹查找移动后的文件">修复缺失文件</button><span className="shortcut">F6 提示词 · F7 预览 · Ctrl+S 保存版本</span></footer>
+    <footer className="statusbar glass-surface"><span className={`runtime-dot ${isTauri?"native":"preview"}`}/><strong>{isTauri?"桌面版":"浏览器预览"}</strong><span>v{version}</span><span className="status-message">{status}</span>{importActive?<><progress max={Math.max(1,importProgress.total)} value={importProgress.processed}/><button onClick={cancelImportJob}>取消导入</button></>:null}{semanticActive?<><progress max={Math.max(1,semanticProgress.total)} value={semanticProgress.processed}/><button onClick={cancelSemanticIndex}>取消索引</button></>:null}<span>已加载 {assets.length}/{total}</span><button onClick={repairMissing} title="根据文件指纹查找移动后的文件">修复缺失文件</button><span className="shortcut">←→ / J K 切图 · F 收藏 · F6 提示词 · F7 预览 · Ctrl+S 保存</span></footer>
     <LibraryManager open={managerOpen} backups={backups} tags={facets.tags} collections={facets.collections} duplicates={duplicates} modelAliases={modelAliases} savedFilters={savedFilters} sourceFolders={sourceFolders} sourceSyncing={importActive} health={health} semanticStatus={semanticStatus} semanticIndexing={semanticActive} semanticProgress={semanticProgress} onRebuildSemantic={rebuildSemantic} onCancelSemantic={cancelSemanticIndex} onClearSemantic={clearSemantic} onDeleteSemanticModels={deleteSemanticModels} onClose={()=>setManagerOpen(false)} onBackup={createBackup} onRestore={restoreBackup} onRenameTag={renameTag} onDeleteTag={deleteTag} onRenameCollection={renameCollection} onDeleteCollection={deleteCollection} onUpsertModelAlias={upsertModelAlias} onDeleteModelAlias={deleteModelAlias} onDeleteSavedFilter={deleteSavedView} onAddSourceFolder={addSourceFolder} onRemoveSourceFolder={removeSourceFolder} onToggleSourceAutoSync={toggleSourceAutoSync} onSyncSourceFolders={syncSourceFolders}/>
     <ParentPicker open={parentOpen} query={parentQuery} results={parentResults} choice={parentChoice} loading={parentLoading} onQuery={setParentQuery} onChoice={setParentChoice} onClose={()=>setParentOpen(false)} onConfirm={confirmParent}/>
     <AppDialogs modal={modal} assets={assets} currentId={current?.id} text={dialogText} setText={setDialogText} choice={dialogChoice} setChoice={setDialogChoice} onClose={()=>setModal(null)} onConfirm={confirmModal}/>
