@@ -22,6 +22,7 @@ pub fn normalize_patch(mut value:VisualDnaPatch)->VisualDnaPatch{
     value.source=match value.source.trim(){
         "ai"=>"ai".into(),
         "sidecar"=>"sidecar".into(),
+        "mixed"=>"mixed".into(),
         _=>"manual".into(),
     };
     value

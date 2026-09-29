@@ -1,21 +1,24 @@
-import { useMemo,useState } from "react";
-import type { BackupRecord,CollectionRecord,DiagnosticStatus,DuplicateGroup,FacetCount,LibraryHealth,ModelAlias,SavedFilter,SemanticProgress,SemanticStatus,SourceFolder } from "../types";
+import { useEffect,useMemo,useState } from "react";
+import type { BackupRecord,CollectionRecord,DiagnosticStatus,DuplicateGroup,FacetCount,LibraryHealth,ModelAlias,SavedFilter,SemanticProgress,SemanticStatus,SourceFolder,VisionSettings } from "../types";
 
 const bytes=(n:number)=>n<1024?n+" B":n<1024*1024?(n/1024).toFixed(1)+" KB":(n/1024/1024).toFixed(1)+" MB";
 
-export function LibraryManager({open,backups,tags,collections,duplicates,modelAliases,savedFilters,sourceFolders,sourceSyncing,health,diagnostics,semanticStatus,semanticIndexing,semanticProgress,onRebuildSemantic,onCancelSemantic,onClearSemantic,onDeleteSemanticModels,onClose,onBackup,onRestore,onOpenDataFolder,onOpenLogsFolder,onRenameTag,onDeleteTag,onRenameCollection,onDeleteCollection,onUpsertModelAlias,onDeleteModelAlias,onDeleteSavedFilter,onAddSourceFolder,onRemoveSourceFolder,onToggleSourceAutoSync,onSyncSourceFolders}:{
-  open:boolean;backups:BackupRecord[];tags:FacetCount[];collections:CollectionRecord[];duplicates:DuplicateGroup[];modelAliases:ModelAlias[];savedFilters:SavedFilter[];sourceFolders:SourceFolder[];sourceSyncing:boolean;health:LibraryHealth|null;diagnostics:DiagnosticStatus|null;
+export function LibraryManager({open,backups,tags,collections,duplicates,modelAliases,savedFilters,sourceFolders,sourceSyncing,health,diagnostics,visionSettings,semanticStatus,semanticIndexing,semanticProgress,onRebuildSemantic,onCancelSemantic,onClearSemantic,onDeleteSemanticModels,onClose,onBackup,onRestore,onOpenDataFolder,onOpenLogsFolder,onSaveVisionSettings,onSetVisionApiKey,onRenameTag,onDeleteTag,onRenameCollection,onDeleteCollection,onUpsertModelAlias,onDeleteModelAlias,onDeleteSavedFilter,onAddSourceFolder,onRemoveSourceFolder,onToggleSourceAutoSync,onSyncSourceFolders}:{
+  open:boolean;backups:BackupRecord[];tags:FacetCount[];collections:CollectionRecord[];duplicates:DuplicateGroup[];modelAliases:ModelAlias[];savedFilters:SavedFilter[];sourceFolders:SourceFolder[];sourceSyncing:boolean;health:LibraryHealth|null;diagnostics:DiagnosticStatus|null;visionSettings:VisionSettings|null;
   semanticStatus:SemanticStatus|null;semanticIndexing:boolean;semanticProgress:SemanticProgress;
   onRebuildSemantic:()=>void;onCancelSemantic:()=>void;onClearSemantic:()=>void;onDeleteSemanticModels:()=>void;
   onClose:()=>void;onBackup:()=>void;onRestore:(name:string)=>void;onOpenDataFolder:()=>void;onOpenLogsFolder:()=>void;
+  onSaveVisionSettings:(baseUrl:string,model:string)=>void;onSetVisionApiKey:(key:string)=>void;
   onRenameTag:(oldName:string,newName:string)=>void;onDeleteTag:(name:string)=>void;
   onRenameCollection:(id:number,name:string)=>void;onDeleteCollection:(id:number)=>void;
   onUpsertModelAlias:(alias:string,canonical:string)=>void;onDeleteModelAlias:(alias:string)=>void;onDeleteSavedFilter:(id:number)=>void;
   onAddSourceFolder:()=>void;onRemoveSourceFolder:(id:number)=>void;onToggleSourceAutoSync:(id:number,enabled:boolean)=>void;onSyncSourceFolders:(ids:number[])=>void;
 }){
-  const[tab,setTab]=useState<"safety"|"sources"|"tags"|"collections"|"intelligence"|"semantic"|"duplicates"|"health">("safety");
+  const[tab,setTab]=useState<"safety"|"sources"|"tags"|"collections"|"intelligence"|"vision"|"semantic"|"duplicates"|"health">("safety");
   const[tagSource,setTagSource]=useState("");const[tagTarget,setTagTarget]=useState("");
   const[alias,setAlias]=useState("");const[canonical,setCanonical]=useState("");
+  const[visionBase,setVisionBase]=useState("");const[visionModel,setVisionModel]=useState("");const[visionKey,setVisionKey]=useState("");
+  useEffect(()=>{if(visionSettings){setVisionBase(visionSettings.base_url);setVisionModel(visionSettings.model)}},[visionSettings?.base_url,visionSettings?.model]);
   const collectionMap=useMemo(()=>new Map(collections.map(x=>[x.id,x])),[collections]);
   if(!open)return null;
   return <div className="modal-backdrop"><section className="modal library-manager glass-surface" role="dialog" aria-modal="true">
@@ -26,6 +29,7 @@ export function LibraryManager({open,backups,tags,collections,duplicates,modelAl
       <button className={tab==="tags"?"active":""} onClick={()=>setTab("tags")}>标签</button>
       <button className={tab==="collections"?"active":""} onClick={()=>setTab("collections")}>集合</button>
       <button className={tab==="intelligence"?"active":""} onClick={()=>setTab("intelligence")}>模型/视图</button>
+      <button className={tab==="vision"?"active":""} onClick={()=>setTab("vision")}>图像分析</button>
       <button className={tab==="semantic"?"active":""} onClick={()=>setTab("semantic")}>AI 索引</button>
       <button className={tab==="duplicates"?"active":""} onClick={()=>setTab("duplicates")}>重复 {duplicates.length?"("+duplicates.length+")":""}</button>
       <button className={tab==="health"?"active":""} onClick={()=>setTab("health")}>健康</button>
@@ -60,6 +64,17 @@ export function LibraryManager({open,backups,tags,collections,duplicates,modelAl
         <div className="manager-list compact">{modelAliases.map(x=><div className="manager-row" key={x.alias}><div><strong>{x.canonical}</strong><span>{x.alias}</span></div><button className="danger-compact" onClick={()=>onDeleteModelAlias(x.alias)}>删除</button></div>)}</div>
         <div className="manager-toolbar section-gap"><div><strong>保存视图</strong><span>保存当前搜索、标签、模型和集合条件，随时恢复。</span></div></div>
         <div className="manager-list compact">{savedFilters.length?savedFilters.map(x=><div className="manager-row" key={x.id}><div><strong>{x.name}</strong><span>{[x.filter.query,x.filter.tag,x.filter.model].filter(Boolean).join(" · ")||"无文本条件"}</span></div><button className="danger-compact" onClick={()=>onDeleteSavedFilter(x.id)}>删除</button></div>):<p className="muted">还没有保存视图，可在左侧筛选器中保存。</p>}</div>
+      </section>:null}
+      {tab==="vision"?<section>
+        <div className="manager-toolbar"><div><strong>Image to Prompt Provider</strong><span>使用支持图片输入的 OpenAI-compatible Chat Completions 接口。只有手动点击“分析当前图片”时才发送图片。</span></div></div>
+        <div className="vision-provider-card">
+          <label><span>Base URL</span><input value={visionBase} onChange={e=>setVisionBase(e.target.value)} placeholder="https://api.openai.com/v1"/></label>
+          <label><span>Vision Model</span><input value={visionModel} onChange={e=>setVisionModel(e.target.value)} placeholder="填写当前可用的视觉模型名称"/></label>
+          <div className="vision-save-row"><button className="button primary" disabled={!visionBase.trim()} onClick={()=>onSaveVisionSettings(visionBase,visionModel)}>保存 Provider 配置</button><span>{visionSettings?.model?"当前模型："+visionSettings.model:"尚未配置模型"}</span></div>
+        </div>
+        <div className="manager-toolbar section-gap"><div><strong>API Key · 当前会话</strong><span>不会写入 SQLite、Sidecar 或日志。关闭 ImageLore 后清除；也可通过 IMAGELORE_VISION_API_KEY 环境变量提供。</span></div></div>
+        <div className="vision-key-row"><input type="password" value={visionKey} onChange={e=>setVisionKey(e.target.value)} placeholder={visionSettings?.api_key_configured?"当前会话已有 Key · 输入新值可替换":"输入 API Key；本地无鉴权接口可留空"}/><button onClick={()=>{onSetVisionApiKey(visionKey);setVisionKey("")}}>载入会话</button><button className="danger-compact" onClick={()=>{onSetVisionApiKey("");setVisionKey("")}}>清除</button></div>
+        <div className="vision-privacy-note"><strong>发送内容</strong><p>ImageLore 会在本地把当前图片缩小到最长边约 1600px，并将该临时 JPEG Data URL 发送到你配置的 Provider。分析响应会保存在本地资料库，用于审阅、Visual DNA 和 Prompt Revision。</p></div>
       </section>:null}
       {tab==="semantic"?<section>
         <div className="manager-toolbar"><div><strong>Semantic Recall</strong><span>本地 CLIP 图文向量索引。原图不会上传；Embedding 可删除、可重建。</span></div><div className="manager-toolbar-actions">{semanticIndexing?<button className="button secondary" onClick={onCancelSemantic}>取消索引</button>:<button className="button primary" onClick={onRebuildSemantic}>{semanticStatus?.indexed?"更新索引":"启用并建立索引"}</button>}</div></div>

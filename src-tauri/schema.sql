@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS app_meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
-INSERT OR IGNORE INTO app_meta(key,value) VALUES ('schema_version','8');
+INSERT OR IGNORE INTO app_meta(key,value) VALUES ('schema_version','9');
 
 CREATE TABLE IF NOT EXISTS assets (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -229,3 +229,24 @@ CREATE TABLE IF NOT EXISTS source_folders (
   updated_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_source_folders_auto_sync ON source_folders(auto_sync,name COLLATE NOCASE);
+
+CREATE TABLE IF NOT EXISTS vision_settings (
+  id INTEGER PRIMARY KEY CHECK (id=1),
+  base_url TEXT NOT NULL DEFAULT 'https://api.openai.com/v1',
+  model TEXT NOT NULL DEFAULT '',
+  updated_at INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO vision_settings(id,base_url,model,updated_at) VALUES(1,'https://api.openai.com/v1','',0);
+
+CREATE TABLE IF NOT EXISTS image_prompt_analyses (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  asset_id INTEGER NOT NULL,
+  provider TEXT NOT NULL DEFAULT 'openai-compatible',
+  model TEXT NOT NULL,
+  summary TEXT NOT NULL DEFAULT '',
+  prompt TEXT NOT NULL DEFAULT '',
+  visual_dna_json TEXT NOT NULL DEFAULT '{}',
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY(asset_id) REFERENCES assets(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_image_prompt_asset ON image_prompt_analyses(asset_id,created_at DESC,id DESC);

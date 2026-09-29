@@ -13,6 +13,7 @@ mod preview;
 mod semantic;
 mod sidecar;
 mod visual_dna;
+mod vision;
 mod sources;
 mod state;
 
@@ -58,6 +59,7 @@ fn prepare_state()->Result<AppState,String>{
         models_dir,
         jobs:Mutex::new(std::collections::HashMap::new()),
         next_job_id:std::sync::atomic::AtomicU64::new(1),
+        vision_api_key:Mutex::new(std::env::var("IMAGELORE_VISION_API_KEY").unwrap_or_default()),
     })
 }
 
@@ -101,6 +103,13 @@ pub fn run(){
             commands::get_asset,
             visual_dna::get_visual_dna,
             visual_dna::update_visual_dna,
+            vision::vision_settings,
+            vision::save_vision_settings,
+            vision::set_vision_api_key,
+            vision::latest_image_prompt_analysis,
+            vision::analyze_image_to_prompt,
+            vision::apply_image_prompt_dna,
+            vision::save_image_prompt_revision,
             importer::import_paths,
             importer::import_folder,
             importer::import_dropped_paths,

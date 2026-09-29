@@ -1,5 +1,5 @@
 import { useEffect,useMemo,useState } from "react";
-import type { AssetRecord,AssetSession,GenerationInfo,GenerationSession,Lineage,VisualDna,VisualDnaPatch } from "../types";
+import type { AssetRecord,AssetSession,GenerationInfo,GenerationSession,ImagePromptAnalysis,Lineage,VisualDna,VisualDnaPatch } from "../types";
 import { ComparePanel } from "./ComparePanel";
 
 export type InspectorTab="prompt"|"dna"|"info"|"lineage";
@@ -21,10 +21,12 @@ const dnaFields:Array<[keyof Omit<VisualDnaPatch,"source">,string,string]>=[
   ["material","材质","皮肤、布料、金属、玻璃等"],
   ["style","风格","摄影、动漫、3D、年代或媒介语言"],
 ];
-const sourceLabel=(value:string)=>({"manual":"手动","sidecar":"Sidecar","ai":"AI 分析"} as Record<string,string>)[value]||"手动";
+const sourceLabel=(value:string)=>({"manual":"手动","sidecar":"Sidecar","ai":"AI 分析","mixed":"手动 + AI"} as Record<string,string>)[value]||"手动";
 
-export function InspectorPane({asset,tab,onTab,visualDna,onSaveVisualDna,prompt,onPrompt,negative,onNegative,model,onModel,tagsText,onTagsText,lineage,compareRecord,compareParentSrc,compareCurrentSrc,sessions,assetSession,onCompare,onCopy,onSaveRevision,onHistory,onFavorite,onFindSimilar,onRescan,onSidecar,onCollection,onRemove,onImportDerivative,onLinkParent,onSetSession,onCreateSession,onEditSessionNote,onEditRelationNote,promptRef}:{
+export function InspectorPane({asset,tab,onTab,visualDna,onSaveVisualDna,imagePromptAnalysis,imagePromptLoading,visionModel,onAnalyzeImage,onApplyAnalysisDna,onOverwriteAnalysisDna,onUseAnalysisPrompt,onSaveAnalysisRevision,onOpenVisionSettings,prompt,onPrompt,negative,onNegative,model,onModel,tagsText,onTagsText,lineage,compareRecord,compareParentSrc,compareCurrentSrc,sessions,assetSession,onCompare,onCopy,onSaveRevision,onHistory,onFavorite,onFindSimilar,onRescan,onSidecar,onCollection,onRemove,onImportDerivative,onLinkParent,onSetSession,onCreateSession,onEditSessionNote,onEditRelationNote,promptRef}:{
   asset:AssetRecord|null;tab:InspectorTab;onTab:(t:InspectorTab)=>void;visualDna:VisualDna|null;onSaveVisualDna:(value:VisualDnaPatch)=>void|Promise<void>;
+  imagePromptAnalysis:ImagePromptAnalysis|null;imagePromptLoading:boolean;visionModel:string;
+  onAnalyzeImage:()=>void;onApplyAnalysisDna:()=>void;onOverwriteAnalysisDna:()=>void;onUseAnalysisPrompt:()=>void;onSaveAnalysisRevision:()=>void;onOpenVisionSettings:()=>void;
   prompt:string;onPrompt:(v:string)=>void;negative:string;onNegative:(v:string)=>void;model:string;onModel:(v:string)=>void;tagsText:string;onTagsText:(v:string)=>void;
   lineage:Lineage;compareRecord:AssetRecord|null;compareParentSrc:string;compareCurrentSrc:string;sessions:GenerationSession[];assetSession:AssetSession|null;
   onCompare:(id:number)=>void;onCopy:()=>void;onSaveRevision:()=>void;onHistory:()=>void;onFavorite:()=>void;onFindSimilar:()=>void;onRescan:()=>void;onSidecar:()=>void;onCollection:()=>void;onRemove:()=>void;onImportDerivative:()=>void;onLinkParent:()=>void;
@@ -63,6 +65,22 @@ export function InspectorPane({asset,tab,onTab,visualDna,onSaveVisualDna,prompt,
         <button className="danger-link" disabled={!asset} onClick={onRemove}>从 ImageLore 中移除这条记录</button>
       </>:null}
       {tab==="dna"?<div className="dna-panel">
+        <div className="image-prompt-card">
+          <div className="image-prompt-head"><div><span className="eyebrow">IMAGE TO PROMPT</span><strong>从图片提取 Visual DNA 与可生成 Prompt</strong><p>只有点击分析时才会把缩小后的图片发送到你配置的 Vision Provider。</p></div><button className="button secondary" onClick={onOpenVisionSettings}>配置</button></div>
+          <div className="image-prompt-status"><span>模型</span><strong>{visionModel||"未配置"}</strong><button className="button primary" disabled={!asset||imagePromptLoading||!!asset?.missing} onClick={onAnalyzeImage}>{imagePromptLoading?"分析中…":imagePromptAnalysis?"重新分析":"分析当前图片"}</button></div>
+          {imagePromptAnalysis?<div className="image-prompt-result">
+            <div className="analysis-meta"><span>{imagePromptAnalysis.provider}</span><b>{imagePromptAnalysis.model}</b><time>{new Date(imagePromptAnalysis.created_at*1000).toLocaleString("zh-CN")}</time></div>
+            {imagePromptAnalysis.summary?<p className="analysis-summary">{imagePromptAnalysis.summary}</p>:null}
+            <label><span>生成 Prompt</span><textarea readOnly value={imagePromptAnalysis.prompt} rows={5}/></label>
+            <div className="analysis-actions">
+              <button onClick={onApplyAnalysisDna}>补充 Visual DNA</button>
+              <button onClick={onUseAnalysisPrompt}>载入 Prompt 编辑器</button>
+              <button onClick={onSaveAnalysisRevision}>保存为 Revision</button>
+              <button className="danger-compact" onClick={onOverwriteAnalysisDna}>覆盖 DNA</button>
+            </div>
+            <small>“补充 Visual DNA”只填写当前为空的字段；“覆盖 DNA”才会替换已有手工内容。</small>
+          </div>:<div className="image-prompt-empty"><span>◇</span><p>{visionModel?"还没有分析记录。":"先配置一个支持图片输入的 OpenAI-compatible 模型。"}</p></div>}
+        </div>
         <div className="prompt-card">
           <div className="prompt-card-head"><div><span className="eyebrow">PROMPT CARD</span><strong>{asset?.name||"未选择图片"}</strong></div><span className="dna-source">{sourceLabel(visualDna?.source||dnaDraft.source)}</span></div>
           <div className="prompt-card-meta"><div><span>MODEL</span><strong>{model||asset?.model||"—"}</strong></div><div><span>SIZE</span><strong>{asset?.width&&asset.height?`${asset.width}×${asset.height}`:"—"}</strong></div><div><span>RATIO</span><strong>{aspect}</strong></div><div><span>LINEAGE</span><strong>{lineage.parents.length+" ↑ / "+lineage.children.length+" ↓"}</strong></div></div>
