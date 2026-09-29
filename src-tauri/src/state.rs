@@ -3,8 +3,8 @@ use std::{
     collections::HashMap,
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool,AtomicU64},
-        Arc,Mutex,
+        atomic::{AtomicBool, AtomicU64},
+        Arc, Mutex,
     },
 };
 
@@ -15,7 +15,7 @@ pub struct AppState {
     pub database_path: PathBuf,
     pub backups_dir: PathBuf,
     pub models_dir: PathBuf,
-    pub jobs: Mutex<HashMap<u64,Arc<AtomicBool>>>,
+    pub jobs: Mutex<HashMap<u64, Arc<AtomicBool>>>,
     pub next_job_id: AtomicU64,
     pub vision_api_key: Mutex<String>,
 }

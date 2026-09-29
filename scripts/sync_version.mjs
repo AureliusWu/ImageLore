@@ -1,9 +1,9 @@
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { readCanonicalVersion, syncVersionTargets } from './version_targets.mjs';
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { readCanonicalVersion, syncVersionTargets } from "./version_targets.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const root = path.resolve(__dirname, '..');
+const root = path.resolve(__dirname, "..");
 const version = readCanonicalVersion(root);
 
 syncVersionTargets(root, version);

@@ -2,78 +2,109 @@ mod backup;
 mod commands;
 mod db;
 mod diagnostics;
-mod importer;
 mod generation;
 mod generation_index;
+mod importer;
 mod jobs;
-mod migrations;
 mod metadata;
+mod migrations;
 mod models;
 mod preview;
-mod remix;
 mod references;
+mod remix;
 mod semantic;
 mod sidecar;
-mod visual_dna;
-mod vision;
 mod sources;
 mod state;
+mod vision;
+mod visual_dna;
 
 use state::AppState;
-use std::{fs,sync::Mutex};
+use std::{fs, sync::Mutex};
 use tauri::Manager;
-use tauri_plugin_dialog::{DialogExt,MessageDialogKind};
+use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
-fn prepare_state()->Result<AppState,String>{
-    let(data_dir,cache_dir)=db::data_root()?;
-    let database_path=data_dir.join("library.sqlite3");
-    let backups_dir=data_dir.join("backups");
-    let models_dir=data_dir.join("models");
-    fs::create_dir_all(&backups_dir).map_err(|e|e.to_string())?;
-    fs::create_dir_all(&models_dir).map_err(|e|e.to_string())?;
-    diagnostics::log(&data_dir,"INFO","startup: preparing local library");
-    backup::apply_pending_restore(&database_path,&data_dir,&backups_dir)
-        .map_err(|e|{diagnostics::log(&data_dir,"ERROR",&format!("pending restore failed: {}",e));e})?;
-    let had_database=database_path.exists();
-    let connection=match db::init_db(&database_path){
-        Ok(conn)=>conn,
-        Err(initial_error)=>{
-            diagnostics::log(&data_dir,"ERROR",&format!("database initialization failed: {}",initial_error));
-            if !had_database{return Err(initial_error)}
-            match backup::recover_latest_valid_backup(&database_path,&data_dir,&backups_dir,&initial_error)?{
-                Some(record)=>{
-                    diagnostics::log(&data_dir,"WARN",&format!("startup recovery applied backup {}",record.name));
-                    db::init_db(&database_path).map_err(|retry|format!("资料库自动恢复后仍无法打开：{}；原始错误：{}",retry,initial_error))?
+fn prepare_state() -> Result<AppState, String> {
+    let (data_dir, cache_dir) = db::data_root()?;
+    let database_path = data_dir.join("library.sqlite3");
+    let backups_dir = data_dir.join("backups");
+    let models_dir = data_dir.join("models");
+    fs::create_dir_all(&backups_dir).map_err(|e| e.to_string())?;
+    fs::create_dir_all(&models_dir).map_err(|e| e.to_string())?;
+    diagnostics::log(&data_dir, "INFO", "startup: preparing local library");
+    backup::apply_pending_restore(&database_path, &data_dir, &backups_dir).map_err(|e| {
+        diagnostics::log(
+            &data_dir,
+            "ERROR",
+            &format!("pending restore failed: {}", e),
+        );
+        e
+    })?;
+    let had_database = database_path.exists();
+    let connection = match db::init_db(&database_path) {
+        Ok(conn) => conn,
+        Err(initial_error) => {
+            diagnostics::log(
+                &data_dir,
+                "ERROR",
+                &format!("database initialization failed: {}", initial_error),
+            );
+            if !had_database {
+                return Err(initial_error);
+            }
+            match backup::recover_latest_valid_backup(
+                &database_path,
+                &data_dir,
+                &backups_dir,
+                &initial_error,
+            )? {
+                Some(record) => {
+                    diagnostics::log(
+                        &data_dir,
+                        "WARN",
+                        &format!("startup recovery applied backup {}", record.name),
+                    );
+                    db::init_db(&database_path).map_err(|retry| {
+                        format!(
+                            "资料库自动恢复后仍无法打开：{}；原始错误：{}",
+                            retry, initial_error
+                        )
+                    })?
                 }
-                None=>return Err(format!("资料库无法打开，且没有找到可验证的备份。原始错误：{}",initial_error)),
+                None => {
+                    return Err(format!(
+                        "资料库无法打开，且没有找到可验证的备份。原始错误：{}",
+                        initial_error
+                    ))
+                }
             }
         }
     };
-    let cache_cleanup=cache_dir.clone();
-    std::thread::spawn(move||preview::prune_cache(&cache_cleanup,1024*1024*1024));
-    diagnostics::log(&data_dir,"INFO","startup: library ready");
-    Ok(AppState{
-        db:Mutex::new(connection),
+    let cache_cleanup = cache_dir.clone();
+    std::thread::spawn(move || preview::prune_cache(&cache_cleanup, 1024 * 1024 * 1024));
+    diagnostics::log(&data_dir, "INFO", "startup: library ready");
+    Ok(AppState {
+        db: Mutex::new(connection),
         data_dir,
         cache_dir,
         database_path,
         backups_dir,
         models_dir,
-        jobs:Mutex::new(std::collections::HashMap::new()),
-        next_job_id:std::sync::atomic::AtomicU64::new(1),
-        vision_api_key:Mutex::new(std::env::var("IMAGELORE_VISION_API_KEY").unwrap_or_default()),
+        jobs: Mutex::new(std::collections::HashMap::new()),
+        next_job_id: std::sync::atomic::AtomicU64::new(1),
+        vision_api_key: Mutex::new(std::env::var("IMAGELORE_VISION_API_KEY").unwrap_or_default()),
     })
 }
 
-fn write_startup_error(message:&str){
-    let root=db::error_log_root();
-    let _=fs::create_dir_all(&root);
-    diagnostics::log(&root,"ERROR",message);
-    let _=fs::write(root.join("startup-error.log"),message);
+fn write_startup_error(message: &str) {
+    let root = db::error_log_root();
+    let _ = fs::create_dir_all(&root);
+    diagnostics::log(&root, "ERROR", message);
+    let _ = fs::write(root.join("startup-error.log"), message);
 }
 
-#[cfg_attr(mobile,tauri::mobile_entry_point)]
-pub fn run(){
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app|{
