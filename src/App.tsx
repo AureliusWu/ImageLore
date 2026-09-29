@@ -11,7 +11,6 @@ import type {
   DiagnosticStatus,
   DuplicateGroup,
   GenerationSession,
-  ImagePromptAnalysis,
   ImportSummary,
   LibraryFacets,
   LibraryFilter,
@@ -19,15 +18,10 @@ import type {
   Lineage,
   ModelAlias,
   RemixDraft,
-  RemixSource,
-  ReferenceSource,
   SavedFilter,
   SearchMode,
   SemanticStatus,
   SourceFolder,
-  VisionSettings,
-  VisualDna,
-  VisualDnaPatch,
 } from "./types";
 import { useDebouncedValue } from "./hooks/useDebouncedValue";
 import { useEditorDraft } from "./hooks/useEditorDraft";
@@ -43,6 +37,8 @@ import { ParentPicker } from "./components/ParentPicker";
 import { useImportJob } from "./hooks/useImportJob";
 import { useSemanticJob } from "./hooks/useSemanticJob";
 import { useCloseGuard } from "./hooks/useCloseGuard";
+import { EMPTY_VISUAL_DNA, useAssetContext } from "./hooks/useAssetContext";
+import { useVisionWorkflow } from "./hooks/useVisionWorkflow";
 import { nextAssetIndex, saveExtension } from "./previewWorkflow";
 import { buildRemixPrompt, nonEmptyDnaFields } from "./remixWorkflow";
 
@@ -67,23 +63,6 @@ const parseTags = (text: string) => [
 const isTextEntry = (target: EventTarget | null) =>
   target instanceof HTMLElement &&
   (target.matches("input,textarea,select") || target.isContentEditable);
-const emptyVisualDna: VisualDna = {
-  subject: "",
-  character: "",
-  outfit: "",
-  pose: "",
-  expression: "",
-  composition: "",
-  camera: "",
-  lighting: "",
-  environment: "",
-  palette: "",
-  material: "",
-  style: "",
-  source: "manual",
-  updated_at: 0,
-};
-
 export default function App() {
   const [version, setVersion] = useState(APP_VERSION);
   const [status, setStatus] = useState("就绪");
@@ -139,14 +118,21 @@ export default function App() {
   const [compareCurrentSrc, setCompareCurrentSrc] = useState("");
   const [sessions, setSessions] = useState<GenerationSession[]>([]);
   const [assetSession, setAssetSession] = useState<AssetSession | null>(null);
-  const [visualDna, setVisualDna] = useState<VisualDna | null>(null);
-  const [imagePromptAnalysis, setImagePromptAnalysis] = useState<ImagePromptAnalysis | null>(null);
-  const [imagePromptLoading, setImagePromptLoading] = useState(false);
-  const [visionSettings, setVisionSettings] = useState<VisionSettings | null>(null);
-  const [remixDraft, setRemixDraft] = useState<RemixDraft | null>(null);
-  const [remixSources, setRemixSources] = useState<RemixSource[]>([]);
-  const [remixPrompt, setRemixPrompt] = useState("");
-  const [referenceSources, setReferenceSources] = useState<ReferenceSource[]>([]);
+  const {
+    visualDna,
+    setVisualDna,
+    imagePromptAnalysis,
+    setImagePromptAnalysis,
+    imagePromptLoading,
+    setImagePromptLoading,
+    remixDraft,
+    setRemixDraft,
+    remixSources,
+    setRemixSources,
+    remixPrompt,
+    setRemixPrompt,
+    referenceSources,
+  } = useAssetContext(current);
   const [modelAliases, setModelAliases] = useState<ModelAlias[]>([]);
   const [savedFilters, setSavedFilters] = useState<SavedFilter[]>([]);
   const [sourceFolders, setSourceFolders] = useState<SourceFolder[]>([]);
@@ -232,6 +218,30 @@ export default function App() {
     saveRevision: saveEditorRevision,
     load: loadEditor,
   } = editor;
+
+  const {
+    visionSettings,
+    setVisionSettings,
+    saveVisualDna,
+    analyzeCurrentImage,
+    applyAnalysisDna,
+    useAnalysisPrompt,
+    saveAnalysisRevision,
+    saveVisionProvider,
+    setVisionKey,
+  } = useVisionWorkflow({
+    current,
+    imagePromptAnalysis,
+    imagePromptLoading,
+    setImagePromptAnalysis,
+    setImagePromptLoading,
+    setVisualDna,
+    setCurrent,
+    setAssets,
+    setTab,
+    setPrompt,
+    setStatus,
+  });
 
   const selectRecord = useCallback(
     async (id: number, selection?: Set<number>) => {
@@ -342,12 +352,6 @@ export default function App() {
     void refreshSavedFilters();
   }, [refreshSessions, refreshSavedFilters]);
   useEffect(() => {
-    void api
-      .visionSettings()
-      .then(setVisionSettings)
-      .catch(() => setVisionSettings(null));
-  }, []);
-  useEffect(() => {
     if (isTauri) void api.ensureAutoBackup().catch((e) => setStatus("自动备份失败：" + String(e)));
   }, []);
   useEffect(() => {
@@ -443,50 +447,6 @@ export default function App() {
     };
   }, [current?.id]);
 
-  useEffect(() => {
-    if (!current) {
-      setVisualDna(null);
-      setImagePromptAnalysis(null);
-      setRemixDraft(null);
-      setRemixSources([]);
-      setRemixPrompt("");
-      setReferenceSources([]);
-      return;
-    }
-    let cancelled = false;
-    const assetId = current.id,
-      assetName = current.name,
-      assetPrompt = current.prompt;
-    setVisualDna(null);
-    setImagePromptAnalysis(null);
-    setRemixDraft(null);
-    setRemixSources([]);
-    setRemixPrompt("");
-    Promise.all([
-      api.visualDna(assetId).catch(() => null),
-      api.latestImagePromptAnalysis(assetId).catch(() => null),
-      api.latestRemixDraft(assetId).catch(() => null),
-      api.referenceSources(assetId).catch(() => []),
-    ]).then(([dna, analysis, draft, references]) => {
-      if (cancelled) return;
-      const base: RemixSource = {
-        asset_id: assetId,
-        asset_name: assetName,
-        fields: [],
-        source_url: "",
-        visual_dna: dna || emptyVisualDna,
-      };
-      setVisualDna(dna);
-      setImagePromptAnalysis(analysis);
-      setRemixDraft(draft);
-      setReferenceSources(references);
-      setRemixSources(draft?.sources?.length ? draft.sources : [base]);
-      setRemixPrompt(draft?.prompt || assetPrompt);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [current?.id]);
 
   useEffect(() => {
     if (!current || !compareRecord) {
@@ -793,88 +753,6 @@ export default function App() {
   const toggleFavorite = async () => {
     if (current) await toggleAssetFavorite(current);
   };
-  const saveVisualDna = async (value: VisualDnaPatch) => {
-    if (!current) return;
-    try {
-      const saved = await api.updateVisualDna(current.id, value);
-      setVisualDna(saved);
-      const record = await api.get(current.id);
-      setCurrent(record);
-      setAssets((xs) =>
-        xs.map((x) => (x.id === record.id ? { ...x, updated_at: record.updated_at } : x)),
-      );
-      setStatus("Visual DNA 已保存并加入搜索索引");
-    } catch (e) {
-      setStatus("保存 Visual DNA 失败：" + String(e));
-    }
-  };
-
-  const analyzeCurrentImage = async () => {
-    if (!current || imagePromptLoading) return;
-    setImagePromptLoading(true);
-    setStatus("正在分析当前图片…");
-    try {
-      const analysis = await api.analyzeImageToPrompt(current.id);
-      setImagePromptAnalysis(analysis);
-      setTab("dna");
-      setStatus(`Image to Prompt 完成 · ${analysis.model}`);
-    } catch (e) {
-      setStatus("Image to Prompt 失败：" + String(e));
-    } finally {
-      setImagePromptLoading(false);
-    }
-  };
-  const applyAnalysisDna = async (overwrite = false) => {
-    if (!current || !imagePromptAnalysis) return;
-    if (overwrite && !window.confirm("覆盖现有 Visual DNA？已有手工字段会被本次 AI 分析替换。"))
-      return;
-    try {
-      const saved = await api.applyImagePromptDna(current.id, imagePromptAnalysis.id, overwrite);
-      setVisualDna(saved);
-      const record = await api.get(current.id);
-      setCurrent(record);
-      setAssets((xs) =>
-        xs.map((x) => (x.id === record.id ? { ...x, updated_at: record.updated_at } : x)),
-      );
-      setStatus(overwrite ? "AI Visual DNA 已覆盖写入" : "AI Visual DNA 已补充到空字段");
-    } catch (e) {
-      setStatus("写入 Visual DNA 失败：" + String(e));
-    }
-  };
-  const useAnalysisPrompt = () => {
-    if (!imagePromptAnalysis?.prompt) return;
-    setPrompt(imagePromptAnalysis.prompt);
-    setTab("prompt");
-    setStatus("AI Prompt 已载入编辑器，将按现有自动保存规则保存");
-  };
-  const saveAnalysisRevision = async () => {
-    if (!current || !imagePromptAnalysis) return;
-    try {
-      await api.saveImagePromptRevision(current.id, imagePromptAnalysis.id);
-      setStatus("AI Prompt 已保存为独立 Revision");
-    } catch (e) {
-      setStatus("保存 AI Prompt Revision 失败：" + String(e));
-    }
-  };
-  const saveVisionProvider = async (baseUrl: string, visionModel: string) => {
-    try {
-      const saved = await api.saveVisionSettings(baseUrl, visionModel);
-      setVisionSettings(saved);
-      setStatus("图像分析 Provider 配置已保存");
-    } catch (e) {
-      setStatus("保存图像分析配置失败：" + String(e));
-    }
-  };
-  const setVisionKey = async (key: string) => {
-    try {
-      await api.setVisionApiKey(key);
-      setVisionSettings(await api.visionSettings());
-      setStatus(key.trim() ? "API Key 已载入当前会话" : "当前会话 API Key 已清除");
-    } catch (e) {
-      setStatus("设置 API Key 失败：" + String(e));
-    }
-  };
-
   const copyPrompt = () => {
     if (current) void navigator.clipboard.writeText(prompt).then(() => setStatus("提示词已复制"));
   };
@@ -1305,7 +1183,7 @@ export default function App() {
       if (parentMode === "remix") {
         const [record, dna] = await Promise.all([
           api.get(parentChoice),
-          api.visualDna(parentChoice).catch(() => emptyVisualDna),
+          api.visualDna(parentChoice).catch(() => EMPTY_VISUAL_DNA),
         ]);
         setRemixSources((xs) => [
           ...xs,
@@ -1389,7 +1267,7 @@ export default function App() {
     try {
       if (remixDraft) await api.deleteRemixDraft(remixDraft.id);
     } catch {}
-    const dna = visualDna || emptyVisualDna;
+    const dna = visualDna || EMPTY_VISUAL_DNA;
     setRemixDraft(null);
     setRemixSources([
       {
