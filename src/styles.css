@@ -154,3 +154,17 @@
 .asset-context-menu button:disabled{opacity:.45;cursor:not-allowed}
 
 .asset-context-menu hr{height:1px;margin:5px 4px;border:0;background:rgba(46,119,145,.14)}
+
+/* v0.21 preview navigation */
+.preview-controls{display:flex;align-items:center;gap:7px;min-width:0}
+.zoom-controls{display:flex;align-items:center;height:32px;padding:3px;border:1px solid #d0e2e4;border-radius:9px;background:rgba(230,242,243,.82)}
+.zoom-controls button{width:27px;height:24px;border:0;border-radius:6px;background:transparent;color:#4f7e8e;font-size:14px;line-height:1}
+.zoom-controls button:hover:not(:disabled){background:#fff}
+.zoom-controls span{min-width:44px;text-align:center;font-size:10px;color:#66828f;font-variant-numeric:tabular-nums}
+.image-stage.actual{cursor:grab;touch-action:none}
+.image-stage.actual.panning{cursor:grabbing;user-select:none}
+.image-stage.actual .image-zoom-shell{position:relative;z-index:1;flex:0 0 auto}
+.image-stage.actual .image-zoom-shell img{width:100%;height:100%;max-width:none;max-height:none;object-fit:fill;user-select:none}
+.image-stage.fit img{cursor:zoom-in}
+.image-stage.actual img{cursor:inherit}
+@media(max-width:1050px){.zoom-controls{display:none}}
