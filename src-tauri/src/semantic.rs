@@ -1,5 +1,5 @@
 use crate::{
-    db, jobs,
+    db, jobs, search,
     models::{LibraryFilter, SemanticHit, SemanticProgress, SemanticStatus},
     state::AppState,
 };
