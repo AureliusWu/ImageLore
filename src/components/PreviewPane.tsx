@@ -1,3 +1,4 @@
+import { useEffect,useState } from "react";
 import type { AssetRecord } from "../types";
 
 type PreviewMode="fit"|"actual";
@@ -13,9 +14,34 @@ const metadataLabel=(value:string)=>({
 } as Record<string,string>)[value]||value;
 
 export function PreviewPane({asset,src,mode,onMode,onImport,onOpen,onFolder}:{asset:AssetRecord|null;src:string;mode:PreviewMode;onMode:(m:PreviewMode)=>void;onImport:()=>void;onOpen:()=>void;onFolder:()=>void}){
+  const[menu,setMenu]=useState<{x:number;y:number}|null>(null);
+
+  useEffect(()=>{
+    if(!menu)return;
+    const close=()=>setMenu(null);
+    const key=(e:KeyboardEvent)=>{if(e.key==="Escape")close()};
+    window.addEventListener("pointerdown",close);
+    window.addEventListener("keydown",key);
+    window.addEventListener("resize",close);
+    return()=>{
+      window.removeEventListener("pointerdown",close);
+      window.removeEventListener("keydown",key);
+      window.removeEventListener("resize",close);
+    };
+  },[menu]);
+
+  useEffect(()=>setMenu(null),[asset?.id,src]);
+
+  const openCurrent=()=>{onOpen();setMenu(null)};
+  const openCurrentFolder=()=>{onFolder();setMenu(null)};
+
   return <section className="preview-pane panel glass-surface">
     <div className="preview-head"><div className="file-title"><span className={`status-dot ${asset?.missing?"bad":""}`}/><div><strong>{asset?.name||"未选择图片"}</strong><small>{asset?`${asset.format||"图片"}${asset.width&&asset.height?` · ${asset.width}×${asset.height}`:""}`:"请从左侧图库选择一条记录"}</small></div></div><div className="segmented"><button className={mode==="fit"?"active":""} onClick={()=>onMode("fit")}>适应窗口</button><button className={mode==="actual"?"active":""} onClick={()=>onMode("actual")}>100%</button></div></div>
-    <div className={`image-stage ${mode}`}>{src?<img src={src} alt={asset?.name||"预览"}/>:<div className="empty-state"><div className="empty-orb">✦</div><strong>从第一张图片开始建立你的生成记忆</strong><span>导入图片、记录提示词，ImageLore 会把与它有关的上下文保存下来。</span><button className="button primary" onClick={onImport}>＋ 导入图片</button></div>}</div>
-    {asset?<div className="preview-foot"><span className="metadata-pill">{metadataLabel(asset.metadata_type||"manual")}</span><span>{bytes(asset.file_size)}</span><span>{asset.model||"未记录模型"}</span><span className="path" title={asset.path}>{asset.path}</span><button onClick={onOpen}>打开图片</button><button onClick={onFolder}>打开所在文件夹</button></div>:null}
+    <div className={`image-stage ${mode}`}>{src?<img src={src} alt={asset?.name||"预览"} onContextMenu={e=>{e.preventDefault();e.stopPropagation();setMenu({x:Math.min(e.clientX,window.innerWidth-220),y:Math.min(e.clientY,window.innerHeight-112)})}}/>:<div className="empty-state"><div className="empty-orb">✦</div><strong>从第一张图片开始建立你的生成记忆</strong><span>导入图片、记录提示词，ImageLore 会把与它有关的上下文保存下来。</span><button className="button primary" onClick={onImport}>＋ 导入图片</button></div>}</div>
+    {menu&&asset?<div className="asset-context-menu" style={{left:menu.x,top:menu.y}} onPointerDown={e=>e.stopPropagation()}>
+      <button onClick={openCurrent} disabled={!!asset.missing}>↗ 打开图片</button>
+      <button onClick={openCurrentFolder} disabled={!!asset.missing}>⌖ 打开文件所在位置</button>
+    </div>:null}
+    {asset?<div className="preview-foot"><span className="metadata-pill">{metadataLabel(asset.metadata_type||"manual")}</span><span>{bytes(asset.file_size)}</span><span>{asset.model||"未记录模型"}</span><span className="path" title={asset.path}>{asset.path}</span><button onClick={onOpen} disabled={!!asset.missing}>打开图片</button><button onClick={onFolder} disabled={!!asset.missing}>打开所在文件夹</button></div>:null}
   </section>
 }
