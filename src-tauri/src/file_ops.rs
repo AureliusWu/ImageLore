@@ -24,7 +24,10 @@ fn open_path(path: &Path, select: bool) -> Result<(), String> {
         if select {
             command.arg("-R");
         }
-        command.arg(path).spawn().map_err(|error| error.to_string())?;
+        command
+            .arg(path)
+            .spawn()
+            .map_err(|error| error.to_string())?;
     }
 
     #[cfg(all(unix, not(target_os = "macos")))]
@@ -85,7 +88,9 @@ fn copy_file_to(source_path: &Path, destination_path: &Path) -> Result<(), Strin
         return Err("原图片文件不存在，无法另存为".into());
     }
 
-    let source = source_path.canonicalize().map_err(|error| error.to_string())?;
+    let source = source_path
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
     let destination = normalized_copy_target(destination_path)?;
     if source == destination {
         return Err("目标位置与原文件相同".into());

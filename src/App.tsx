@@ -447,7 +447,6 @@ export default function App() {
     };
   }, [current?.id]);
 
-
   useEffect(() => {
     if (!current || !compareRecord) {
       setCompareParentSrc("");

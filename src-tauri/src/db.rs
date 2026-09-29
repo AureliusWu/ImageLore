@@ -1,9 +1,5 @@
-use crate::models::{
-    AssetRecord, AssetSummary, CollectionRecord, FacetCount, LibraryFacets,
-};
-use rusqlite::{
-    params, Connection, OptionalExtension, Row,
-};
+use crate::models::{AssetRecord, AssetSummary, CollectionRecord, FacetCount, LibraryFacets};
+use rusqlite::{params, Connection, OptionalExtension, Row};
 use sha2::{Digest, Sha256};
 use std::{
     fs,

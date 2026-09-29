@@ -141,7 +141,9 @@ pub(crate) fn filtered_summaries(
     let limit = limit.clamp(1, 100_000);
     let sql = format!(
         "{} {} WHERE {} GROUP BY a.id LIMIT ?",
-        db::SELECT_SUMMARY, joins, where_sql
+        db::SELECT_SUMMARY,
+        joins,
+        where_sql
     );
     args.push(SqlValue::Integer(limit));
     let mut st = conn.prepare(&sql).map_err(|e| e.to_string())?;
@@ -182,7 +184,10 @@ pub fn library_page(
     };
     let sql = format!(
         "{} {} WHERE {} ORDER BY {} LIMIT ? OFFSET ?",
-        db::SELECT_SUMMARY, joins, where_sql, order
+        db::SELECT_SUMMARY,
+        joins,
+        where_sql,
+        order
     );
     let mut page_args = args;
     page_args.push(SqlValue::Integer(limit));
