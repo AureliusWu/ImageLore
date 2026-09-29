@@ -2,6 +2,7 @@ mod backup;
 mod commands;
 mod db;
 mod diagnostics;
+mod file_ops;
 mod generation;
 mod generation_index;
 mod importer;
@@ -182,9 +183,9 @@ pub fn run() {
             commands::preview_cache_path,
             commands::refresh_missing,
             commands::relocate_missing,
-            commands::open_external,
-            commands::open_containing_folder,
-            commands::copy_asset_to,
+            file_ops::open_external,
+            file_ops::open_containing_folder,
+            file_ops::copy_asset_to,
             diagnostics::diagnostics_status,
             diagnostics::open_data_folder,
             diagnostics::open_logs_folder,
