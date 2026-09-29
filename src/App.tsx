@@ -3,7 +3,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { open,save } from "@tauri-apps/plugin-dialog";
 import { api,isTauri } from "./api";
 import { APP_VERSION } from "./version";
-import type { AssetRecord,AssetSession,AssetSummary,BackupRecord,DuplicateGroup,GenerationSession,ImportSummary,LibraryFacets,LibraryFilter,LibraryHealth,Lineage,ModelAlias,SavedFilter,SearchMode,SemanticStatus,SourceFolder } from "./types";
+import type { AssetRecord,AssetSession,AssetSummary,BackupRecord,DiagnosticStatus,DuplicateGroup,GenerationSession,ImportSummary,LibraryFacets,LibraryFilter,LibraryHealth,Lineage,ModelAlias,SavedFilter,SearchMode,SemanticStatus,SourceFolder } from "./types";
 import { useDebouncedValue } from "./hooks/useDebouncedValue";
 import { useEditorDraft } from "./hooks/useEditorDraft";
 import { useNativeDrop } from "./hooks/useNativeDrop";
@@ -60,6 +60,7 @@ export default function App(){
   const[savedFilters,setSavedFilters]=useState<SavedFilter[]>([]);
   const[sourceFolders,setSourceFolders]=useState<SourceFolder[]>([]);
   const[health,setHealth]=useState<LibraryHealth|null>(null);
+  const[diagnostics,setDiagnostics]=useState<DiagnosticStatus|null>(null);
   const[managerOpen,setManagerOpen]=useState(false);
   const[backups,setBackups]=useState<BackupRecord[]>([]);
   const[duplicates,setDuplicates]=useState<DuplicateGroup[]>([]);
@@ -346,11 +347,13 @@ export default function App(){
   const repairMissing=async()=>{if(!isTauri){setStatus("此功能仅在桌面版中可用");return}const root=await open({directory:true,multiple:false});if(!root||Array.isArray(root))return;const n=await api.relocateMissing(root);setStatus(`已重新定位 ${n} 条记录`);await refresh()};
   const compare=async(id:number)=>setCompareRecord(await api.get(id).catch(()=>null));
   const refreshManager=useCallback(async()=>{
-    const[b,d,a,s,h,sources,semantic]=await Promise.all([api.backups(),api.duplicateGroups(),api.modelAliases(),api.savedFilters(),api.libraryHealth(),api.sourceFolders(),api.semanticStatus()]);
-    setBackups(b);setDuplicates(d);setModelAliases(a);setSavedFilters(s);setHealth(h);setSourceFolders(sources);setSemanticStatus(semantic);await refreshFacets();
+    const[b,d,a,s,h,sources,semantic,diag]=await Promise.all([api.backups(),api.duplicateGroups(),api.modelAliases(),api.savedFilters(),api.libraryHealth(),api.sourceFolders(),api.semanticStatus(),api.diagnosticsStatus()]);
+    setBackups(b);setDuplicates(d);setModelAliases(a);setSavedFilters(s);setHealth(h);setSourceFolders(sources);setSemanticStatus(semantic);setDiagnostics(diag);await refreshFacets();
   },[refreshFacets]);
   const openManager=async()=>{try{await flushEditor();await refreshManager();setManagerOpen(true)}catch(e){setStatus("打开资料库管理失败："+String(e))}};
   const createBackup=async()=>{try{setStatus("正在备份资料库…");await api.createBackup();await refreshManager();setStatus("资料库备份完成")}catch(e){setStatus("资料库备份失败："+String(e))}};
+  const openDataFolder=async()=>{try{await api.openDataFolder();setStatus("已打开 ImageLore 数据目录")}catch(e){setStatus("打开数据目录失败："+String(e))}};
+  const openLogsFolder=async()=>{try{await api.openLogsFolder();setStatus("已打开 ImageLore 日志目录")}catch(e){setStatus("打开日志目录失败："+String(e))}};
   const restoreBackup=async(name:string)=>{if(!window.confirm("确定恢复到这份备份吗？当前资料库会在重启时先自动保留一份安全副本。"))return;try{await api.stageRestore(name);setStatus("恢复已准备完成，请重启 ImageLore 后生效")}catch(e){setStatus("准备恢复失败："+String(e))}};
   const renameTag=async(oldName:string,newName:string)=>{try{await api.renameTag(oldName,newName);setFilter(f=>f.tag?.toLocaleLowerCase()===oldName.toLocaleLowerCase()?{...f,tag:newName}:f);await refreshManager();await refresh(current?.id)}catch(e){setStatus("标签修改失败："+String(e))}};
   const deleteTag=async(name:string)=>{if(!window.confirm("删除标签“"+name+"”？图片记录本身不会被删除。"))return;try{await api.deleteTag(name);setFilter(f=>f.tag?.toLocaleLowerCase()===name.toLocaleLowerCase()?{...f,tag:null}:f);await refreshManager();await refresh(current?.id)}catch(e){setStatus("删除标签失败："+String(e))}};
@@ -494,7 +497,7 @@ export default function App(){
       <InspectorPane asset={current} tab={tab} onTab={setTab} prompt={prompt} onPrompt={setPrompt} negative={negative} onNegative={setNegative} model={model} onModel={setModel} tagsText={tagsText} onTagsText={setTagsText} lineage={lineage} compareRecord={compareRecord} compareParentSrc={compareParentSrc} compareCurrentSrc={compareCurrentSrc} sessions={sessions} assetSession={assetSession} onCompare={compare} onCopy={copyPrompt} onSaveRevision={saveRevision} onHistory={openHistory} onFavorite={toggleFavorite} onFindSimilar={findSimilar} onRescan={rescan} onSidecar={exportSidecar} onCollection={openCollection} onRemove={()=>setModal({kind:"remove"})} onImportDerivative={importDerivative} onLinkParent={openParentPicker} onSetSession={setSession} onCreateSession={createSession} onEditSessionNote={editSessionNote} onEditRelationNote={editRelationNote} promptRef={promptRef}/>
     </main>
     <footer className="statusbar glass-surface"><span className={`runtime-dot ${isTauri?"native":"preview"}`}/><strong>{isTauri?"桌面版":"浏览器预览"}</strong><span>v{version}</span><span className="status-message">{status}</span>{importActive?<><progress max={Math.max(1,importProgress.total)} value={importProgress.processed}/><button onClick={cancelImportJob}>取消导入</button></>:null}{semanticActive?<><progress max={Math.max(1,semanticProgress.total)} value={semanticProgress.processed}/><button onClick={cancelSemanticIndex}>取消索引</button></>:null}<span>已加载 {assets.length}/{total}</span><button onClick={repairMissing} title="根据文件指纹查找移动后的文件">修复缺失文件</button><span className="shortcut">←→ / J K 切图 · F 收藏 · F6 提示词 · F7 预览 · Ctrl+S 保存</span></footer>
-    <LibraryManager open={managerOpen} backups={backups} tags={facets.tags} collections={facets.collections} duplicates={duplicates} modelAliases={modelAliases} savedFilters={savedFilters} sourceFolders={sourceFolders} sourceSyncing={importActive} health={health} semanticStatus={semanticStatus} semanticIndexing={semanticActive} semanticProgress={semanticProgress} onRebuildSemantic={rebuildSemantic} onCancelSemantic={cancelSemanticIndex} onClearSemantic={clearSemantic} onDeleteSemanticModels={deleteSemanticModels} onClose={()=>setManagerOpen(false)} onBackup={createBackup} onRestore={restoreBackup} onRenameTag={renameTag} onDeleteTag={deleteTag} onRenameCollection={renameCollection} onDeleteCollection={deleteCollection} onUpsertModelAlias={upsertModelAlias} onDeleteModelAlias={deleteModelAlias} onDeleteSavedFilter={deleteSavedView} onAddSourceFolder={addSourceFolder} onRemoveSourceFolder={removeSourceFolder} onToggleSourceAutoSync={toggleSourceAutoSync} onSyncSourceFolders={syncSourceFolders}/>
+    <LibraryManager open={managerOpen} backups={backups} tags={facets.tags} collections={facets.collections} duplicates={duplicates} modelAliases={modelAliases} savedFilters={savedFilters} sourceFolders={sourceFolders} sourceSyncing={importActive} health={health} diagnostics={diagnostics} semanticStatus={semanticStatus} semanticIndexing={semanticActive} semanticProgress={semanticProgress} onRebuildSemantic={rebuildSemantic} onCancelSemantic={cancelSemanticIndex} onClearSemantic={clearSemantic} onDeleteSemanticModels={deleteSemanticModels} onClose={()=>setManagerOpen(false)} onBackup={createBackup} onRestore={restoreBackup} onOpenDataFolder={openDataFolder} onOpenLogsFolder={openLogsFolder} onRenameTag={renameTag} onDeleteTag={deleteTag} onRenameCollection={renameCollection} onDeleteCollection={deleteCollection} onUpsertModelAlias={upsertModelAlias} onDeleteModelAlias={deleteModelAlias} onDeleteSavedFilter={deleteSavedView} onAddSourceFolder={addSourceFolder} onRemoveSourceFolder={removeSourceFolder} onToggleSourceAutoSync={toggleSourceAutoSync} onSyncSourceFolders={syncSourceFolders}/>
     <ParentPicker open={parentOpen} query={parentQuery} results={parentResults} choice={parentChoice} loading={parentLoading} onQuery={setParentQuery} onChoice={setParentChoice} onClose={()=>setParentOpen(false)} onConfirm={confirmParent}/>
     <AppDialogs modal={modal} assets={assets} currentId={current?.id} text={dialogText} setText={setDialogText} choice={dialogChoice} setChoice={setDialogChoice} onClose={()=>setModal(null)} onConfirm={confirmModal}/>
   </div>

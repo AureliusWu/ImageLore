@@ -1,5 +1,5 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import type { AssetRecord, AssetSession, AssetSummary, BackupRecord, CollectionRecord, DuplicateGroup, GenerationSession, ImportSummary, LibraryFacets, LibraryFilter, LibraryHealth, LibraryPage, Lineage, ModelAlias, PromptPatch, Revision, SavedFilter, SemanticHit, SemanticStatus, SourceFolder } from "./types";
+import type { AssetRecord, AssetSession, AssetSummary, BackupRecord, CollectionRecord, DiagnosticStatus, DuplicateGroup, GenerationSession, ImportSummary, LibraryFacets, LibraryFilter, LibraryHealth, LibraryPage, Lineage, ModelAlias, PromptPatch, Revision, SavedFilter, SemanticHit, SemanticStatus, SourceFolder } from "./types";
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -136,7 +136,15 @@ async function mockCall<T>(command:string,args:Record<string,unknown>):Promise<T
       return ranked.slice(0,Number(args.limit||240)) as T;
     }
     case "clear_semantic_index":case "delete_semantic_models":return true as T;
-    case "open_external":case "open_containing_folder":case "copy_asset_to":return true as T;
+    case "diagnostics_status":return {
+      data_dir:"C:/Users/Demo/AppData/Local/app.imagelore.desktop",
+      database_path:"C:/Users/Demo/AppData/Local/app.imagelore.desktop/library.sqlite3",
+      backups_dir:"C:/Users/Demo/AppData/Local/app.imagelore.desktop/backups",
+      logs_dir:"C:/Users/Demo/AppData/Local/app.imagelore.desktop/logs",
+      active_log:"C:/Users/Demo/AppData/Local/app.imagelore.desktop/logs/imagelore.log",
+      active_log_size:4096,recovery_notice:null
+    } as T;
+    case "open_external":case "open_containing_folder":case "copy_asset_to":case "open_data_folder":case "open_logs_folder":return true as T;
     default:throw new Error(`Unknown mock command: ${command}`);
   }
 }
@@ -206,6 +214,9 @@ export const api={
   openExternal:(id:number)=>call<boolean>("open_external",{id}),
   openFolder:(id:number)=>call<boolean>("open_containing_folder",{id}),
   copyAssetTo:(id:number,destination:string)=>call<boolean>("copy_asset_to",{id,destination}),
+  diagnosticsStatus:()=>call<DiagnosticStatus>("diagnostics_status"),
+  openDataFolder:()=>call<boolean>("open_data_folder"),
+  openLogsFolder:()=>call<boolean>("open_logs_folder"),
   semanticStatus:()=>call<SemanticStatus>("semantic_status"),
   startSemanticIndex:()=>call<number>("start_semantic_index"),
   cancelSemanticIndex:(jobId:number)=>call<boolean>("cancel_semantic_index",{jobId}),

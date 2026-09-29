@@ -58,3 +58,8 @@ export interface SemanticProgress {
   job_id:number;processed:number;total:number;indexed:number;skipped:number;failed:number;
   current_name:string;done:boolean;cancelled:boolean;
 }
+
+export interface DiagnosticStatus {
+  data_dir:string;database_path:string;backups_dir:string;logs_dir:string;active_log:string;
+  active_log_size:number;recovery_notice:string|null;
+}

@@ -216,3 +216,13 @@
   .preview-meta .path{display:none}
   .preview-meta{flex:0 0 auto}
 }
+
+/* v0.22 startup recovery & diagnostics */
+.diagnostic-card{display:grid;gap:7px;padding:11px;border:1px solid #d7e8e5;border-radius:11px;background:linear-gradient(145deg,#fbfefd,#f2f9f0)}
+.diagnostic-card>div{display:grid;grid-template-columns:92px minmax(0,1fr);gap:9px;align-items:start}
+.diagnostic-card span{font-size:9px;color:#789198;padding-top:2px}
+.diagnostic-card strong{font:10px/1.5 Consolas,"SFMono-Regular",monospace;color:#476c78;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.diagnostic-card .recovery-notice{grid-template-columns:92px minmax(0,1fr);padding-top:7px;border-top:1px solid #deebe8}
+.diagnostic-card pre{margin:0;max-height:110px;overflow:auto;white-space:pre-wrap;word-break:break-word;font:9px/1.5 Consolas,"SFMono-Regular",monospace;color:#825c45;background:#fff9ed;border:1px solid #eadcc3;border-radius:7px;padding:7px}
+.manager-toolbar-actions>button{border:1px solid #cde0df;background:#fbfefd;border-radius:7px;padding:6px 9px;font-size:10px;color:#477989}
+@media(max-width:700px){.diagnostic-card>div,.diagnostic-card .recovery-notice{grid-template-columns:1fr}.diagnostic-card strong{white-space:normal;word-break:break-all}}
