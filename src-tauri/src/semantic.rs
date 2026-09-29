@@ -1,6 +1,7 @@
 use crate::{
-    db, jobs, search,
+    db, jobs,
     models::{LibraryFilter, SemanticHit, SemanticProgress, SemanticStatus},
+    search,
     state::AppState,
 };
 use fastembed::{
