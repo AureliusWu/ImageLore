@@ -28,18 +28,21 @@ assert tauri['bundle']['windows']['nsis']['startMenuFolder']=='ImageLore'
 assert tauri['bundle']['windows']['allowDowngrades'] is False
 assert tauri['app']['security']['assetProtocol']['scope']==['$LOCALDATA/app.imagelore.desktop/cache/**']
 runtime='\n'.join(p.read_text(encoding='utf-8', errors='ignore') for p in (root/'src-tauri/src').glob('*.rs'))
+compact_runtime=''.join(runtime.split())
 assert 'PromptDock' not in runtime and 'imagelore.db' not in runtime and '.promptdock.json' not in runtime
 assert 'library.sqlite3' in runtime
-assert 'DATA_DIR_NAME:&str="app.imagelore.desktop"' in runtime
-assert 'LEGACY_DATA_DIR_NAME:&str="ImageLore"' in runtime
+assert 'DATA_DIR_NAME:&str="app.imagelore.desktop"' in compact_runtime
+assert 'LEGACY_DATA_DIR_NAME:&str="ImageLore"' in compact_runtime
 assert 'ensure_auto_backup' in runtime and 'start_import_folder' in runtime and 'duplicate_groups' in runtime
-assert 'recover_latest_valid_backup' in runtime and 'MAX_LOG_FILES:usize=5' in runtime and 'diagnostics_status' in runtime
-assert 'const LATEST:i64=11' in (root/'src-tauri/src/migrations.rs').read_text(encoding='utf-8')
+assert 'recover_latest_valid_backup' in runtime and 'MAX_LOG_FILES:usize=5' in compact_runtime and 'diagnostics_status' in runtime
+assert 'constLATEST:i64=11' in ''.join((root/'src-tauri/src/migrations.rs').read_text(encoding='utf-8').split())
 assert 'imagelore.sidecar.v3' in runtime and 'pending_relations' in runtime and 'generation_sessions' in runtime and 'source_folders' in runtime and 'generation_index' in runtime and 'semantic_embeddings' in runtime and 'asset_cjk_search' in runtime and 'visual_dna' in runtime
 assert 'image_prompt_analyses' in runtime and 'analyze_image_to_prompt' in runtime and 'save_image_prompt_revision' in runtime and 'vision_settings' in runtime
 assert 'remix_drafts' in runtime and 'remix_sources' in runtime and 'apply_remix_lineage' in runtime
 assert 'reference_sources' in runtime and 'ensure_reference_inbox' in runtime and 'open_reference_url' in runtime
-assert 'vision_api_key:Mutex::new(String::new())' in (root/'src-tauri/src/jobs.rs').read_text(encoding='utf-8')
+assert 'vision_api_key:Mutex::new(String::new())' in ''.join((root/'src-tauri/src/jobs.rs').read_text(encoding='utf-8').split())
+lib_rs=(root/'src-tauri/src/lib.rs').read_text(encoding='utf-8')
+assert 'mod file_ops;' in lib_rs and 'mod search;' in lib_rs
 front='\n'.join(p.read_text(encoding='utf-8', errors='ignore') for p in (root/'src').rglob('*.tsx'))
 assert 'pd.' not in front
 release_workflow=(root/'.github/workflows/windows-release.yml').read_text(encoding='utf-8')
