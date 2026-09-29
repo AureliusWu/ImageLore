@@ -152,3 +152,5 @@
 }
 .asset-context-menu button:hover{background:var(--accent-soft);color:var(--accent)}
 .asset-context-menu button:disabled{opacity:.45;cursor:not-allowed}
+
+.asset-context-menu hr{height:1px;margin:5px 4px;border:0;background:rgba(46,119,145,.14)}
