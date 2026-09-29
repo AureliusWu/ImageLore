@@ -1,6 +1,7 @@
 mod backup;
 mod commands;
 mod db;
+mod diagnostics;
 mod importer;
 mod generation;
 mod generation_index;
@@ -26,10 +27,27 @@ fn prepare_state()->Result<AppState,String>{
     let models_dir=data_dir.join("models");
     fs::create_dir_all(&backups_dir).map_err(|e|e.to_string())?;
     fs::create_dir_all(&models_dir).map_err(|e|e.to_string())?;
-    backup::apply_pending_restore(&database_path,&data_dir,&backups_dir)?;
-    let connection=db::init_db(&database_path)?;
+    diagnostics::log(&data_dir,"INFO","startup: preparing local library");
+    backup::apply_pending_restore(&database_path,&data_dir,&backups_dir)
+        .map_err(|e|{diagnostics::log(&data_dir,"ERROR",&format!("pending restore failed: {}",e));e})?;
+    let had_database=database_path.exists();
+    let connection=match db::init_db(&database_path){
+        Ok(conn)=>conn,
+        Err(initial_error)=>{
+            diagnostics::log(&data_dir,"ERROR",&format!("database initialization failed: {}",initial_error));
+            if !had_database{return Err(initial_error)}
+            match backup::recover_latest_valid_backup(&database_path,&data_dir,&backups_dir,&initial_error)?{
+                Some(record)=>{
+                    diagnostics::log(&data_dir,"WARN",&format!("startup recovery applied backup {}",record.name));
+                    db::init_db(&database_path).map_err(|retry|format!("资料库自动恢复后仍无法打开：{}；原始错误：{}",retry,initial_error))?
+                }
+                None=>return Err(format!("资料库无法打开，且没有找到可验证的备份。原始错误：{}",initial_error)),
+            }
+        }
+    };
     let cache_cleanup=cache_dir.clone();
     std::thread::spawn(move||preview::prune_cache(&cache_cleanup,1024*1024*1024));
+    diagnostics::log(&data_dir,"INFO","startup: library ready");
     Ok(AppState{
         db:Mutex::new(connection),
         data_dir,
@@ -45,6 +63,7 @@ fn prepare_state()->Result<AppState,String>{
 fn write_startup_error(message:&str){
     let root=db::error_log_root();
     let _=fs::create_dir_all(&root);
+    diagnostics::log(&root,"ERROR",message);
     let _=fs::write(root.join("startup-error.log"),message);
 }
 
@@ -114,6 +133,9 @@ pub fn run(){
             commands::open_external,
             commands::open_containing_folder,
             commands::copy_asset_to,
+            diagnostics::diagnostics_status,
+            diagnostics::open_data_folder,
+            diagnostics::open_logs_folder,
             generation::generation_sessions,
             generation::create_generation_session,
             generation::asset_session,
