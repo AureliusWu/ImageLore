@@ -363,3 +363,17 @@ pub struct RemixDraft {
     pub updated_at:i64,
     pub sources:Vec<RemixSource>,
 }
+
+#[derive(Debug,Clone,Serialize,Deserialize)]
+pub struct ReferenceSource{
+    pub id:i64,
+    pub asset_id:i64,
+    pub source_url:String,
+    pub page_url:String,
+    pub page_title:String,
+    pub source_type:String,
+    pub metadata_json:String,
+    pub captured_at:i64,
+    pub created_at:i64,
+    pub updated_at:i64,
+}
