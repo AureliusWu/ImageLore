@@ -1,5 +1,5 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import type { AssetRecord, AssetSession, AssetSummary, BackupRecord, CollectionRecord, DiagnosticStatus, DuplicateGroup, GenerationSession, ImportSummary, LibraryFacets, LibraryFilter, LibraryHealth, LibraryPage, Lineage, ModelAlias, PromptPatch, Revision, SavedFilter, SemanticHit, SemanticStatus, SourceFolder, VisualDna, VisualDnaPatch } from "./types";
+import type { AssetRecord, AssetSession, AssetSummary, BackupRecord, CollectionRecord, DiagnosticStatus, DuplicateGroup, GenerationSession, ImportSummary, LibraryFacets, LibraryFilter, LibraryHealth, LibraryPage, Lineage, ModelAlias, PromptPatch, Revision, SavedFilter, SemanticHit, SemanticStatus, SourceFolder, VisionSettings, ImagePromptAnalysis, VisualDna, VisualDnaPatch } from "./types";
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -119,6 +119,18 @@ async function mockCall<T>(command:string,args:Record<string,unknown>):Promise<T
     case "start_sync_sources":return 1 as T;
     case "get_visual_dna":return {subject:"",character:"",outfit:"",pose:"",expression:"",composition:"",camera:"",lighting:"",environment:"",palette:"",material:"",style:"",source:"manual",updated_at:0} as T;
     case "update_visual_dna":return {...(args.value as VisualDnaPatch),updated_at:Math.floor(Date.now()/1000)} as T;
+    case "vision_settings":return {base_url:"https://api.openai.com/v1",model:"",api_key_configured:false} as T;
+    case "save_vision_settings":return {base_url:String(args.baseUrl||"https://api.openai.com/v1"),model:String(args.model||""),api_key_configured:false} as T;
+    case "set_vision_api_key":return Boolean(args.apiKey) as T;
+    case "latest_image_prompt_analysis":return null as T;
+    case "analyze_image_to_prompt":return {
+      id:1,asset_id:Number(args.id),provider:"openai-compatible",model:"vision-model",created_at:Math.floor(Date.now()/1000),
+      summary:"主体、构图、光线与环境已经拆解为可编辑的 Visual DNA。",
+      prompt:"一张高质量写实摄影作品，主体清晰，构图自然，光线具有层次，保留真实材质与环境细节。",
+      visual_dna:{subject:"成年人物",character:"",outfit:"",pose:"自然姿态",expression:"平静",composition:"主体居中，环境留有纵深",camera:"自然视角，中等景深",lighting:"柔和方向光",environment:"室内环境",palette:"自然低饱和",material:"真实皮肤与织物质感",style:"写实摄影",source:"ai"}
+    } as T;
+    case "apply_image_prompt_dna":return {subject:"成年人物",character:"",outfit:"",pose:"自然姿态",expression:"平静",composition:"主体居中，环境留有纵深",camera:"自然视角，中等景深",lighting:"柔和方向光",environment:"室内环境",palette:"自然低饱和",material:"真实皮肤与织物质感",style:"写实摄影",source:"ai",updated_at:Math.floor(Date.now()/1000)} as T;
+    case "save_image_prompt_revision":return true as T;
     case "semantic_status":return {model_id:"clip-vit-b32-qdrant-v1",enabled:true,model_ready:true,vision_ready:true,text_ready:true,indexed:mockAssets.length,total:mockAssets.length,stale:0,model_bytes:620000000,index_bytes:mockAssets.length*2048} as T;
     case "start_semantic_index":return 2 as T;
     case "cancel_semantic_index":return true as T;
@@ -218,6 +230,13 @@ export const api={
   copyAssetTo:(id:number,destination:string)=>call<boolean>("copy_asset_to",{id,destination}),
   visualDna:(id:number)=>call<VisualDna>("get_visual_dna",{id}),
   updateVisualDna:(id:number,value:VisualDnaPatch)=>call<VisualDna>("update_visual_dna",{id,value}),
+  visionSettings:()=>call<VisionSettings>("vision_settings"),
+  saveVisionSettings:(baseUrl:string,model:string)=>call<VisionSettings>("save_vision_settings",{baseUrl,model}),
+  setVisionApiKey:(apiKey:string)=>call<boolean>("set_vision_api_key",{apiKey}),
+  latestImagePromptAnalysis:(id:number)=>call<ImagePromptAnalysis|null>("latest_image_prompt_analysis",{id}),
+  analyzeImageToPrompt:(id:number)=>call<ImagePromptAnalysis>("analyze_image_to_prompt",{id}),
+  applyImagePromptDna:(id:number,analysisId:number,overwrite=false)=>call<VisualDna>("apply_image_prompt_dna",{id,analysisId,overwrite}),
+  saveImagePromptRevision:(id:number,analysisId:number)=>call<boolean>("save_image_prompt_revision",{id,analysisId}),
   diagnosticsStatus:()=>call<DiagnosticStatus>("diagnostics_status"),
   openDataFolder:()=>call<boolean>("open_data_folder"),
   openLogsFolder:()=>call<boolean>("open_logs_folder"),

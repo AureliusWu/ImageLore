@@ -70,3 +70,11 @@ export interface VisualDna {
   source:string;updated_at:number;
 }
 export type VisualDnaPatch=Omit<VisualDna,"updated_at">;
+
+export interface VisionSettings {
+  base_url:string;model:string;api_key_configured:boolean;
+}
+export interface ImagePromptAnalysis {
+  id:number;asset_id:number;provider:string;model:string;summary:string;prompt:string;
+  visual_dna:VisualDnaPatch;created_at:number;
+}
