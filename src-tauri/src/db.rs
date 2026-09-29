@@ -193,14 +193,15 @@ pub fn reindex_asset(conn: &Connection, asset_id: i64) -> Result<(), String> {
     let tags=asset.tags.join(" ");
     conn.execute("DELETE FROM asset_search WHERE asset_id=?1", params![asset_id]).map_err(|e| e.to_string())?;
     let visual_text=crate::visual_dna::search_text(conn,asset_id)?;
+    let reference_text=crate::references::search_text(conn,asset_id)?;
     conn.execute(
-        "INSERT INTO asset_search(asset_id,name,prompt,negative_prompt,model,tags,visual_dna) VALUES(?1,?2,?3,?4,?5,?6,?7)",
-        params![asset_id, asset.name, asset.prompt, asset.negative_prompt, asset.model, tags, visual_text],
+        "INSERT INTO asset_search(asset_id,name,prompt,negative_prompt,model,tags,visual_dna,reference) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+        params![asset_id, asset.name, asset.prompt, asset.negative_prompt, asset.model, tags, visual_text, reference_text],
     ).map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM asset_cjk_search WHERE rowid=?1",params![asset_id]).map_err(|e|e.to_string())?;
     let trigram_text=format!(
-        "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
-        asset.name,asset.prompt,asset.negative_prompt,asset.model,asset.tags.join(" "),visual_text
+        "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
+        asset.name,asset.prompt,asset.negative_prompt,asset.model,asset.tags.join(" "),visual_text,reference_text
     );
     conn.execute(
         "INSERT INTO asset_cjk_search(rowid,asset_id,text) VALUES(?1,?1,?2)",
@@ -240,9 +241,9 @@ fn filter_parts(filter: &LibraryFilter) -> (String, String, Vec<SqlValue>) {
                 args.push(SqlValue::Text(trigram));
             }
             for term in query.split_whitespace().filter(|x|!x.is_empty()){
-                where_parts.push("(a.name LIKE ? OR COALESCE(ps.prompt,'') LIKE ? OR COALESCE(ps.negative_prompt,'') LIKE ? OR COALESCE(ps.model,'') LIKE ? OR EXISTS(SELECT 1 FROM asset_tags sq_at JOIN tags sq_t ON sq_t.id=sq_at.tag_id WHERE sq_at.asset_id=a.id AND sq_t.name LIKE ?) OR COALESCE(vd.search_text,'') LIKE ?)".into());
+                where_parts.push("(a.name LIKE ? OR COALESCE(ps.prompt,'') LIKE ? OR COALESCE(ps.negative_prompt,'') LIKE ? OR COALESCE(ps.model,'') LIKE ? OR EXISTS(SELECT 1 FROM asset_tags sq_at JOIN tags sq_t ON sq_t.id=sq_at.tag_id WHERE sq_at.asset_id=a.id AND sq_t.name LIKE ?) OR COALESCE(vd.search_text,'') LIKE ? OR EXISTS(SELECT 1 FROM reference_sources rs WHERE rs.asset_id=a.id AND (rs.page_title LIKE ? OR rs.page_url LIKE ? OR rs.source_url LIKE ?)))".into());
                 let needle=SqlValue::Text(format!("%{}%",term));
-                for _ in 0..6{args.push(needle.clone())}
+                for _ in 0..9{args.push(needle.clone())}
             }
         }else{
             joins.push_str(" JOIN asset_search ON asset_search.asset_id=a.id ");
