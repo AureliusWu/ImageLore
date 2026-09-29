@@ -35,6 +35,7 @@ assert 'recover_latest_valid_backup' in runtime and 'MAX_LOG_FILES:usize=5' in r
 assert 'const LATEST:i64=9' in (root/'src-tauri/src/migrations.rs').read_text(encoding='utf-8')
 assert 'imagelore.sidecar.v3' in runtime and 'pending_relations' in runtime and 'generation_sessions' in runtime and 'source_folders' in runtime and 'generation_index' in runtime and 'semantic_embeddings' in runtime and 'asset_cjk_search' in runtime and 'visual_dna' in runtime
 assert 'image_prompt_analyses' in runtime and 'analyze_image_to_prompt' in runtime and 'save_image_prompt_revision' in runtime and 'vision_settings' in runtime
+assert 'vision_api_key:Mutex::new(String::new())' in (root/'src-tauri/src/jobs.rs').read_text(encoding='utf-8')
 front='\n'.join(p.read_text(encoding='utf-8', errors='ignore') for p in (root/'src').rglob('*.tsx'))
 assert 'pd.' not in front
 print(f'ImageLore v{version} project integrity: PASS')

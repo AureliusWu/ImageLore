@@ -31,6 +31,7 @@ mod tests{
             db:Mutex::new(Connection::open_in_memory().unwrap()),
             data_dir:PathBuf::new(),cache_dir:PathBuf::new(),database_path:PathBuf::new(),backups_dir:PathBuf::new(),
             models_dir:PathBuf::new(),jobs:Mutex::new(HashMap::new()),next_job_id:AtomicU64::new(1),
+            vision_api_key:Mutex::new(String::new()),
         }
     }
 
