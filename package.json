@@ -15,8 +15,9 @@
     "tauri": "tauri",
     "tauri:dev": "node scripts/sync_version.mjs && tauri dev",
     "tauri:build": "node scripts/sync_version.mjs && tauri build --bundles nsis -- --locked",
-    "check": "node scripts/check_version.mjs && python scripts/check_project.py && python scripts/test_schema.py && python scripts/test_scale.py && python scripts/test_contract.py && npm run test:preview && tsc --noEmit",
-    "test:preview": "node --experimental-strip-types --test scripts/test_preview_workflow.mjs"
+    "check": "node scripts/check_version.mjs && python scripts/check_project.py && python scripts/test_schema.py && python scripts/test_scale.py && python scripts/test_contract.py && npm run test:preview && npm run test:remix && tsc --noEmit",
+    "test:preview": "node --experimental-strip-types --test scripts/test_preview_workflow.mjs",
+    "test:remix": "node --experimental-strip-types --test scripts/test_remix_workflow.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "2.12.0",
