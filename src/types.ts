@@ -84,3 +84,8 @@ export interface RemixSource extends RemixSourceInput { asset_name:string;visual
 export interface RemixDraft {
   id:number;base_asset_id:number;prompt:string;created_at:number;updated_at:number;sources:RemixSource[];
 }
+
+export interface ReferenceSource {
+  id:number;asset_id:number;source_url:string;page_url:string;page_title:string;source_type:string;
+  metadata_json:string;captured_at:number;created_at:number;updated_at:number;
+}

@@ -1,5 +1,5 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import type { AssetRecord, AssetSession, AssetSummary, BackupRecord, CollectionRecord, DiagnosticStatus, DuplicateGroup, GenerationSession, ImportSummary, LibraryFacets, LibraryFilter, LibraryHealth, LibraryPage, Lineage, ModelAlias, PromptPatch, Revision, SavedFilter, SemanticHit, SemanticStatus, SourceFolder, VisionSettings, ImagePromptAnalysis, VisualDna, VisualDnaPatch, RemixDraft, RemixSourceInput } from "./types";
+import type { AssetRecord, AssetSession, AssetSummary, BackupRecord, CollectionRecord, DiagnosticStatus, DuplicateGroup, GenerationSession, ImportSummary, LibraryFacets, LibraryFilter, LibraryHealth, LibraryPage, Lineage, ModelAlias, PromptPatch, Revision, SavedFilter, SemanticHit, SemanticStatus, SourceFolder, VisionSettings, ImagePromptAnalysis, VisualDna, VisualDnaPatch, RemixDraft, RemixSourceInput, ReferenceSource } from "./types";
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -117,6 +117,14 @@ async function mockCall<T>(command:string,args:Record<string,unknown>):Promise<T
     case "remove_source_folder":{mockSources=mockSources.filter(x=>x.id!==Number(args.id));return true as T;}
     case "set_source_auto_sync":{const id=Number(args.id),enabled=Boolean(args.enabled);mockSources=mockSources.map(x=>x.id===id?{...x,auto_sync:enabled}:x);return mockSources.find(x=>x.id===id) as T;}
     case "start_sync_sources":return 1 as T;
+    case "ensure_reference_inbox":{
+      const path="C:/Users/Demo/Downloads/ImageLore Inbox";
+      let item=mockSources.find(x=>x.name==="ImageLore Inbox");
+      if(!item){item={id:mockSources.length+1,path,name:"ImageLore Inbox",auto_sync:true,last_scan_at:0,created_at:0,updated_at:0};mockSources=[...mockSources,item]}
+      return item as T;
+    }
+    case "reference_sources":return [] as T;
+    case "open_reference_url":return true as T;
     case "get_visual_dna":return {subject:"",character:"",outfit:"",pose:"",expression:"",composition:"",camera:"",lighting:"",environment:"",palette:"",material:"",style:"",source:"manual",updated_at:0} as T;
     case "update_visual_dna":return {...(args.value as VisualDnaPatch),updated_at:Math.floor(Date.now()/1000)} as T;
     case "vision_settings":return {base_url:"https://api.openai.com/v1",model:"",api_key_configured:false} as T;
@@ -215,6 +223,9 @@ export const api={
   removeSourceFolder:(id:number)=>call<boolean>("remove_source_folder",{id}),
   setSourceAutoSync:(id:number,enabled:boolean)=>call<SourceFolder>("set_source_auto_sync",{id,enabled}),
   startSyncSources:(ids:number[])=>call<number>("start_sync_sources",{ids}),
+  ensureReferenceInbox:()=>call<SourceFolder>("ensure_reference_inbox"),
+  referenceSources:(assetId:number)=>call<ReferenceSource[]>("reference_sources",{assetId}),
+  openReferenceUrl:(url:string)=>call<boolean>("open_reference_url",{url}),
   collections:()=>call<CollectionRecord[]>("collections"),
   duplicateGroups:()=>call<DuplicateGroup[]>("duplicate_groups"),
   createBackup:()=>call<BackupRecord>("create_backup"),
