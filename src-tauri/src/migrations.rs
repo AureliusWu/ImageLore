@@ -107,8 +107,7 @@ fn migrate_v3(conn: &Connection) -> Result<(), String> {
         let mapped = st
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
             .map_err(|e| e.to_string())?;
-        let collected = mapped.filter_map(Result::ok).collect();
-        collected
+        mapped.filter_map(Result::ok).collect()
     };
     for (id, path, fingerprint, created_at) in rows {
         let portable_id = legacy_portable_id(id, &path, &fingerprint, created_at);
@@ -394,8 +393,7 @@ fn migrate_v11(conn: &Connection) -> Result<(), String> {
                 .prepare("SELECT id FROM assets ORDER BY id")
                 .map_err(|e| e.to_string())?;
             let rows = st.query_map([], |r| r.get(0)).map_err(|e| e.to_string())?;
-            let collected = rows.filter_map(Result::ok).collect();
-            collected
+            rows.filter_map(Result::ok).collect()
         };
         for id in ids {
             crate::db::reindex_asset(conn, id)?;

@@ -64,8 +64,7 @@ pub fn rebuild_all(conn: &Connection) -> Result<usize, String> {
         let mapped = st
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
             .map_err(|e| e.to_string())?;
-        let collected = mapped.filter_map(Result::ok).collect();
-        collected
+        mapped.filter_map(Result::ok).collect()
     };
     for (id, json) in &rows {
         upsert(conn, *id, json)?

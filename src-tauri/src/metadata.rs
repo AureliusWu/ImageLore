@@ -508,12 +508,11 @@ impl MetadataAdapter for GenericJsonAdapter {
 }
 
 pub fn extract_generation(path: &Path) -> GenerationExtract {
-    if path
+    if !path
         .extension()
         .and_then(|x| x.to_str())
         .unwrap_or("")
-        .to_ascii_lowercase()
-        != "png"
+        .eq_ignore_ascii_case("png")
     {
         return GenerationExtract {
             metadata_type: "none".into(),

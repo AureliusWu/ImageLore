@@ -41,8 +41,7 @@ pub(crate) fn resolve_pending_relations(conn: &Connection) -> Result<usize, Stri
                 ))
             })
             .map_err(|e| e.to_string())?;
-        let collected = mapped.filter_map(Result::ok).collect();
-        collected
+        mapped.filter_map(Result::ok).collect()
     };
     let mut resolved = 0;
     for (rowid, child_portable, parent_portable, parent_fingerprint, relation_type, note) in rows {
