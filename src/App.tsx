@@ -3,7 +3,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { open,save } from "@tauri-apps/plugin-dialog";
 import { api,isTauri } from "./api";
 import { APP_VERSION } from "./version";
-import type { AssetRecord,AssetSession,AssetSummary,BackupRecord,DiagnosticStatus,DuplicateGroup,GenerationSession,ImportSummary,LibraryFacets,LibraryFilter,LibraryHealth,Lineage,ModelAlias,SavedFilter,SearchMode,SemanticStatus,SourceFolder } from "./types";
+import type { AssetRecord,AssetSession,AssetSummary,BackupRecord,DiagnosticStatus,DuplicateGroup,GenerationSession,ImportSummary,LibraryFacets,LibraryFilter,LibraryHealth,Lineage,ModelAlias,SavedFilter,SearchMode,SemanticStatus,SourceFolder,VisualDna,VisualDnaPatch } from "./types";
 import { useDebouncedValue } from "./hooks/useDebouncedValue";
 import { useEditorDraft } from "./hooks/useEditorDraft";
 import { useNativeDrop } from "./hooks/useNativeDrop";
@@ -56,6 +56,7 @@ export default function App(){
   const[compareCurrentSrc,setCompareCurrentSrc]=useState("");
   const[sessions,setSessions]=useState<GenerationSession[]>([]);
   const[assetSession,setAssetSession]=useState<AssetSession|null>(null);
+  const[visualDna,setVisualDna]=useState<VisualDna|null>(null);
   const[modelAliases,setModelAliases]=useState<ModelAlias[]>([]);
   const[savedFilters,setSavedFilters]=useState<SavedFilter[]>([]);
   const[sourceFolders,setSourceFolders]=useState<SourceFolder[]>([]);
@@ -205,6 +206,17 @@ export default function App(){
   },[current?.id]);
 
   useEffect(()=>{
+    if(!current){setVisualDna(null);return}
+    let cancelled=false;
+    const assetId=current.id;
+    setVisualDna(null);
+    api.visualDna(assetId)
+      .then(value=>{if(!cancelled)setVisualDna(value)})
+      .catch(()=>{if(!cancelled)setVisualDna(null)});
+    return()=>{cancelled=true};
+  },[current?.id]);
+
+  useEffect(()=>{
     if(!current||!compareRecord){setCompareParentSrc("");setCompareCurrentSrc("");return}
     let cancelled=false;
     setCompareParentSrc("");setCompareCurrentSrc("");
@@ -337,6 +349,18 @@ export default function App(){
     }catch(e){setStatus("更新收藏失败："+String(e))}
   };
   const toggleFavorite=async()=>{if(current)await toggleAssetFavorite(current)};
+  const saveVisualDna=async(value:VisualDnaPatch)=>{
+    if(!current)return;
+    try{
+      const saved=await api.updateVisualDna(current.id,value);
+      setVisualDna(saved);
+      const record=await api.get(current.id);
+      setCurrent(record);
+      setAssets(xs=>xs.map(x=>x.id===record.id?{...x,updated_at:record.updated_at}:x));
+      setStatus("Visual DNA 已保存并加入搜索索引");
+    }catch(e){setStatus("保存 Visual DNA 失败："+String(e))}
+  };
+
   const copyPrompt=()=>{if(current)void navigator.clipboard.writeText(prompt).then(()=>setStatus("提示词已复制"))};
   const saveRevision=async()=>{if(!current)return;await saveEditorRevision("")};
   const openHistory=async()=>{if(current){setDialogChoice("");setModal({kind:"history",revisions:await api.revisions(current.id)})}};
@@ -494,7 +518,7 @@ export default function App(){
       <div className="splitter" onPointerDown={drag("left")}/>
       <PreviewPane asset={current} src={preview} mode={previewMode} onMode={setPreviewMode} onImport={chooseImages} onOpen={openAsset} onFolder={openAssetFolder} onCopyImage={copyAssetImage} onCopyPath={copyAssetPath} onSaveAs={saveAssetAs} onFavorite={toggleAssetFavorite} onFindSimilar={findSimilarAsset}/>
       <div className="splitter" onPointerDown={drag("right")}/>
-      <InspectorPane asset={current} tab={tab} onTab={setTab} prompt={prompt} onPrompt={setPrompt} negative={negative} onNegative={setNegative} model={model} onModel={setModel} tagsText={tagsText} onTagsText={setTagsText} lineage={lineage} compareRecord={compareRecord} compareParentSrc={compareParentSrc} compareCurrentSrc={compareCurrentSrc} sessions={sessions} assetSession={assetSession} onCompare={compare} onCopy={copyPrompt} onSaveRevision={saveRevision} onHistory={openHistory} onFavorite={toggleFavorite} onFindSimilar={findSimilar} onRescan={rescan} onSidecar={exportSidecar} onCollection={openCollection} onRemove={()=>setModal({kind:"remove"})} onImportDerivative={importDerivative} onLinkParent={openParentPicker} onSetSession={setSession} onCreateSession={createSession} onEditSessionNote={editSessionNote} onEditRelationNote={editRelationNote} promptRef={promptRef}/>
+      <InspectorPane asset={current} tab={tab} onTab={setTab} visualDna={visualDna} onSaveVisualDna={saveVisualDna} prompt={prompt} onPrompt={setPrompt} negative={negative} onNegative={setNegative} model={model} onModel={setModel} tagsText={tagsText} onTagsText={setTagsText} lineage={lineage} compareRecord={compareRecord} compareParentSrc={compareParentSrc} compareCurrentSrc={compareCurrentSrc} sessions={sessions} assetSession={assetSession} onCompare={compare} onCopy={copyPrompt} onSaveRevision={saveRevision} onHistory={openHistory} onFavorite={toggleFavorite} onFindSimilar={findSimilar} onRescan={rescan} onSidecar={exportSidecar} onCollection={openCollection} onRemove={()=>setModal({kind:"remove"})} onImportDerivative={importDerivative} onLinkParent={openParentPicker} onSetSession={setSession} onCreateSession={createSession} onEditSessionNote={editSessionNote} onEditRelationNote={editRelationNote} promptRef={promptRef}/>
     </main>
     <footer className="statusbar glass-surface"><span className={`runtime-dot ${isTauri?"native":"preview"}`}/><strong>{isTauri?"桌面版":"浏览器预览"}</strong><span>v{version}</span><span className="status-message">{status}</span>{importActive?<><progress max={Math.max(1,importProgress.total)} value={importProgress.processed}/><button onClick={cancelImportJob}>取消导入</button></>:null}{semanticActive?<><progress max={Math.max(1,semanticProgress.total)} value={semanticProgress.processed}/><button onClick={cancelSemanticIndex}>取消索引</button></>:null}<span>已加载 {assets.length}/{total}</span><button onClick={repairMissing} title="根据文件指纹查找移动后的文件">修复缺失文件</button><span className="shortcut">←→ / J K 切图 · F 收藏 · F6 提示词 · F7 预览 · Ctrl+S 保存</span></footer>
     <LibraryManager open={managerOpen} backups={backups} tags={facets.tags} collections={facets.collections} duplicates={duplicates} modelAliases={modelAliases} savedFilters={savedFilters} sourceFolders={sourceFolders} sourceSyncing={importActive} health={health} diagnostics={diagnostics} semanticStatus={semanticStatus} semanticIndexing={semanticActive} semanticProgress={semanticProgress} onRebuildSemantic={rebuildSemantic} onCancelSemantic={cancelSemanticIndex} onClearSemantic={clearSemantic} onDeleteSemanticModels={deleteSemanticModels} onClose={()=>setManagerOpen(false)} onBackup={createBackup} onRestore={restoreBackup} onOpenDataFolder={openDataFolder} onOpenLogsFolder={openLogsFolder} onRenameTag={renameTag} onDeleteTag={deleteTag} onRenameCollection={renameCollection} onDeleteCollection={deleteCollection} onUpsertModelAlias={upsertModelAlias} onDeleteModelAlias={deleteModelAlias} onDeleteSavedFilter={deleteSavedView} onAddSourceFolder={addSourceFolder} onRemoveSourceFolder={removeSourceFolder} onToggleSourceAutoSync={toggleSourceAutoSync} onSyncSourceFolders={syncSourceFolders}/>
