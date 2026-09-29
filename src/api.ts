@@ -1,5 +1,5 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import type { AssetRecord, AssetSession, AssetSummary, BackupRecord, CollectionRecord, DiagnosticStatus, DuplicateGroup, GenerationSession, ImportSummary, LibraryFacets, LibraryFilter, LibraryHealth, LibraryPage, Lineage, ModelAlias, PromptPatch, Revision, SavedFilter, SemanticHit, SemanticStatus, SourceFolder } from "./types";
+import type { AssetRecord, AssetSession, AssetSummary, BackupRecord, CollectionRecord, DiagnosticStatus, DuplicateGroup, GenerationSession, ImportSummary, LibraryFacets, LibraryFilter, LibraryHealth, LibraryPage, Lineage, ModelAlias, PromptPatch, Revision, SavedFilter, SemanticHit, SemanticStatus, SourceFolder, VisualDna, VisualDnaPatch } from "./types";
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -117,6 +117,8 @@ async function mockCall<T>(command:string,args:Record<string,unknown>):Promise<T
     case "remove_source_folder":{mockSources=mockSources.filter(x=>x.id!==Number(args.id));return true as T;}
     case "set_source_auto_sync":{const id=Number(args.id),enabled=Boolean(args.enabled);mockSources=mockSources.map(x=>x.id===id?{...x,auto_sync:enabled}:x);return mockSources.find(x=>x.id===id) as T;}
     case "start_sync_sources":return 1 as T;
+    case "get_visual_dna":return {subject:"",character:"",outfit:"",pose:"",expression:"",composition:"",camera:"",lighting:"",environment:"",palette:"",material:"",style:"",source:"manual",updated_at:0} as T;
+    case "update_visual_dna":return {...(args.value as VisualDnaPatch),updated_at:Math.floor(Date.now()/1000)} as T;
     case "semantic_status":return {model_id:"clip-vit-b32-qdrant-v1",enabled:true,model_ready:true,vision_ready:true,text_ready:true,indexed:mockAssets.length,total:mockAssets.length,stale:0,model_bytes:620000000,index_bytes:mockAssets.length*2048} as T;
     case "start_semantic_index":return 2 as T;
     case "cancel_semantic_index":return true as T;
@@ -214,6 +216,8 @@ export const api={
   openExternal:(id:number)=>call<boolean>("open_external",{id}),
   openFolder:(id:number)=>call<boolean>("open_containing_folder",{id}),
   copyAssetTo:(id:number,destination:string)=>call<boolean>("copy_asset_to",{id,destination}),
+  visualDna:(id:number)=>call<VisualDna>("get_visual_dna",{id}),
+  updateVisualDna:(id:number,value:VisualDnaPatch)=>call<VisualDna>("update_visual_dna",{id,value}),
   diagnosticsStatus:()=>call<DiagnosticStatus>("diagnostics_status"),
   openDataFolder:()=>call<boolean>("open_data_folder"),
   openLogsFolder:()=>call<boolean>("open_logs_folder"),
