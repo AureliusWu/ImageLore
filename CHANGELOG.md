@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.21.0 — Preview Workflow
+
+- Expanded image context actions with open, reveal in folder, copy image, copy path, Save As, favorite and visual-similarity search.
+- Added a native copy-to-destination command so Save As preserves the original library asset while creating an explicit user-selected copy.
+- Added preview wheel zoom from 25% to 400%, drag-to-pan, double-click Fit/100%, zoom controls and current zoom feedback.
+- Unified thumbnail and main-preview context menus behind a shared `AssetContextMenu`, keeping actions and missing-file behavior consistent.
+- Added fast browsing shortcuts: Left/Right and J/K navigate the visible result set, while F toggles favorite without firing inside text-entry controls or dialogs.
+- Made the Inspector responsive to its own pane width with container queries, improved narrow-layout wrapping and full-name hover disclosure.
+- Reworked the preview footer into a compact quick-action bar for favorite, path/image copy, similarity search, file reveal and external open.
+
 ## 0.20.0 — Windows Upgrade Reliability
 
 - Kept the Windows NSIS install identity stable (`ImageLore`, current-user mode, same Start Menu folder) so a newer installer replaces the existing installation instead of creating a side-by-side copy.
