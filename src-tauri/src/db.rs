@@ -1,4 +1,6 @@
 use crate::models::{AssetRecord, AssetSummary, CollectionRecord, FacetCount, LibraryFacets};
+#[cfg(test)]
+use crate::models::LibraryFilter;
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use sha2::{Digest, Sha256};
 use std::{
