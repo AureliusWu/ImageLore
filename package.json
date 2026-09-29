@@ -1,7 +1,7 @@
 {
   "name": "imagelore",
   "private": true,
-  "version": "0.21.0",
+  "version": "0.21.1",
   "type": "module",
   "scripts": {
     "version:sync": "node scripts/sync_version.mjs",
@@ -15,7 +15,8 @@
     "tauri": "tauri",
     "tauri:dev": "node scripts/sync_version.mjs && tauri dev",
     "tauri:build": "node scripts/sync_version.mjs && tauri build --bundles nsis -- --locked",
-    "check": "node scripts/check_version.mjs && python scripts/check_project.py && python scripts/test_schema.py && python scripts/test_scale.py && python scripts/test_contract.py && tsc --noEmit"
+    "check": "node scripts/check_version.mjs && python scripts/check_project.py && python scripts/test_schema.py && python scripts/test_scale.py && python scripts/test_contract.py && npm run test:preview && tsc --noEmit",
+    "test:preview": "node --experimental-strip-types --test scripts/test_preview_workflow.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "2.12.0",

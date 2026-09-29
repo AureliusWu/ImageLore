@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.21.1 — Preview Regression Hardening
+
+- Kept the current preview visible while Fit / 100% / wheel-zoom requests load, eliminating the temporary empty-import state during mode switches.
+- Split preview-image loading from lineage and Generation Session loading so zoom changes no longer re-fetch record relationships.
+- Fixed zero-delta wheel events so horizontal or inertial events cannot accidentally zoom out.
+- Centralized preview workflow math for zoom limits, navigation bounds, context-menu placement and Save As extension selection.
+- Hardened Save As with canonical same-file detection and supported-image extension fallback.
+- Added Node behavior regressions for zoom, wheel steps, navigation edges, context-menu bounds and Save As extensions.
+- Added Rust unit regressions for Save As byte copying, same-path rejection and missing-source rejection.
+- Wired preview workflow regressions into the standard Fast CI check.
+
 ## 0.21.0 — Preview Workflow
 
 - Expanded image context actions with open, reveal in folder, copy image, copy path, Save As, favorite and visual-similarity search.
