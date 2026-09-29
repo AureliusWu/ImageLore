@@ -130,21 +130,20 @@
 - AI Prompt 可载入当前编辑器或保存为独立 Prompt Revision
 - Migration v9 + JSON / Provider / DNA merge / schema / contract 回归测试
 
-## v0.24.0 — Remix ✅
+## v0.24.0 — Remix Workspace ✅
 - 从一张或多张参考图选择可复用 Visual DNA 片段
-- 按 12 个 Visual DNA 维度组合并继续手工编辑 Remix Prompt
-- Migration v10 + 持久化 Remix Draft / Sources，不修改原记录
-- 导入 Remix 结果时自动写 derived_from / reference Generation Lineage
-- 谱系备注记录每张来源实际使用的 DNA 字段
-- 保留结果自身 Prompt 元数据；缺失时才补入 Remix Prompt
-- 继承基础图片 Generation Session
-- 预留 source_url / reference_meta_json
+- 按 12 维 Visual DNA 选择来源并组合 provenance-aware Prompt
+- Remix 草稿独立保存，不修改原记录
+- 导入结果自动写入 derived_from / reference Generation Lineage
+- 谱系备注记录实际使用的 DNA 字段；结果 Prompt 已存在时不覆盖
+- Generation Session 继承
+- 为浏览器 Save to ImageLore 预留 source URL / reference metadata
+- Migration v10 + Node / Rust Remix 回归测试
 
-## v0.25.0 — Save to ImageLore / Browser Capture
-- 浏览器扩展或 Share/Save 接口，把网页图片与上下文一键送入 ImageLore
-- 保存原始页面 URL、图片 URL、标题与可选 Prompt 文本
-- 网页来源进入 reference metadata，不伪装成本地生成元数据
-- 保存后可直接进入 Visual DNA / Image to Prompt / Remix 流程
+## v0.25.0 — Save to ImageLore
+- 浏览器扩展 / 分享入口保存网页图片、来源 URL、页面标题与参考元数据
+- 保存时可直接形成 Reference Card，并选择是否进入某个 Remix 草稿
+- 与本地重复检测、Visual DNA、Image to Prompt、Generation Lineage 串成完整采集链
 
 ## v1.0.0 — Stable Local Library
 - Windows 代码签名与自动更新

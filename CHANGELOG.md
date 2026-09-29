@@ -1,17 +1,17 @@
 # Changelog
 
-## 0.24.0 — Remix
+## 0.24.0 — Remix Workspace
 
-- Added Migration v10 with persistent Remix drafts and multi-source provenance records.
-- Added a dedicated Remix Inspector workspace where the current image acts as the base and additional library images can be added as references.
-- Each Remix source can contribute selected Visual DNA dimensions independently, including subject, character, outfit, pose, expression, composition, camera, lighting, environment, palette, material and style.
-- Added deterministic provenance-aware Prompt composition, while keeping the generated Remix Prompt fully editable before saving.
-- Remix drafts are stored independently and never modify the original asset Prompt.
-- Importing a Remix result writes the base image as `derived_from` and additional sources as `reference` relations, with the actually used DNA fields preserved in relation notes.
-- Existing Prompt metadata on an imported result is preserved; the Remix Prompt is only used when the result has no Prompt of its own.
-- Remix results inherit the base asset's Generation Session when available.
-- Reserved `source_url` and `reference_meta_json` on Remix sources for the upcoming browser Save to ImageLore workflow.
-- Added Node regressions for Remix Prompt composition plus Rust regressions for v10 migration, multi-source persistence and provenance-safe lineage application.
+- Added Migration v10 with persistent Remix drafts and provenance-aware reference sources.
+- Added a dedicated Remix Inspector workspace that starts from the current image and supports multiple library reference images.
+- Each source can contribute selected Visual DNA dimensions such as subject, outfit, pose, composition, camera, lighting, environment, palette, material and style.
+- Remix Prompt composition records where borrowed traits came from, deduplicates repeated DNA values and remains fully editable before saving.
+- Remix drafts are stored independently and never modify the source image Prompt.
+- Importing a Remix result records the base image as `derived_from` and additional references as `reference`, with relation notes listing the DNA fields actually used.
+- Existing metadata Prompt on imported result images is preserved; the Remix Prompt is only used when the result has no Prompt.
+- Remix results inherit the base image Generation Session when available.
+- Remix source storage reserves source URL and reference metadata fields for the upcoming browser Save to ImageLore workflow.
+- Added Node and Rust regression coverage for prompt composition, v10 migration, multi-source persistence, field filtering, Prompt preservation and lineage writes.
 
 ## 0.23.0 — Image to Prompt
 
