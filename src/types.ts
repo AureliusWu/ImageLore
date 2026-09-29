@@ -63,3 +63,10 @@ export interface DiagnosticStatus {
   data_dir:string;database_path:string;backups_dir:string;logs_dir:string;active_log:string;
   active_log_size:number;recovery_notice:string|null;
 }
+
+export interface VisualDna {
+  subject:string;character:string;outfit:string;pose:string;expression:string;composition:string;
+  camera:string;lighting:string;environment:string;palette:string;material:string;style:string;
+  source:string;updated_at:number;
+}
+export type VisualDnaPatch=Omit<VisualDna,"updated_at">;
