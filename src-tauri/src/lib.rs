@@ -14,6 +14,7 @@ mod preview;
 mod references;
 mod remix;
 mod semantic;
+mod search;
 mod sidecar;
 mod sources;
 mod state;

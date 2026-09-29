@@ -611,7 +611,7 @@ fn ranked(
     filter.query.clear();
     let candidates = {
         let conn = state.db.lock().map_err(|e| e.to_string())?;
-        db::filtered_summaries(&conn, &filter, 100_000)?
+        search::filtered_summaries(&conn, &filter, 100_000)?
     };
     let allowed: HashSet<i64> = candidates.iter().map(|x| x.id).collect();
     let assets: HashMap<i64, _> = candidates.into_iter().map(|x| (x.id, x)).collect();

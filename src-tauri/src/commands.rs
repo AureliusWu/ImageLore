@@ -1,4 +1,4 @@
-use crate::{db, generation_index, metadata, models::*, preview, sidecar, state::AppState};
+use crate::{db, generation_index, metadata, models::*, preview, search, sidecar, state::AppState};
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
 use std::{
@@ -17,7 +17,7 @@ pub fn library_page(
     limit: i64,
 ) -> Result<LibraryPage, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
-    db::library_page(&conn, &filter, offset, limit)
+    search::library_page(&conn, &filter, offset, limit)
 }
 
 #[tauri::command]
