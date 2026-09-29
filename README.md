@@ -96,7 +96,7 @@ ImageLore 是一个 local-first 的 AI 视觉生成记忆库，用来保存图�
 
 ## 开发
 
-普通提交只运行快速 CI；只有手动发布或版本标签才生成 Windows 安装包。
+`main` 是唯一长期远程分支。普通提交只运行快速 CI；Windows 安装包只在手动触发、版本标签，或明确更新 `.github/windows-build-request.txt` 时生成。
 
 ```bash
 npm ci
@@ -109,6 +109,8 @@ npm run tauri:dev
 ```bash
 npm run tauri:build
 ```
+
+GitHub Actions 远程构建使用 `Build ImageLore Windows Installer`。需要由连接器显式触发安装包构建时，只更新 `.github/windows-build-request.txt`；该文件不参与应用运行逻辑，也不会在普通开发提交中变化。
 
 ## 版本
 

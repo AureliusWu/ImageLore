@@ -4,7 +4,9 @@ on:
   workflow_dispatch:
   push:
     tags: ['v*']
-    branches: ['build/windows']
+    branches: ['main']
+    paths:
+      - '.github/windows-build-request.txt'
 
 concurrency:
   group: imagelore-release-${{ github.ref }}
