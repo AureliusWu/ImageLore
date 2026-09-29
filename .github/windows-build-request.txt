@@ -1,0 +1,3 @@
+# ImageLore Windows build request
+# Change request_id only when a Windows installer build is explicitly requested.
+request_id=0
