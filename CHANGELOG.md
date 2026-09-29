@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.22.0 — Visual DNA Foundation
+
+- Added Migration v8 with structured Visual DNA for subject, character, outfit, pose, expression, composition, camera, lighting, environment, palette, material and style.
+- Added a dedicated Visual DNA Inspector tab plus a compact Prompt Card that summarizes model, Prompt, size, aspect ratio, lineage and the most important visual traits.
+- Visual DNA is editable, locally searchable through both FTS and CJK trigram paths, and participates in normal asset reindexing.
+- Added Visual DNA round-trip support to ImageLore Sidecar v3; imported Sidecars can restore structured visual context without overwriting an existing non-empty record.
+- Added startup database recovery: if an existing library cannot be initialized, ImageLore preserves forensic copies of the damaged DB/WAL/SHM and attempts the newest valid backup instead of silently creating an empty library.
+- Added bounded local diagnostics with 1 MB × 5 rotating logs, startup/recovery events and Library Manager shortcuts for data and log folders.
+- Added recovery, log rotation, Visual DNA normalization/search, schema and Sidecar regression coverage.
+
 ## 0.21.1 — Preview Regression Hardening
 
 - Kept the current preview visible while Fit / 100% / wheel-zoom requests load, eliminating the temporary empty-import state during mode switches.

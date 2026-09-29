@@ -283,3 +283,38 @@ pub struct SemanticProgress {
     pub done:bool,
     pub cancelled:bool,
 }
+
+#[derive(Debug,Clone,Serialize,Deserialize,Default)]
+pub struct VisualDnaPatch {
+    #[serde(default)] pub subject:String,
+    #[serde(default)] pub character:String,
+    #[serde(default)] pub outfit:String,
+    #[serde(default)] pub pose:String,
+    #[serde(default)] pub expression:String,
+    #[serde(default)] pub composition:String,
+    #[serde(default)] pub camera:String,
+    #[serde(default)] pub lighting:String,
+    #[serde(default)] pub environment:String,
+    #[serde(default)] pub palette:String,
+    #[serde(default)] pub material:String,
+    #[serde(default)] pub style:String,
+    #[serde(default)] pub source:String,
+}
+
+#[derive(Debug,Clone,Serialize,Default)]
+pub struct VisualDna {
+    pub subject:String,
+    pub character:String,
+    pub outfit:String,
+    pub pose:String,
+    pub expression:String,
+    pub composition:String,
+    pub camera:String,
+    pub lighting:String,
+    pub environment:String,
+    pub palette:String,
+    pub material:String,
+    pub style:String,
+    pub source:String,
+    pub updated_at:i64,
+}

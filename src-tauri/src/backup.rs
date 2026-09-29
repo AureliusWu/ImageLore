@@ -142,6 +142,47 @@ pub fn apply_pending_restore(database_path:&Path,data_dir:&Path,backups_dir:&Pat
     Ok(())
 }
 
+pub fn recover_latest_valid_backup(database_path:&Path,data_dir:&Path,backups_dir:&Path,reason:&str)->Result<Option<BackupRecord>,String>{
+    let selected=records(backups_dir)?.into_iter().find(|item|validate(Path::new(&item.path)).is_ok());
+    let Some(selected)=selected else{return Ok(None)};
+
+    let recovery_dir=data_dir.join("recovery");
+    fs::create_dir_all(&recovery_dir).map_err(|e|e.to_string())?;
+    let token=now_nanos();
+    if database_path.exists(){
+        let _=fs::copy(database_path,recovery_dir.join(format!("startup-corrupt-{}.sqlite3.raw",token)));
+    }
+    let wal=database_path.with_extension("sqlite3-wal");
+    if wal.exists(){let _=fs::copy(&wal,recovery_dir.join(format!("startup-corrupt-{}.wal.raw",token)));}
+    let shm=database_path.with_extension("sqlite3-shm");
+    if shm.exists(){let _=fs::copy(&shm,recovery_dir.join(format!("startup-corrupt-{}.shm.raw",token)));}
+
+    let staged=data_dir.join("startup-recovery.next.sqlite3");
+    let _=fs::remove_file(&staged);
+    fs::copy(&selected.path,&staged).map_err(|e|e.to_string())?;
+    validate(&staged)?;
+
+    let _=fs::remove_file(&wal);
+    let _=fs::remove_file(&shm);
+    if database_path.exists(){fs::remove_file(database_path).map_err(|e|e.to_string())?;}
+    if let Err(rename_error)=fs::rename(&staged,database_path){
+        fs::copy(&selected.path,database_path).map_err(|copy_error|format!("自动恢复失败：{}；回退复制失败：{}",rename_error,copy_error))?;
+        let _=fs::remove_file(&staged);
+    }
+    validate(database_path)?;
+
+    let notice=format!(
+        "time={}\nbackup={}\nreason={}\nrecovery_dir={}\n",
+        now(),
+        selected.name,
+        reason.replace('\n'," | "),
+        recovery_dir.to_string_lossy()
+    );
+    fs::write(crate::diagnostics::recovery_notice_path(data_dir),notice).map_err(|e|e.to_string())?;
+    rotate(backups_dir)?;
+    Ok(Some(selected))
+}
+
 #[tauri::command]
 pub fn create_backup(state:State<'_,AppState>)->Result<BackupRecord,String>{create(state.inner(),"imagelore")}
 
@@ -217,4 +258,41 @@ mod tests{
         assert!(fs::read_dir(&backups).unwrap().filter_map(Result::ok).any(|e|e.path().extension().and_then(|x|x.to_str())==Some("raw")));
         let _=fs::remove_dir_all(root);
     }
+    #[test]
+    fn startup_recovery_uses_valid_backup_and_preserves_corrupt_active(){
+        let root=std::env::temp_dir().join(format!("imagelore-auto-recovery-test-{}",now_nanos()));
+        let backups=root.join("backups");
+        fs::create_dir_all(&backups).unwrap();
+        let database=root.join("library.sqlite3");
+        fs::write(&database,b"not a sqlite database").unwrap();
+
+        let valid=backups.join("valid.sqlite3");
+        {
+            let conn=Connection::open(&valid).unwrap();
+            conn.execute_batch("CREATE TABLE marker(value TEXT); INSERT INTO marker(value) VALUES('from-backup');").unwrap();
+        }
+        fs::write(backups.join("corrupt.sqlite3"),b"broken backup").unwrap();
+
+        let selected=recover_latest_valid_backup(&database,&root,&backups,"database open failed").unwrap().unwrap();
+        assert_eq!(selected.name,"valid.sqlite3");
+
+        let conn=Connection::open(&database).unwrap();
+        let value:String=conn.query_row("SELECT value FROM marker",[],|r|r.get(0)).unwrap();
+        assert_eq!(value,"from-backup");
+        assert!(root.join("recovery-last.txt").exists());
+        assert!(fs::read_dir(root.join("recovery")).unwrap().filter_map(Result::ok).any(|e|e.path().extension().and_then(|x|x.to_str())==Some("raw")));
+        let _=fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn startup_recovery_returns_none_without_valid_backup(){
+        let root=std::env::temp_dir().join(format!("imagelore-auto-recovery-empty-test-{}",now_nanos()));
+        let backups=root.join("backups");
+        fs::create_dir_all(&backups).unwrap();
+        fs::write(backups.join("corrupt.sqlite3"),b"broken backup").unwrap();
+        let result=recover_latest_valid_backup(&root.join("library.sqlite3"),&root,&backups,"failed").unwrap();
+        assert!(result.is_none());
+        let _=fs::remove_dir_all(root);
+    }
+
 }

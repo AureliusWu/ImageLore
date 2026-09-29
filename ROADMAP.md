@@ -113,9 +113,22 @@
 - Save As 同路径保护与文件复制回归测试
 - Node 行为测试 + Rust 单元测试接入常规 CI
 
+## v0.22.0 — Visual DNA Foundation ✅
+- Migration v8 + 12 维结构化 Visual DNA
+- Prompt Card：Prompt / 模型 / 尺寸 / 核心视觉特征 / 谱系汇总
+- Visual DNA 接入 FTS、CJK 搜索、Sidecar v3 与普通重建索引流程
+- 启动数据库损坏时保留原件并尝试最近可验证备份
+- 1 MB × 5 本地滚动日志与资料库诊断入口
+- Visual DNA / Sidecar / Search / Recovery / Logging 回归测试
+
+## v0.23.0 — Image to Prompt
+- 从当前图片生成两层结果：结构化视觉分析 + 可生成 Prompt
+- 一键写入 Visual DNA
+- 将生成 Prompt 保存为当前 Prompt 或创建新 Revision
+- 明确记录分析来源与模型，避免覆盖用户已有内容
+
 ## v1.0.0 — Stable Local Library
 - Windows 代码签名与自动更新
-- 启动故障恢复与 rotating logs
 - 大图库 50k+ 性能验收
 - 正式 Backup / Restore 灾难恢复验收
 - 稳定迁移兼容性测试矩阵

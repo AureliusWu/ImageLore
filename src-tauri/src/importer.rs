@@ -1,4 +1,4 @@
-use crate::{db,generation,generation_index,jobs,metadata,models::{ImportProgress,ImportSummary},preview,sidecar,state::AppState};
+use crate::{db,generation,generation_index,jobs,metadata,models::{ImportProgress,ImportSummary,VisualDnaPatch},preview,sidecar,state::AppState,visual_dna};
 use rusqlite::params;
 use std::{
     path::{Path,PathBuf},
@@ -26,6 +26,7 @@ struct PreparedAsset{
     tags:Vec<String>,
     parents:Vec<sidecar::ParentRef>,
     session:Option<sidecar::SessionRef>,
+    visual_dna:Option<VisualDnaPatch>,
 }
 
 enum InsertOutcome{Added(i64),Existing(i64),Duplicate(i64)}
@@ -59,6 +60,7 @@ fn prepare(path:&Path)->Option<PreparedAsset>{
     let tags=saved.as_ref().map(sidecar::tags).unwrap_or_default();
     let parents=saved.as_ref().map(sidecar::parents).unwrap_or_default();
     let session=saved.as_ref().and_then(sidecar::session);
+    let visual_dna=saved.as_ref().and_then(sidecar::visual_dna);
     let fingerprint=metadata::fingerprint(&canonical);
     let requested_portable=saved.as_ref().map(sidecar::portable_id).unwrap_or_default();
     let portable_id=if requested_portable.is_empty(){
@@ -69,7 +71,7 @@ fn prepare(path:&Path)->Option<PreparedAsset>{
         path:canonical.to_string_lossy().to_string(),name,width:info.width,height:info.height,
         file_size:info.file_size,format:info.format,mime_type:info.mime_type,
         metadata_type:extract.metadata_type,generation_json:extract.generation_json,
-        fingerprint,portable_id,file_mtime:info.file_mtime,prompt,negative_prompt,model,tags,parents,session,
+        fingerprint,portable_id,file_mtime:info.file_mtime,prompt,negative_prompt,model,tags,parents,session,visual_dna,
     })
 }
 
@@ -77,6 +79,7 @@ fn merge_context(conn:&rusqlite::Connection,id:i64,item:&PreparedAsset)->Result<
     let portable_id:String=conn.query_row("SELECT portable_id FROM assets WHERE id=?1",params![id],|r|r.get(0)).map_err(|e|e.to_string())?;
     generation::assign_session_by_name(conn,id,item.session.as_ref())?;
     generation::queue_parent_refs(conn,&portable_id,&item.parents)?;
+    visual_dna::merge_imported(conn,id,item.visual_dna.as_ref())?;
     Ok(())
 }
 

@@ -1,3 +1,4 @@
+use crate::models::VisualDnaPatch;
 use serde_json::Value;
 use std::{fs,path::{Path,PathBuf}};
 
@@ -72,4 +73,42 @@ pub fn session(value:&Value)->Option<SessionRef>{
             .or_else(||item.get("note").and_then(Value::as_str)).unwrap_or("").to_string(),
         asset_note:item.get("asset_note").and_then(Value::as_str).unwrap_or("").to_string(),
     })
+}
+
+pub fn visual_dna(value:&Value)->Option<VisualDnaPatch>{
+    let item=value.get("visual_dna")?;
+    let field=|key:&str|item.get(key).and_then(Value::as_str).unwrap_or("").to_string();
+    let patch=VisualDnaPatch{
+        subject:field("subject"),
+        character:field("character"),
+        outfit:field("outfit"),
+        pose:field("pose"),
+        expression:field("expression"),
+        composition:field("composition"),
+        camera:field("camera"),
+        lighting:field("lighting"),
+        environment:field("environment"),
+        palette:field("palette"),
+        material:field("material"),
+        style:field("style"),
+        source:"sidecar".into(),
+    };
+    if crate::visual_dna::patch_is_empty(&patch){None}else{Some(patch)}
+}
+
+#[cfg(test)]
+mod tests{
+    use super::*;
+
+    #[test]
+    fn reads_optional_visual_dna_from_v3_sidecar(){
+        let value:Value=serde_json::from_str(r#"{
+          "schema":"imagelore.sidecar.v3",
+          "visual_dna":{"subject":"成年女性","lighting":"窗边柔光","style":"写实摄影"}
+        }"#).unwrap();
+        let dna=visual_dna(&value).unwrap();
+        assert_eq!(dna.subject,"成年女性");
+        assert_eq!(dna.lighting,"窗边柔光");
+        assert_eq!(dna.source,"sidecar");
+    }
 }

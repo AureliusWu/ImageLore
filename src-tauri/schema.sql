@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS app_meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
-INSERT OR IGNORE INTO app_meta(key,value) VALUES ('schema_version','7');
+INSERT OR IGNORE INTO app_meta(key,value) VALUES ('schema_version','8');
 
 CREATE TABLE IF NOT EXISTS assets (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -100,6 +100,26 @@ CREATE TABLE IF NOT EXISTS collection_assets (
 );
 CREATE INDEX IF NOT EXISTS idx_collection_assets_asset ON collection_assets(asset_id, collection_id);
 
+CREATE TABLE IF NOT EXISTS visual_dna (
+  asset_id INTEGER PRIMARY KEY,
+  subject TEXT NOT NULL DEFAULT '',
+  character_name TEXT NOT NULL DEFAULT '',
+  outfit TEXT NOT NULL DEFAULT '',
+  pose TEXT NOT NULL DEFAULT '',
+  expression TEXT NOT NULL DEFAULT '',
+  composition TEXT NOT NULL DEFAULT '',
+  camera TEXT NOT NULL DEFAULT '',
+  lighting TEXT NOT NULL DEFAULT '',
+  environment TEXT NOT NULL DEFAULT '',
+  palette TEXT NOT NULL DEFAULT '',
+  material TEXT NOT NULL DEFAULT '',
+  style TEXT NOT NULL DEFAULT '',
+  search_text TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT 'manual',
+  updated_at INTEGER NOT NULL DEFAULT 0,
+  FOREIGN KEY(asset_id) REFERENCES assets(id) ON DELETE CASCADE
+);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS asset_search USING fts5(
   asset_id UNINDEXED,
   name,
@@ -107,6 +127,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS asset_search USING fts5(
   negative_prompt,
   model,
   tags,
+  visual_dna,
   tokenize='unicode61 remove_diacritics 2'
 );
 

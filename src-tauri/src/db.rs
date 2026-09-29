@@ -192,14 +192,15 @@ pub fn reindex_asset(conn: &Connection, asset_id: i64) -> Result<(), String> {
     let asset = get_asset(conn, asset_id)?;
     let tags=asset.tags.join(" ");
     conn.execute("DELETE FROM asset_search WHERE asset_id=?1", params![asset_id]).map_err(|e| e.to_string())?;
+    let visual_text=crate::visual_dna::search_text(conn,asset_id)?;
     conn.execute(
-        "INSERT INTO asset_search(asset_id,name,prompt,negative_prompt,model,tags) VALUES(?1,?2,?3,?4,?5,?6)",
-        params![asset_id, asset.name, asset.prompt, asset.negative_prompt, asset.model, tags],
+        "INSERT INTO asset_search(asset_id,name,prompt,negative_prompt,model,tags,visual_dna) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+        params![asset_id, asset.name, asset.prompt, asset.negative_prompt, asset.model, tags, visual_text],
     ).map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM asset_cjk_search WHERE rowid=?1",params![asset_id]).map_err(|e|e.to_string())?;
     let trigram_text=format!(
-        "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
-        asset.name,asset.prompt,asset.negative_prompt,asset.model,asset.tags.join(" ")
+        "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
+        asset.name,asset.prompt,asset.negative_prompt,asset.model,asset.tags.join(" "),visual_text
     );
     conn.execute(
         "INSERT INTO asset_cjk_search(rowid,asset_id,text) VALUES(?1,?1,?2)",
@@ -225,7 +226,7 @@ fn cjk_trigram_query(input:&str)->Option<String>{
 }
 
 fn filter_parts(filter: &LibraryFilter) -> (String, String, Vec<SqlValue>) {
-    let mut joins = " LEFT JOIN generation_index gi ON gi.asset_id=a.id ".to_string();
+    let mut joins = " LEFT JOIN generation_index gi ON gi.asset_id=a.id LEFT JOIN visual_dna vd ON vd.asset_id=a.id ".to_string();
     let mut where_parts = vec!["1=1".to_string()];
     let mut args = Vec::<SqlValue>::new();
 
@@ -239,9 +240,9 @@ fn filter_parts(filter: &LibraryFilter) -> (String, String, Vec<SqlValue>) {
                 args.push(SqlValue::Text(trigram));
             }
             for term in query.split_whitespace().filter(|x|!x.is_empty()){
-                where_parts.push("(a.name LIKE ? OR COALESCE(ps.prompt,'') LIKE ? OR COALESCE(ps.negative_prompt,'') LIKE ? OR COALESCE(ps.model,'') LIKE ? OR EXISTS(SELECT 1 FROM asset_tags sq_at JOIN tags sq_t ON sq_t.id=sq_at.tag_id WHERE sq_at.asset_id=a.id AND sq_t.name LIKE ?))".into());
+                where_parts.push("(a.name LIKE ? OR COALESCE(ps.prompt,'') LIKE ? OR COALESCE(ps.negative_prompt,'') LIKE ? OR COALESCE(ps.model,'') LIKE ? OR EXISTS(SELECT 1 FROM asset_tags sq_at JOIN tags sq_t ON sq_t.id=sq_at.tag_id WHERE sq_at.asset_id=a.id AND sq_t.name LIKE ?) OR COALESCE(vd.search_text,'') LIKE ?)".into());
                 let needle=SqlValue::Text(format!("%{}%",term));
-                for _ in 0..5{args.push(needle.clone())}
+                for _ in 0..6{args.push(needle.clone())}
             }
         }else{
             joins.push_str(" JOIN asset_search ON asset_search.asset_id=a.id ");
@@ -502,4 +503,33 @@ pub fn make_portable_id(seed:&str)->String{
 pub fn asset_by_portable_id(conn:&Connection,portable_id:&str)->Result<Option<i64>,String>{
     if portable_id.trim().is_empty(){return Ok(None)}
     conn.query_row("SELECT id FROM assets WHERE portable_id=?1",params![portable_id],|r|r.get(0)).optional().map_err(|e|e.to_string())
+}
+
+#[cfg(test)]
+mod visual_dna_search_tests{
+    use super::*;
+
+    #[test]
+    fn keyword_search_finds_visual_dna(){
+        let conn=Connection::open_in_memory().unwrap();
+        conn.execute_batch(include_str!("../schema.sql")).unwrap();
+        let id=1i64;
+        conn.execute(
+            "INSERT INTO assets(id,path,name,created_at,updated_at) VALUES(?1,'dna.png','DNA Test',1,1)",params![id]
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO prompt_state(asset_id,prompt,negative_prompt,model,updated_at) VALUES(?1,'','','',1)",params![id]
+        ).unwrap();
+        crate::visual_dna::upsert(&conn,id,&crate::models::VisualDnaPatch{
+            environment:"千禧年电脑房".into(),
+            lighting:"CRT 蓝绿色冷光".into(),
+            style:"日系写实摄影".into(),
+            ..Default::default()
+        }).unwrap();
+        reindex_asset(&conn,id).unwrap();
+        let filter=LibraryFilter{query:"千禧年电脑房".into(),view:"all".into(),..Default::default()};
+        let page=library_page(&conn,&filter,0,20).unwrap();
+        assert_eq!(page.total,1);
+        assert_eq!(page.items[0].id,id);
+    }
 }
