@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS app_meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
-INSERT OR IGNORE INTO app_meta(key,value) VALUES ('schema_version','10');
+INSERT OR IGNORE INTO app_meta(key,value) VALUES ('schema_version','11');
 
 CREATE TABLE IF NOT EXISTS assets (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -128,6 +128,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS asset_search USING fts5(
   model,
   tags,
   visual_dna,
+  reference,
   tokenize='unicode61 remove_diacritics 2'
 );
 
@@ -274,3 +275,19 @@ CREATE TABLE IF NOT EXISTS remix_sources (
   FOREIGN KEY(asset_id) REFERENCES assets(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_remix_sources_asset ON remix_sources(asset_id,draft_id);
+
+CREATE TABLE IF NOT EXISTS reference_sources (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  asset_id INTEGER NOT NULL,
+  source_url TEXT NOT NULL DEFAULT '',
+  page_url TEXT NOT NULL DEFAULT '',
+  page_title TEXT NOT NULL DEFAULT '',
+  source_type TEXT NOT NULL DEFAULT 'web',
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  captured_at INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(asset_id,source_url,page_url),
+  FOREIGN KEY(asset_id) REFERENCES assets(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_reference_asset ON reference_sources(asset_id,captured_at DESC,id DESC);
