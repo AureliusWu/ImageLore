@@ -150,6 +150,15 @@
 - 启动和窗口重新聚焦时同步 Inbox，不常驻 watcher
 - 浏览器扩展 + Migration / Schema / Merge / Contract 回归测试
 
+## v0.25.1 — Codebase Hygiene ✅
+- Biome 前端格式化门禁 + TypeScript strict 检查
+- Rust fmt / check / clippy / test 四重 Native CI 门禁
+- 浏览器 Preview Mock 与正式 Tauri API Bridge 解耦
+- App 选中资产上下文 / Vision 工作流拆成领域 Hook
+- Rust 文件操作与搜索查询从大模块中拆出
+- ARCHITECTURE / WINDOWS_INSTALLER 文档同步当前架构
+- 项目完整性检查改为格式化无关的结构断言
+
 ## v0.26.0 — Stability Acceptance
 - 50k+ 大图库端到端性能验收：图库、关键词、CJK、Visual DNA、Reference、Remix
 - Backup / Restore 灾难恢复验收与故障注入矩阵

@@ -2050,7 +2050,7 @@ dependencies = [
 
 [[package]]
 name = "imagelore"
-version = "0.25.0"
+version = "0.25.1"
 dependencies = [
  "base64 0.22.1",
  "dirs 6.0.0",

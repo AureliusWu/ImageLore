@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.25.1 — Codebase Hygiene
+
+- Added a repository-wide formatting gate with Biome for frontend/browser source and `cargo fmt --check` for Rust.
+- Added strict TypeScript linting through `tsc --noEmit` plus native `cargo clippy -D warnings`; both now run as release-quality CI gates.
+- Reformatted the frontend and Rust codebase for readable diffs, stable indentation and consistent line wrapping.
+- Split browser preview mocks out of the production Tauri API bridge, reducing `src/api.ts` to the typed desktop boundary.
+- Extracted selected-asset context and Vision workflows from `App.tsx` into dedicated hooks.
+- Extracted native filesystem commands and library search-query construction from oversized Rust modules.
+- Rewrote the architecture and Windows installer documentation for the current v0.25 data model, storage layout, main-only branch model and explicit installer trigger.
+- Hardened project-integrity checks so source formatting cannot break structural assertions.
+- Kept Windows installer generation opt-in; this maintenance release does not build an EXE automatically.
+
 ## 0.25.0 — Save to ImageLore
 
 - Added a Chrome / Edge Manifest V3 companion extension with image context-menu actions for normal references and Remix references.

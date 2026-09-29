@@ -1,4 +1,4 @@
-# ImageLore v0.25.0
+# ImageLore v0.25.1
 
 ![ImageLore 应用预览](docs/og.svg)
 
@@ -100,6 +100,7 @@ ImageLore 是一个 local-first 的 AI 视觉生成记忆库，用来保存图�
 
 ```bash
 npm ci
+npm run format
 npm run check
 npm run tauri:dev
 ```
