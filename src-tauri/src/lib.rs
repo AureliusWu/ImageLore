@@ -11,6 +11,7 @@ mod metadata;
 mod models;
 mod preview;
 mod remix;
+mod references;
 mod semantic;
 mod sidecar;
 mod visual_dna;
@@ -115,6 +116,9 @@ pub fn run(){
             remix::save_remix_draft,
             remix::delete_remix_draft,
             remix::apply_remix_lineage,
+            references::reference_sources,
+            references::ensure_reference_inbox,
+            references::open_reference_url,
             importer::import_paths,
             importer::import_folder,
             importer::import_dropped_paths,

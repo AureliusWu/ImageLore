@@ -39,9 +39,9 @@ pub(crate) fn list(conn:&Connection,asset_id:i64)->Result<Vec<ReferenceSource>,S
     Ok(rows.filter_map(Result::ok).collect())
 }
 pub(crate) fn search_text(conn:&Connection,asset_id:i64)->Result<String,String>{
-    let mut st=conn.prepare("SELECT page_title,page_url,source_url FROM reference_sources WHERE asset_id=?1 ORDER BY id").map_err(|e|e.to_string())?;
-    let rows=st.query_map(params![asset_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?))).map_err(|e|e.to_string())?;
-    Ok(rows.filter_map(Result::ok).flat_map(|(a,b,c)|[a,b,c]).filter(|x|!x.is_empty()).collect::<Vec<_>>().join(" "))
+    let mut st=conn.prepare("SELECT page_title,page_url,source_url,source_type,metadata_json FROM reference_sources WHERE asset_id=?1 ORDER BY id").map_err(|e|e.to_string())?;
+    let rows=st.query_map(params![asset_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?))).map_err(|e|e.to_string())?;
+    Ok(rows.filter_map(Result::ok).flat_map(|(a,b,c,d,e)|[a,b,c,d,e]).filter(|x|!x.is_empty()).collect::<Vec<_>>().join(" "))
 }
 pub(crate) fn merge_imported(conn:&Connection,asset_id:i64,items:&[ReferenceInput])->Result<(),String>{
     if items.is_empty(){return Ok(())}
