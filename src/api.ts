@@ -136,7 +136,7 @@ async function mockCall<T>(command:string,args:Record<string,unknown>):Promise<T
       return ranked.slice(0,Number(args.limit||240)) as T;
     }
     case "clear_semantic_index":case "delete_semantic_models":return true as T;
-    case "open_external":case "open_containing_folder":return true as T;
+    case "open_external":case "open_containing_folder":case "copy_asset_to":return true as T;
     default:throw new Error(`Unknown mock command: ${command}`);
   }
 }
@@ -205,6 +205,7 @@ export const api={
   relocateMissing:(root:string)=>call<number>("relocate_missing",{root}),
   openExternal:(id:number)=>call<boolean>("open_external",{id}),
   openFolder:(id:number)=>call<boolean>("open_containing_folder",{id}),
+  copyAssetTo:(id:number,destination:string)=>call<boolean>("copy_asset_to",{id,destination}),
   semanticStatus:()=>call<SemanticStatus>("semantic_status"),
   startSemanticIndex:()=>call<number>("start_semantic_index"),
   cancelSemanticIndex:(jobId:number)=>call<boolean>("cancel_semantic_index",{jobId}),

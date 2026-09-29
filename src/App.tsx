@@ -1,6 +1,6 @@
 import { useCallback,useEffect,useMemo,useRef,useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open,save } from "@tauri-apps/plugin-dialog";
 import { api,isTauri } from "./api";
 import { APP_VERSION } from "./version";
 import type { AssetRecord,AssetSession,AssetSummary,BackupRecord,DuplicateGroup,GenerationSession,ImportSummary,LibraryFacets,LibraryFilter,LibraryHealth,Lineage,ModelAlias,SavedFilter,SearchMode,SemanticStatus,SourceFolder } from "./types";
@@ -23,6 +23,7 @@ const PAGE_SIZE=240;
 const emptyFacets:LibraryFacets={tags:[],models:[],collections:[],metadata_types:[],samplers:[],schedulers:[]};
 const emptyLineage:Lineage={parents:[],children:[]};
 const parseTags=(text:string)=>[...new Set(text.split(/[,，]/).map(x=>x.trim()).filter(Boolean))];
+const isTextEntry=(target:EventTarget|null)=>target instanceof HTMLElement&&(target.matches("input,textarea,select")||target.isContentEditable);
 
 export default function App(){
   const[version,setVersion]=useState(APP_VERSION);
@@ -278,11 +279,52 @@ export default function App(){
     if(e.ctrlKey||e.metaKey){next=new Set(selected);next.has(asset.id)?next.delete(asset.id):next.add(asset.id)}
     await selectRecord(asset.id,next);
   };
+  const openAsset=async(asset:AssetSummary)=>{
+    if(asset.missing){setStatus("文件缺失，无法打开图片");return}
+    try{await api.openExternal(asset.id);setStatus(`已打开：${asset.name}`)}catch(e){setStatus("打开图片失败："+String(e))}
+  };
   const openAssetFolder=async(asset:AssetSummary)=>{
     if(asset.missing){setStatus("文件缺失，无法打开所在位置");return}
     try{await api.openFolder(asset.id);setStatus(`已定位：${asset.name}`)}catch(e){setStatus("打开文件所在位置失败："+String(e))}
   };
-  const toggleFavorite=async()=>{if(!current)return;const a=await api.toggleFavorite(current.id);setCurrent(a);setAssets(xs=>xs.map(x=>x.id===a.id?{...x,favorite:a.favorite,updated_at:a.updated_at}:x))};
+  const copyAssetPath=async(asset:AssetSummary)=>{
+    try{await navigator.clipboard.writeText(asset.path);setStatus("文件路径已复制")}catch(e){setStatus("复制文件路径失败："+String(e))}
+  };
+  const copyAssetImage=async(asset:AssetSummary)=>{
+    if(asset.missing){setStatus("文件缺失，无法复制图像");return}
+    try{
+      const source=await api.preview(asset.id,0,false);
+      const response=await fetch(source);
+      if(!response.ok&&!source.startsWith("data:"))throw new Error(`读取图像失败：${response.status}`);
+      const blob=await response.blob();
+      const bitmap=await createImageBitmap(blob);
+      const canvas=document.createElement("canvas");
+      canvas.width=bitmap.width;canvas.height=bitmap.height;
+      const context=canvas.getContext("2d");
+      if(!context)throw new Error("无法创建图像画布");
+      context.drawImage(bitmap,0,0);bitmap.close();
+      const png=await new Promise<Blob>((resolve,reject)=>canvas.toBlob(value=>value?resolve(value):reject(new Error("图像转换失败")),"image/png"));
+      await navigator.clipboard.write([new ClipboardItem({"image/png":png})]);
+      setStatus("图像已复制到剪贴板");
+    }catch(e){setStatus("复制图像失败："+String(e))}
+  };
+  const saveAssetAs=async(asset:AssetSummary)=>{
+    if(asset.missing){setStatus("文件缺失，无法另存为");return}
+    if(!isTauri){setStatus("另存为仅在桌面版中可用");return}
+    const extension=asset.name.includes(".")?asset.name.split(".").pop()?.toLowerCase()||"png":(asset.format||"png").toLowerCase();
+    const destination=await save({defaultPath:asset.name,filters:[{name:"图片",extensions:[extension]}]});
+    if(!destination)return;
+    try{await api.copyAssetTo(asset.id,destination);setStatus("图片副本已保存："+destination)}catch(e){setStatus("另存为失败："+String(e))}
+  };
+  const toggleAssetFavorite=async(asset:AssetSummary)=>{
+    try{
+      const a=await api.toggleFavorite(asset.id);
+      setCurrent(prev=>prev?.id===a.id?a:prev);
+      setAssets(xs=>xs.map(x=>x.id===a.id?{...x,favorite:a.favorite,updated_at:a.updated_at}:x));
+      setStatus(a.favorite?"已收藏":"已取消收藏");
+    }catch(e){setStatus("更新收藏失败："+String(e))}
+  };
+  const toggleFavorite=async()=>{if(current)await toggleAssetFavorite(current)};
   const copyPrompt=()=>{if(current)void navigator.clipboard.writeText(prompt).then(()=>setStatus("提示词已复制"))};
   const saveRevision=async()=>{if(!current)return;await saveEditorRevision("")};
   const openHistory=async()=>{if(current){setDialogChoice("");setModal({kind:"history",revisions:await api.revisions(current.id)})}};
@@ -335,13 +377,13 @@ export default function App(){
     if(similarSource)setSimilarSource(null);
     setFilter(f=>({...f,query}));
   };
-  const findSimilar=()=>{
-    if(!current)return;
+  const findSimilarAsset=(asset:AssetSummary)=>{
     setFilter(f=>({...f,query:""}));
     setSearchMode("semantic");
-    setSimilarSource({id:current.id,name:current.name});
+    setSimilarSource({id:asset.id,name:asset.name});
     setStatus("正在查找视觉相似图片…");
   };
+  const findSimilar=()=>{if(current)findSimilarAsset(current)};
   const clearSimilar=()=>{setSimilarSource(null);setSemanticScores(new Map())};
   const rebuildSemantic=async()=>{await startSemanticIndex()};
   const clearSemantic=async()=>{
@@ -401,12 +443,25 @@ export default function App(){
   useEffect(()=>{
     const handler=(e:KeyboardEvent)=>{
       if(e.key==="Escape"){if(modal){setModal(null);return}if(parentOpen){setParentOpen(false);return}if(managerOpen){setManagerOpen(false);return}}
-      if(e.ctrlKey&&e.key.toLowerCase()==="f"){e.preventDefault();document.querySelector<HTMLInputElement>("#search")?.focus()}
-      if(e.key==="F6"){e.preventDefault();promptRef.current?.focus()}
-      if(e.key==="F7"){e.preventDefault();setPreviewMode(x=>x==="fit"?"actual":"fit")}
-      if(e.ctrlKey&&e.shiftKey&&e.key.toLowerCase()==="c"){e.preventDefault();copyPrompt()}
-      if(e.ctrlKey&&e.key.toLowerCase()==="s"){e.preventDefault();void saveRevision()}
-      if(e.ctrlKey&&e.key.toLowerCase()==="i"){e.preventDefault();void chooseImages()}
+      if(modal||parentOpen||managerOpen)return;
+      const typing=isTextEntry(e.target);
+      if(e.ctrlKey&&e.key.toLowerCase()==="f"){e.preventDefault();document.querySelector<HTMLInputElement>("#search")?.focus();return}
+      if(e.key==="F6"){e.preventDefault();promptRef.current?.focus();return}
+      if(e.key==="F7"){e.preventDefault();setPreviewMode(x=>x==="fit"?"actual":"fit");return}
+      if(e.ctrlKey&&e.shiftKey&&e.key.toLowerCase()==="c"){e.preventDefault();copyPrompt();return}
+      if(e.ctrlKey&&e.key.toLowerCase()==="s"){e.preventDefault();void saveRevision();return}
+      if(e.ctrlKey&&e.key.toLowerCase()==="i"){e.preventDefault();void chooseImages();return}
+      if(typing)return;
+      const key=e.key.toLowerCase();
+      if(key==="arrowleft"||key==="arrowright"||key==="j"||key==="k"){
+        e.preventDefault();if(!assets.length)return;
+        const index=current?assets.findIndex(x=>x.id===current.id):-1;
+        const forward=key==="arrowright"||key==="j";
+        const next=Math.max(0,Math.min(assets.length-1,index+(forward?1:-1)));
+        if(assets[next]&&assets[next].id!==current?.id)void selectRecord(assets[next].id);
+        return;
+      }
+      if(key==="f"&&!e.ctrlKey&&!e.metaKey&&!e.altKey){e.preventDefault();if(current)void toggleAssetFavorite(current);return}
       if(e.altKey&&(e.key==="ArrowUp"||e.key==="ArrowDown")){
         e.preventDefault();if(!current)return;
         const i=assets.findIndex(x=>x.id===current.id),n=e.key==="ArrowUp"?Math.max(0,i-1):Math.min(assets.length-1,i+1);
@@ -421,13 +476,13 @@ export default function App(){
     {drop.active?<div className="drop-overlay" aria-live="polite"><div className="drop-card"><span className="drop-orb">⇩</span><strong>松开鼠标即可导入</strong><p>{drop.count?`检测到 ${drop.count} 个项目`:"正在识别拖入内容"} · 支持图片和文件夹</p><small>文件夹会递归扫描；已存在的图片会自动跳过</small></div></div>:null}
     <AppHeader version={version} query={filter.query} mode={searchMode} similarSourceName={similarSource?.name} onMode={changeSearchMode} onQuery={changeSearchQuery} onClearSimilar={clearSimilar} onImport={chooseImages} onFolder={chooseFolder}/>
     <main className="workspace" style={{gridTemplateColumns:`${leftWidth}px 8px minmax(360px,1fr) 8px ${rightWidth}px`}}>
-      <LibraryPane assets={assets} total={total} currentId={current?.id} selected={selected} loading={loading} scores={searchMode==="semantic"?semanticScores:undefined} filter={filter} facets={facets} savedFilters={savedFilters} sessions={sessions} onFilter={setFilter} onAsset={onAsset} onOpenAssetFolder={openAssetFolder} onLoadMore={loadMore} onBatchTags={()=>{setDialogText("");setModal({kind:"batch-tags"})}} onBatchFavorite={batchFavorite} onBatchRescan={batchRescan} onBatchSession={batchSession} onCollection={openCollection} onClearSelection={()=>setSelected(new Set())} onRefreshMissing={refreshMissing} onManage={openManager} onSaveView={saveCurrentView} onApplySavedView={applySavedView}/>
+      <LibraryPane assets={assets} total={total} currentId={current?.id} selected={selected} loading={loading} scores={searchMode==="semantic"?semanticScores:undefined} filter={filter} facets={facets} savedFilters={savedFilters} sessions={sessions} onFilter={setFilter} onAsset={onAsset} onOpenAsset={openAsset} onOpenAssetFolder={openAssetFolder} onCopyAssetImage={copyAssetImage} onCopyAssetPath={copyAssetPath} onSaveAssetAs={saveAssetAs} onToggleAssetFavorite={toggleAssetFavorite} onFindSimilarAsset={findSimilarAsset} onLoadMore={loadMore} onBatchTags={()=>{setDialogText("");setModal({kind:"batch-tags"})}} onBatchFavorite={batchFavorite} onBatchRescan={batchRescan} onBatchSession={batchSession} onCollection={openCollection} onClearSelection={()=>setSelected(new Set())} onRefreshMissing={refreshMissing} onManage={openManager} onSaveView={saveCurrentView} onApplySavedView={applySavedView}/>
       <div className="splitter" onPointerDown={drag("left")}/>
-      <PreviewPane asset={current} src={preview} mode={previewMode} onMode={setPreviewMode} onImport={chooseImages} onOpen={()=>current&&api.openExternal(current.id)} onFolder={()=>current&&api.openFolder(current.id)}/>
+      <PreviewPane asset={current} src={preview} mode={previewMode} onMode={setPreviewMode} onImport={chooseImages} onOpen={openAsset} onFolder={openAssetFolder} onCopyImage={copyAssetImage} onCopyPath={copyAssetPath} onSaveAs={saveAssetAs} onFavorite={toggleAssetFavorite} onFindSimilar={findSimilarAsset}/>
       <div className="splitter" onPointerDown={drag("right")}/>
       <InspectorPane asset={current} tab={tab} onTab={setTab} prompt={prompt} onPrompt={setPrompt} negative={negative} onNegative={setNegative} model={model} onModel={setModel} tagsText={tagsText} onTagsText={setTagsText} lineage={lineage} compareRecord={compareRecord} compareParentSrc={compareParentSrc} compareCurrentSrc={compareCurrentSrc} sessions={sessions} assetSession={assetSession} onCompare={compare} onCopy={copyPrompt} onSaveRevision={saveRevision} onHistory={openHistory} onFavorite={toggleFavorite} onFindSimilar={findSimilar} onRescan={rescan} onSidecar={exportSidecar} onCollection={openCollection} onRemove={()=>setModal({kind:"remove"})} onImportDerivative={importDerivative} onLinkParent={openParentPicker} onSetSession={setSession} onCreateSession={createSession} onEditSessionNote={editSessionNote} onEditRelationNote={editRelationNote} promptRef={promptRef}/>
     </main>
-    <footer className="statusbar glass-surface"><span className={`runtime-dot ${isTauri?"native":"preview"}`}/><strong>{isTauri?"桌面版":"浏览器预览"}</strong><span>v{version}</span><span className="status-message">{status}</span>{importActive?<><progress max={Math.max(1,importProgress.total)} value={importProgress.processed}/><button onClick={cancelImportJob}>取消导入</button></>:null}{semanticActive?<><progress max={Math.max(1,semanticProgress.total)} value={semanticProgress.processed}/><button onClick={cancelSemanticIndex}>取消索引</button></>:null}<span>已加载 {assets.length}/{total}</span><button onClick={repairMissing} title="根据文件指纹查找移动后的文件">修复缺失文件</button><span className="shortcut">F6 提示词 · F7 预览 · Ctrl+S 保存版本</span></footer>
+    <footer className="statusbar glass-surface"><span className={`runtime-dot ${isTauri?"native":"preview"}`}/><strong>{isTauri?"桌面版":"浏览器预览"}</strong><span>v{version}</span><span className="status-message">{status}</span>{importActive?<><progress max={Math.max(1,importProgress.total)} value={importProgress.processed}/><button onClick={cancelImportJob}>取消导入</button></>:null}{semanticActive?<><progress max={Math.max(1,semanticProgress.total)} value={semanticProgress.processed}/><button onClick={cancelSemanticIndex}>取消索引</button></>:null}<span>已加载 {assets.length}/{total}</span><button onClick={repairMissing} title="根据文件指纹查找移动后的文件">修复缺失文件</button><span className="shortcut">←→ / J K 切图 · F 收藏 · F6 提示词 · F7 预览 · Ctrl+S 保存</span></footer>
     <LibraryManager open={managerOpen} backups={backups} tags={facets.tags} collections={facets.collections} duplicates={duplicates} modelAliases={modelAliases} savedFilters={savedFilters} sourceFolders={sourceFolders} sourceSyncing={importActive} health={health} semanticStatus={semanticStatus} semanticIndexing={semanticActive} semanticProgress={semanticProgress} onRebuildSemantic={rebuildSemantic} onCancelSemantic={cancelSemanticIndex} onClearSemantic={clearSemantic} onDeleteSemanticModels={deleteSemanticModels} onClose={()=>setManagerOpen(false)} onBackup={createBackup} onRestore={restoreBackup} onRenameTag={renameTag} onDeleteTag={deleteTag} onRenameCollection={renameCollection} onDeleteCollection={deleteCollection} onUpsertModelAlias={upsertModelAlias} onDeleteModelAlias={deleteModelAlias} onDeleteSavedFilter={deleteSavedView} onAddSourceFolder={addSourceFolder} onRemoveSourceFolder={removeSourceFolder} onToggleSourceAutoSync={toggleSourceAutoSync} onSyncSourceFolders={syncSourceFolders}/>
     <ParentPicker open={parentOpen} query={parentQuery} results={parentResults} choice={parentChoice} loading={parentLoading} onQuery={setParentQuery} onChoice={setParentChoice} onClose={()=>setParentOpen(false)} onConfirm={confirmParent}/>
     <AppDialogs modal={modal} assets={assets} currentId={current?.id} text={dialogText} setText={setDialogText} choice={dialogChoice} setChoice={setDialogChoice} onClose={()=>setModal(null)} onConfirm={confirmModal}/>

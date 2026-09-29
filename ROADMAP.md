@@ -98,6 +98,14 @@
 - Windows Release 实机式 v0.19.0 → 当前版本覆盖升级 smoke test
 - 验证唯一安装项、原安装目录、EXE 版本、快捷方式与数据库保留
 
+## v0.21.0 — Preview Workflow ✅
+- 图片完整右键菜单：打开、定位、复制图像 / 路径、另存为、收藏、相似图
+- 中央预览 25%–400% 滚轮缩放、拖拽平移、双击 Fit / 100%
+- 缩略图与主预览统一 AssetContextMenu
+- ← / →、J / K 切图与 F 收藏快捷键
+- Inspector 基于容器宽度自适应窄栏
+- 主预览底部高频快捷操作条
+
 ## v1.0.0 — Stable Local Library
 - Windows 代码签名与自动更新
 - 启动故障恢复与 rotating logs

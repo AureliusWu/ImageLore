@@ -152,3 +152,67 @@
 }
 .asset-context-menu button:hover{background:var(--accent-soft);color:var(--accent)}
 .asset-context-menu button:disabled{opacity:.45;cursor:not-allowed}
+
+.asset-context-menu hr{height:1px;margin:5px 4px;border:0;background:rgba(46,119,145,.14)}
+
+/* v0.21 preview navigation */
+.preview-controls{display:flex;align-items:center;gap:7px;min-width:0}
+.zoom-controls{display:flex;align-items:center;height:32px;padding:3px;border:1px solid #d0e2e4;border-radius:9px;background:rgba(230,242,243,.82)}
+.zoom-controls button{width:27px;height:24px;border:0;border-radius:6px;background:transparent;color:#4f7e8e;font-size:14px;line-height:1}
+.zoom-controls button:hover:not(:disabled){background:#fff}
+.zoom-controls span{min-width:44px;text-align:center;font-size:10px;color:#66828f;font-variant-numeric:tabular-nums}
+.image-stage.actual{cursor:grab;touch-action:none}
+.image-stage.actual.panning{cursor:grabbing;user-select:none}
+.image-stage.actual .image-zoom-shell{position:relative;z-index:1;flex:0 0 auto}
+.image-stage.actual .image-zoom-shell img{width:100%;height:100%;max-width:none;max-height:none;object-fit:fill;user-select:none}
+.image-stage.fit img{cursor:zoom-in}
+.image-stage.actual img{cursor:inherit}
+@media(max-width:1050px){.zoom-controls{display:none}}
+
+/* v0.21 inspector container responsiveness */
+.inspector-pane{container-type:inline-size;container-name:inspector}
+.record-head{gap:9px}.record-head>div{min-width:0;overflow:hidden}.record-head strong{max-width:100%}
+@container inspector (max-width:390px){
+  .record-head{padding:10px 11px}
+  .inspector-tabs{padding:5px 7px;gap:3px;grid-template-columns:repeat(3,minmax(0,1fr))}
+  .inspector-tabs button{min-width:0;padding:0 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .inspector-body{padding:11px 10px 16px}
+  .field-head{gap:8px}.field-actions{flex-wrap:wrap;justify-content:flex-end}
+  .two-col{grid-template-columns:1fr}
+  .tool-card>div:last-child{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+  .session-card{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+  .session-card>div{grid-column:1/-1}
+  .info-row{grid-template-columns:minmax(88px,.85fr) minmax(0,1.15fr)}
+  .lineage-actions{grid-template-columns:1fr 1fr}
+}
+@container inspector (max-width:315px){
+  .record-head .eyebrow{display:none}
+  .record-head strong{font-size:12px}
+  .inspector-tabs button span{display:none}
+  .field-head{display:block}.field-actions{justify-content:flex-start;margin-top:7px}
+  .tool-card>div:last-child{grid-template-columns:1fr}
+  .session-card{grid-template-columns:1fr}.session-card>div{grid-column:auto}
+  .lineage-actions{grid-template-columns:1fr}
+  .info-row{grid-template-columns:1fr}.info-row strong{text-align:left;word-break:break-word}
+}
+
+/* v0.21 preview quick action bar */
+.preview-pane{container-type:inline-size;container-name:preview;grid-template-rows:58px minmax(0,1fr) 48px}
+.preview-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 10px}
+.preview-meta{display:flex;align-items:center;gap:8px;min-width:0;flex:1;color:#728c97}
+.preview-meta .path{min-width:0;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.preview-model{max-width:150px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.preview-actionbar{display:flex;align-items:center;gap:4px;flex:0 0 auto}
+.preview-actionbar button{height:30px;display:flex;align-items:center;gap:4px;padding:0 7px;border:1px solid #d3e5e4;border-radius:8px;background:rgba(251,254,253,.9);color:#39798d;font-size:10px;white-space:nowrap}
+.preview-actionbar button:hover:not(:disabled){background:#fff;border-color:#b9d9df}
+.preview-actionbar button.active{color:#aa791d;background:#fff9df;border-color:#ead799}
+.preview-actionbar button span{font-size:9px}
+@container preview (max-width:720px){
+  .preview-size,.preview-model{display:none}
+  .preview-actionbar button span{display:none}
+  .preview-actionbar button{width:30px;justify-content:center;padding:0}
+}
+@container preview (max-width:480px){
+  .preview-meta .path{display:none}
+  .preview-meta{flex:0 0 auto}
+}

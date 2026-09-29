@@ -386,6 +386,17 @@ pub fn open_containing_folder(state:State<'_,AppState>,id:i64)->Result<bool,Stri
     open_path(Path::new(&path),true)?;Ok(true)
 }
 
+#[tauri::command]
+pub fn copy_asset_to(state:State<'_,AppState>,id:i64,destination:String)->Result<bool,String>{
+    let source={let conn=state.db.lock().map_err(|e|e.to_string())?;db::get_asset(&conn,id)?.path};
+    let source_path=Path::new(&source);
+    if !source_path.exists(){return Err("原图片文件不存在，无法另存为".into())}
+    let destination_path=PathBuf::from(destination);
+    if destination_path==source_path{return Err("目标位置与原文件相同".into())}
+    fs::copy(source_path,&destination_path).map_err(|e|e.to_string())?;
+    Ok(true)
+}
+
 
 #[tauri::command]
 pub fn duplicate_groups(state:State<'_,AppState>)->Result<Vec<DuplicateGroup>,String>{
