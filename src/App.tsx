@@ -3,7 +3,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { open,save } from "@tauri-apps/plugin-dialog";
 import { api,isTauri } from "./api";
 import { APP_VERSION } from "./version";
-import type { AssetRecord,AssetSession,AssetSummary,BackupRecord,DiagnosticStatus,DuplicateGroup,GenerationSession,ImagePromptAnalysis,ImportSummary,LibraryFacets,LibraryFilter,LibraryHealth,Lineage,ModelAlias,RemixDraft,RemixSource,SavedFilter,SearchMode,SemanticStatus,SourceFolder,VisionSettings,VisualDna,VisualDnaPatch } from "./types";
+import type { AssetRecord,AssetSession,AssetSummary,BackupRecord,DiagnosticStatus,DuplicateGroup,GenerationSession,ImagePromptAnalysis,ImportSummary,LibraryFacets,LibraryFilter,LibraryHealth,Lineage,ModelAlias,RemixDraft,RemixSource,ReferenceSource,SavedFilter,SearchMode,SemanticStatus,SourceFolder,VisionSettings,VisualDna,VisualDnaPatch } from "./types";
 import { useDebouncedValue } from "./hooks/useDebouncedValue";
 import { useEditorDraft } from "./hooks/useEditorDraft";
 import { useNativeDrop } from "./hooks/useNativeDrop";
@@ -65,6 +65,7 @@ export default function App(){
   const[remixDraft,setRemixDraft]=useState<RemixDraft|null>(null);
   const[remixSources,setRemixSources]=useState<RemixSource[]>([]);
   const[remixPrompt,setRemixPrompt]=useState("");
+  const[referenceSources,setReferenceSources]=useState<ReferenceSource[]>([]);
   const[modelAliases,setModelAliases]=useState<ModelAlias[]>([]);
   const[savedFilters,setSavedFilters]=useState<SavedFilter[]>([]);
   const[sourceFolders,setSourceFolders]=useState<SourceFolder[]>([]);
@@ -88,6 +89,7 @@ export default function App(){
   const refreshSeq=useRef(0);
   const selectSeq=useRef(0);
   const autoSyncStarted=useRef(false);
+  const inboxFocusSyncAt=useRef(0);
   const previewAssetId=useRef<number|null>(null);
   const{previewMode,setPreviewMode,leftWidth,rightWidth,drag}=useWorkspaceLayout();
 
@@ -216,18 +218,19 @@ export default function App(){
   },[current?.id]);
 
   useEffect(()=>{
-    if(!current){setVisualDna(null);setImagePromptAnalysis(null);setRemixDraft(null);setRemixSources([]);setRemixPrompt("");return}
+    if(!current){setVisualDna(null);setImagePromptAnalysis(null);setRemixDraft(null);setRemixSources([]);setRemixPrompt("");setReferenceSources([]);return}
     let cancelled=false;
     const assetId=current.id,assetName=current.name,assetPrompt=current.prompt;
     setVisualDna(null);setImagePromptAnalysis(null);setRemixDraft(null);setRemixSources([]);setRemixPrompt("");
     Promise.all([
       api.visualDna(assetId).catch(()=>null),
       api.latestImagePromptAnalysis(assetId).catch(()=>null),
-      api.latestRemixDraft(assetId).catch(()=>null)
-    ]).then(([dna,analysis,draft])=>{
+      api.latestRemixDraft(assetId).catch(()=>null),
+      api.referenceSources(assetId).catch(()=>[])
+    ]).then(([dna,analysis,draft,references])=>{
       if(cancelled)return;
       const base:RemixSource={asset_id:assetId,asset_name:assetName,fields:[],source_url:"",visual_dna:dna||emptyVisualDna};
-      setVisualDna(dna);setImagePromptAnalysis(analysis);setRemixDraft(draft);
+      setVisualDna(dna);setImagePromptAnalysis(analysis);setRemixDraft(draft);setReferenceSources(references);
       setRemixSources(draft?.sources?.length?draft.sources:[base]);
       setRemixPrompt(draft?.prompt||assetPrompt);
     });
@@ -270,6 +273,19 @@ export default function App(){
       if(ids.length)void startImportJob("正在同步资料源目录…",()=>api.startSyncSources(ids));
     }).catch(e=>setStatus("来源目录读取失败："+String(e)));
   },[startImportJob]);
+  useEffect(()=>{
+    if(!isTauri)return;
+    const focus=()=>{
+      const inbox=sourceFolders.find(x=>x.name==="ImageLore Inbox");
+      if(!inbox||importActive)return;
+      const now=Date.now();
+      if(now-inboxFocusSyncAt.current<3000)return;
+      inboxFocusSyncAt.current=now;
+      void startImportJob("正在同步浏览器 Inbox…",()=>api.startSyncSources([inbox.id]));
+    };
+    window.addEventListener("focus",focus);
+    return()=>window.removeEventListener("focus",focus);
+  },[sourceFolders,importActive,startImportJob]);
   const cancelBackground=useCallback(async()=>{
     if(importActive)await cancelImportJob();
     if(semanticActive)await cancelSemanticIndex();
@@ -441,6 +457,16 @@ export default function App(){
   const saveCurrentView=async()=>{const name=window.prompt("保存当前筛选为","");if(!name?.trim())return;try{await api.saveFilter(name.trim(),filter);await refreshSavedFilters();setStatus("筛选视图已保存")}catch(e){setStatus("保存筛选失败："+String(e))}};
   const applySavedView=(view:SavedFilter)=>{setFilter({...view.filter});setStatus("已应用保存视图："+view.name)};
   const deleteSavedView=async(id:number)=>{try{await api.deleteSavedFilter(id);await refreshSavedFilters();await refreshManager()}catch(e){setStatus("删除保存视图失败："+String(e))}};
+  const ensureReferenceInbox=async()=>{
+    if(!isTauri){setStatus("浏览器 Inbox 仅在桌面版中可用");return}
+    try{
+      const inbox=await api.ensureReferenceInbox();
+      await refreshSources();
+      setStatus("浏览器 Inbox 已准备："+inbox.path);
+      if(!importActive)await startImportJob("正在同步浏览器 Inbox…",()=>api.startSyncSources([inbox.id]));
+    }catch(e){setStatus("准备浏览器 Inbox 失败："+String(e))}
+  };
+  const openReferenceUrl=async(url:string)=>{try{await api.openReferenceUrl(url)}catch(e){setStatus("打开来源链接失败："+String(e))}};
   const addSourceFolder=async()=>{
     if(!isTauri){setStatus("来源目录仅在桌面版中可用");return}
     const picked=await open({directory:true,multiple:false});if(!picked||Array.isArray(picked))return;
@@ -613,10 +639,10 @@ export default function App(){
       <div className="splitter" onPointerDown={drag("left")}/>
       <PreviewPane asset={current} src={preview} mode={previewMode} onMode={setPreviewMode} onImport={chooseImages} onOpen={openAsset} onFolder={openAssetFolder} onCopyImage={copyAssetImage} onCopyPath={copyAssetPath} onSaveAs={saveAssetAs} onFavorite={toggleAssetFavorite} onFindSimilar={findSimilarAsset}/>
       <div className="splitter" onPointerDown={drag("right")}/>
-      <InspectorPane asset={current} tab={tab} onTab={setTab} visualDna={visualDna} onSaveVisualDna={saveVisualDna} imagePromptAnalysis={imagePromptAnalysis} imagePromptLoading={imagePromptLoading} visionModel={visionSettings?.model||""} onAnalyzeImage={analyzeCurrentImage} onApplyAnalysisDna={()=>void applyAnalysisDna(false)} onOverwriteAnalysisDna={()=>void applyAnalysisDna(true)} onUseAnalysisPrompt={useAnalysisPrompt} onSaveAnalysisRevision={()=>void saveAnalysisRevision()} onOpenVisionSettings={openManager} remixDraft={remixDraft} remixSources={remixSources} remixPrompt={remixPrompt} onRemixPrompt={setRemixPrompt} onAddRemixSource={openRemixSourcePicker} onRemoveRemixSource={removeRemixSource} onToggleRemixField={toggleRemixField} onComposeRemix={composeRemix} onSaveRemix={()=>void saveRemix()} onCopyRemix={copyRemix} onImportRemixResult={()=>void importRemixResult()} onResetRemix={()=>void resetRemix()} prompt={prompt} onPrompt={setPrompt} negative={negative} onNegative={setNegative} model={model} onModel={setModel} tagsText={tagsText} onTagsText={setTagsText} lineage={lineage} compareRecord={compareRecord} compareParentSrc={compareParentSrc} compareCurrentSrc={compareCurrentSrc} sessions={sessions} assetSession={assetSession} onCompare={compare} onCopy={copyPrompt} onSaveRevision={saveRevision} onHistory={openHistory} onFavorite={toggleFavorite} onFindSimilar={findSimilar} onRescan={rescan} onSidecar={exportSidecar} onCollection={openCollection} onRemove={()=>setModal({kind:"remove"})} onImportDerivative={importDerivative} onLinkParent={openParentPicker} onSetSession={setSession} onCreateSession={createSession} onEditSessionNote={editSessionNote} onEditRelationNote={editRelationNote} promptRef={promptRef}/>
+      <InspectorPane asset={current} tab={tab} references={referenceSources} onOpenReference={openReferenceUrl} onTab={setTab} visualDna={visualDna} onSaveVisualDna={saveVisualDna} imagePromptAnalysis={imagePromptAnalysis} imagePromptLoading={imagePromptLoading} visionModel={visionSettings?.model||""} onAnalyzeImage={analyzeCurrentImage} onApplyAnalysisDna={()=>void applyAnalysisDna(false)} onOverwriteAnalysisDna={()=>void applyAnalysisDna(true)} onUseAnalysisPrompt={useAnalysisPrompt} onSaveAnalysisRevision={()=>void saveAnalysisRevision()} onOpenVisionSettings={openManager} remixDraft={remixDraft} remixSources={remixSources} remixPrompt={remixPrompt} onRemixPrompt={setRemixPrompt} onAddRemixSource={openRemixSourcePicker} onRemoveRemixSource={removeRemixSource} onToggleRemixField={toggleRemixField} onComposeRemix={composeRemix} onSaveRemix={()=>void saveRemix()} onCopyRemix={copyRemix} onImportRemixResult={()=>void importRemixResult()} onResetRemix={()=>void resetRemix()} prompt={prompt} onPrompt={setPrompt} negative={negative} onNegative={setNegative} model={model} onModel={setModel} tagsText={tagsText} onTagsText={setTagsText} lineage={lineage} compareRecord={compareRecord} compareParentSrc={compareParentSrc} compareCurrentSrc={compareCurrentSrc} sessions={sessions} assetSession={assetSession} onCompare={compare} onCopy={copyPrompt} onSaveRevision={saveRevision} onHistory={openHistory} onFavorite={toggleFavorite} onFindSimilar={findSimilar} onRescan={rescan} onSidecar={exportSidecar} onCollection={openCollection} onRemove={()=>setModal({kind:"remove"})} onImportDerivative={importDerivative} onLinkParent={openParentPicker} onSetSession={setSession} onCreateSession={createSession} onEditSessionNote={editSessionNote} onEditRelationNote={editRelationNote} promptRef={promptRef}/>
     </main>
     <footer className="statusbar glass-surface"><span className={`runtime-dot ${isTauri?"native":"preview"}`}/><strong>{isTauri?"桌面版":"浏览器预览"}</strong><span>v{version}</span><span className="status-message">{status}</span>{importActive?<><progress max={Math.max(1,importProgress.total)} value={importProgress.processed}/><button onClick={cancelImportJob}>取消导入</button></>:null}{semanticActive?<><progress max={Math.max(1,semanticProgress.total)} value={semanticProgress.processed}/><button onClick={cancelSemanticIndex}>取消索引</button></>:null}<span>已加载 {assets.length}/{total}</span><button onClick={repairMissing} title="根据文件指纹查找移动后的文件">修复缺失文件</button><span className="shortcut">←→ / J K 切图 · F 收藏 · F6 提示词 · F7 预览 · Ctrl+S 保存</span></footer>
-    <LibraryManager open={managerOpen} backups={backups} tags={facets.tags} collections={facets.collections} duplicates={duplicates} modelAliases={modelAliases} savedFilters={savedFilters} sourceFolders={sourceFolders} sourceSyncing={importActive} health={health} diagnostics={diagnostics} visionSettings={visionSettings} semanticStatus={semanticStatus} semanticIndexing={semanticActive} semanticProgress={semanticProgress} onRebuildSemantic={rebuildSemantic} onCancelSemantic={cancelSemanticIndex} onClearSemantic={clearSemantic} onDeleteSemanticModels={deleteSemanticModels} onClose={()=>setManagerOpen(false)} onBackup={createBackup} onRestore={restoreBackup} onOpenDataFolder={openDataFolder} onOpenLogsFolder={openLogsFolder} onSaveVisionSettings={saveVisionProvider} onSetVisionApiKey={setVisionKey} onRenameTag={renameTag} onDeleteTag={deleteTag} onRenameCollection={renameCollection} onDeleteCollection={deleteCollection} onUpsertModelAlias={upsertModelAlias} onDeleteModelAlias={deleteModelAlias} onDeleteSavedFilter={deleteSavedView} onAddSourceFolder={addSourceFolder} onRemoveSourceFolder={removeSourceFolder} onToggleSourceAutoSync={toggleSourceAutoSync} onSyncSourceFolders={syncSourceFolders}/>
+    <LibraryManager open={managerOpen} backups={backups} tags={facets.tags} collections={facets.collections} duplicates={duplicates} modelAliases={modelAliases} savedFilters={savedFilters} sourceFolders={sourceFolders} sourceSyncing={importActive} health={health} diagnostics={diagnostics} visionSettings={visionSettings} semanticStatus={semanticStatus} semanticIndexing={semanticActive} semanticProgress={semanticProgress} onRebuildSemantic={rebuildSemantic} onCancelSemantic={cancelSemanticIndex} onClearSemantic={clearSemantic} onDeleteSemanticModels={deleteSemanticModels} onClose={()=>setManagerOpen(false)} onBackup={createBackup} onRestore={restoreBackup} onOpenDataFolder={openDataFolder} onOpenLogsFolder={openLogsFolder} onSaveVisionSettings={saveVisionProvider} onSetVisionApiKey={setVisionKey} onRenameTag={renameTag} onDeleteTag={deleteTag} onRenameCollection={renameCollection} onDeleteCollection={deleteCollection} onUpsertModelAlias={upsertModelAlias} onDeleteModelAlias={deleteModelAlias} onDeleteSavedFilter={deleteSavedView} onEnsureReferenceInbox={ensureReferenceInbox} onAddSourceFolder={addSourceFolder} onRemoveSourceFolder={removeSourceFolder} onToggleSourceAutoSync={toggleSourceAutoSync} onSyncSourceFolders={syncSourceFolders}/>
     <ParentPicker open={parentOpen} query={parentQuery} results={parentResults} choice={parentChoice} loading={parentLoading} title={parentMode==="remix"?"添加 Remix 参考图":"关联父图"} description={parentMode==="remix"?"选择一张资料库图片，把其中的 Visual DNA 片段加入当前 Remix 草稿。":"搜索整个 ImageLore 资料库，选择来源或参考父图。"} confirmLabel={parentMode==="remix"?"加入 Remix":"建立关联"} onQuery={setParentQuery} onChoice={setParentChoice} onClose={()=>setParentOpen(false)} onConfirm={confirmParent}/>
     <AppDialogs modal={modal} assets={assets} currentId={current?.id} text={dialogText} setText={setDialogText} choice={dialogChoice} setChoice={setDialogChoice} onClose={()=>setModal(null)} onConfirm={confirmModal}/>
   </div>
