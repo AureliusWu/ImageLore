@@ -503,9 +503,16 @@ pub fn make_portable_id(seed:&str)->String{
 pub fn asset_by_portable_id(conn:&Connection,portable_id:&str)->Result<Option<i64>,String>{
     if portable_id.trim().is_empty(){return Ok(None)}
     conn.query_row("SELECT id FROM assets WHERE portable_id=?1",params![portable_id],|r|r.get(0)).optional().map_err(|e|e.to_string())
+}
+
+#[cfg(test)]
+mod visual_dna_search_tests{
+    use super::*;
+
     #[test]
     fn keyword_search_finds_visual_dna(){
-        let conn=test_conn();
+        let conn=Connection::open_in_memory().unwrap();
+        conn.execute_batch(include_str!("../schema.sql")).unwrap();
         let id=1i64;
         conn.execute(
             "INSERT INTO assets(id,path,name,created_at,updated_at) VALUES(?1,'dna.png','DNA Test',1,1)",params![id]
@@ -514,7 +521,10 @@ pub fn asset_by_portable_id(conn:&Connection,portable_id:&str)->Result<Option<i6
             "INSERT INTO prompt_state(asset_id,prompt,negative_prompt,model,updated_at) VALUES(?1,'','','',1)",params![id]
         ).unwrap();
         crate::visual_dna::upsert(&conn,id,&crate::models::VisualDnaPatch{
-            environment:"千禧年电脑房".into(),lighting:"CRT 蓝绿色冷光".into(),style:"日系写实摄影".into(),..Default::default()
+            environment:"千禧年电脑房".into(),
+            lighting:"CRT 蓝绿色冷光".into(),
+            style:"日系写实摄影".into(),
+            ..Default::default()
         }).unwrap();
         reindex_asset(&conn,id).unwrap();
         let filter=LibraryFilter{query:"千禧年电脑房".into(),view:"all".into(),..Default::default()};
@@ -522,5 +532,4 @@ pub fn asset_by_portable_id(conn:&Connection,portable_id:&str)->Result<Option<i6
         assert_eq!(page.total,1);
         assert_eq!(page.items[0].id,id);
     }
-
 }
