@@ -89,6 +89,21 @@ export function PreviewPane({asset,src,mode,onMode,onImport,onOpen,onFolder,onCo
       {src?(mode==="actual"?<div className="image-zoom-shell" style={{width:Math.max(1,natural.width*zoom/100),height:Math.max(1,natural.height*zoom/100)}}>{image}</div>:image):<div className="empty-state"><div className="empty-orb">✦</div><strong>从第一张图片开始建立你的生成记忆</strong><span>导入图片、记录提示词，ImageLore 会把与它有关的上下文保存下来。</span><button className="button primary" onClick={onImport}>＋ 导入图片</button></div>}
     </div>
     {menu&&asset?<AssetContextMenu asset={asset as AssetSummary} x={menu.x} y={menu.y} onClose={()=>setMenu(null)} onOpen={onOpen} onFolder={onFolder} onCopyImage={onCopyImage} onCopyPath={onCopyPath} onSaveAs={onSaveAs} onFavorite={onFavorite} onFindSimilar={onFindSimilar}/>:null}
-    {asset?<div className="preview-foot"><span className="metadata-pill">{metadataLabel(asset.metadata_type||"manual")}</span><span>{bytes(asset.file_size)}</span><span>{asset.model||"未记录模型"}</span><span className="path" title={asset.path}>{asset.path}</span><button onClick={()=>onOpen(asset)} disabled={!!asset.missing}>打开图片</button><button onClick={()=>onFolder(asset)} disabled={!!asset.missing}>打开所在文件夹</button></div>:null}
+    {asset?<div className="preview-foot">
+      <div className="preview-meta">
+        <span className="metadata-pill">{metadataLabel(asset.metadata_type||"manual")}</span>
+        <span className="preview-size">{bytes(asset.file_size)}</span>
+        <span className="preview-model" title={asset.model||"未记录模型"}>{asset.model||"未记录模型"}</span>
+        <span className="path" title={asset.path}>{asset.path}</span>
+      </div>
+      <div className="preview-actionbar" aria-label="图片快捷操作">
+        <button className={asset.favorite?"active":""} onClick={()=>onFavorite(asset)} title={asset.favorite?"取消收藏 (F)":"收藏 (F)"}>{asset.favorite?"★":"☆"}<span>收藏</span></button>
+        <button onClick={()=>onCopyPath(asset)} title="复制文件路径">⧉<span>路径</span></button>
+        <button onClick={()=>onCopyImage(asset)} disabled={!!asset.missing} title="复制图像">▣<span>图像</span></button>
+        <button onClick={()=>onFindSimilar(asset)} title="查找视觉相似图片">◎<span>相似</span></button>
+        <button onClick={()=>onFolder(asset)} disabled={!!asset.missing} title="打开文件所在位置">⌖<span>定位</span></button>
+        <button onClick={()=>onOpen(asset)} disabled={!!asset.missing} title="打开图片">↗<span>打开</span></button>
+      </div>
+    </div>:null}
   </section>
 }

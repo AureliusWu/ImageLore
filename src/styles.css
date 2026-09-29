@@ -195,3 +195,24 @@
   .lineage-actions{grid-template-columns:1fr}
   .info-row{grid-template-columns:1fr}.info-row strong{text-align:left;word-break:break-word}
 }
+
+/* v0.21 preview quick action bar */
+.preview-pane{container-type:inline-size;container-name:preview;grid-template-rows:58px minmax(0,1fr) 48px}
+.preview-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 10px}
+.preview-meta{display:flex;align-items:center;gap:8px;min-width:0;flex:1;color:#728c97}
+.preview-meta .path{min-width:0;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.preview-model{max-width:150px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.preview-actionbar{display:flex;align-items:center;gap:4px;flex:0 0 auto}
+.preview-actionbar button{height:30px;display:flex;align-items:center;gap:4px;padding:0 7px;border:1px solid #d3e5e4;border-radius:8px;background:rgba(251,254,253,.9);color:#39798d;font-size:10px;white-space:nowrap}
+.preview-actionbar button:hover:not(:disabled){background:#fff;border-color:#b9d9df}
+.preview-actionbar button.active{color:#aa791d;background:#fff9df;border-color:#ead799}
+.preview-actionbar button span{font-size:9px}
+@container preview (max-width:720px){
+  .preview-size,.preview-model{display:none}
+  .preview-actionbar button span{display:none}
+  .preview-actionbar button{width:30px;justify-content:center;padding:0}
+}
+@container preview (max-width:480px){
+  .preview-meta .path{display:none}
+  .preview-meta{flex:0 0 auto}
+}
