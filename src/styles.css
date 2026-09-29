@@ -238,3 +238,12 @@
 .dna-field textarea:focus{border-color:#7dc0cf;box-shadow:0 0 0 2px rgba(77,174,196,.1)}
 .dna-actions{display:flex;justify-content:flex-end;gap:6px;padding-top:3px}.dna-actions button{height:31px;padding:0 9px;border:1px solid #cee1df;border-radius:8px;background:#fbfefd;color:#547985;font-size:9px}.dna-actions .primary{color:#fff;background:#58ad52;border-color:#4c9d48}
 @container inspector (max-width:360px){.dna-grid{grid-template-columns:1fr}.dna-hero{display:block}.dna-source{display:inline-block;margin-top:7px}}
+
+.prompt-card{overflow:hidden;border:1px solid #cbdeda;border-radius:14px;background:linear-gradient(145deg,rgba(255,255,255,.96),rgba(240,249,244,.93));box-shadow:0 4px 14px rgba(46,105,120,.07)}
+.prompt-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:9px;padding:11px 12px 9px;border-bottom:1px solid #dfebe8}
+.prompt-card-head>div{min-width:0}.prompt-card-head .eyebrow{display:block;font-size:7px;letter-spacing:.15em;color:#4c96a6;font-weight:800}.prompt-card-head strong{display:block;margin-top:3px;font-size:11px;color:#315d6c;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.prompt-card-meta{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1px;background:#deebe8;border-bottom:1px solid #deebe8}
+.prompt-card-meta>div{min-width:0;padding:8px;background:rgba(252,255,253,.96)}.prompt-card-meta span,.prompt-card-prompt>span,.prompt-card-dna>span{display:block;font-size:7px;font-weight:800;letter-spacing:.08em;color:#7b969d}.prompt-card-meta strong{display:block;margin-top:3px;font-size:9px;color:#416b77;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.prompt-card-prompt,.prompt-card-dna{padding:9px 11px;border-bottom:1px solid #e3ece9}.prompt-card-dna{border-bottom:0}.prompt-card-prompt p,.prompt-card-dna p{margin:4px 0 0;font-size:9px;line-height:1.55;color:#526f79}
+.prompt-card-dna>div{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}.prompt-card-dna>div>span{display:inline-flex;align-items:center;gap:4px;max-width:100%;padding:4px 6px;border:1px solid #d5e6df;border-radius:8px;background:#f8fcf6;color:#587673;font-size:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.prompt-card-dna b{color:#3f7a82;font-size:7px}
+@container inspector (max-width:340px){.prompt-card-meta{grid-template-columns:repeat(2,minmax(0,1fr))}}

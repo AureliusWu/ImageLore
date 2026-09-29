@@ -33,6 +33,13 @@ export function InspectorPane({asset,tab,onTab,visualDna,onSaveVisualDna,prompt,
 }){
   const generation=useMemo<GenerationInfo>(()=>{try{return asset?JSON.parse(asset.generation_json||"{}"):{} }catch{return{}}},[asset?.generation_json]);
   const[dnaDraft,setDnaDraft]=useState<VisualDnaPatch>(emptyDna);
+  const promptSummary=(prompt||"").trim().replace(/\s+/g," ").slice(0,180);
+  const dnaSummary=[
+    ["主体",visualDna?.subject],["角色",visualDna?.character],["服装",visualDna?.outfit],["姿势",visualDna?.pose],
+    ["构图",visualDna?.composition],["镜头",visualDna?.camera],["光线",visualDna?.lighting],["环境",visualDna?.environment],
+    ["色彩",visualDna?.palette],["风格",visualDna?.style]
+  ].filter(([,value])=>Boolean(value?.trim())).slice(0,6) as Array<[string,string]>;
+  const aspect=asset?.width&&asset.height?`${asset.width}:${asset.height}`:"—";
   useEffect(()=>{
     setDnaDraft(visualDna?{
       subject:visualDna.subject,character:visualDna.character,outfit:visualDna.outfit,pose:visualDna.pose,
@@ -56,7 +63,13 @@ export function InspectorPane({asset,tab,onTab,visualDna,onSaveVisualDna,prompt,
         <button className="danger-link" disabled={!asset} onClick={onRemove}>从 ImageLore 中移除这条记录</button>
       </>:null}
       {tab==="dna"?<div className="dna-panel">
-        <div className="dna-hero"><div><span className="eyebrow">VISUAL DNA</span><strong>把“这张图为什么像它”变成可搜索的结构</strong><p>这些字段会进入本地关键词索引，也会随 Sidecar 保存。下一阶段的 Image-to-Prompt 会自动填充这里。</p></div><span className="dna-source">{sourceLabel(visualDna?.source||dnaDraft.source)}</span></div>
+        <div className="prompt-card">
+          <div className="prompt-card-head"><div><span className="eyebrow">PROMPT CARD</span><strong>{asset?.name||"未选择图片"}</strong></div><span className="dna-source">{sourceLabel(visualDna?.source||dnaDraft.source)}</span></div>
+          <div className="prompt-card-meta"><div><span>MODEL</span><strong>{model||asset?.model||"—"}</strong></div><div><span>SIZE</span><strong>{asset?.width&&asset.height?`${asset.width}×${asset.height}`:"—"}</strong></div><div><span>RATIO</span><strong>{aspect}</strong></div><div><span>LINEAGE</span><strong>{lineage.parents.length+" ↑ / "+lineage.children.length+" ↓"}</strong></div></div>
+          <div className="prompt-card-prompt"><span>PROMPT</span><p>{promptSummary||"当前没有 Prompt。"}</p></div>
+          <div className="prompt-card-dna"><span>VISUAL DNA</span>{dnaSummary.length?<div>{dnaSummary.map(([label,value])=><span key={label}><b>{label}</b>{value}</span>)}</div>:<p>还没有结构化视觉信息。可以在下面手动记录；下一阶段会由 Image-to-Prompt 自动填充。</p>}</div>
+        </div>
+        <div className="dna-hero"><div><span className="eyebrow">VISUAL DNA</span><strong>把“这张图为什么像它”变成可搜索的结构</strong><p>这些字段会进入本地关键词索引，也会随 Sidecar 保存；用于半年后仍能理解这张图的主体、构图、光线和风格。</p></div></div>
         <div className="dna-grid">{dnaFields.map(([key,label,hint])=><label className="dna-field" key={key}><span>{label}<small>{hint}</small></span><textarea disabled={!asset} value={dnaDraft[key]} onChange={e=>updateDna(key,e.target.value)} rows={2} placeholder={"记录"+label+"…"}/></label>)}</div>
         <div className="dna-actions"><button disabled={!asset} onClick={clearDna}>清空草稿</button><button className="button primary" disabled={!asset} onClick={()=>void onSaveVisualDna(dnaDraft)}>保存 Visual DNA</button></div>
       </div>:null}
