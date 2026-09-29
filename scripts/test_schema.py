@@ -12,7 +12,7 @@ con.execute("INSERT INTO tags(name,created_at) VALUES(?,?)",('character',now))
 tid=con.execute('select id from tags').fetchone()[0]
 con.execute("INSERT INTO asset_tags(asset_id,tag_id,created_at) VALUES(?,?,?)",(aid,tid,now))
 con.execute("INSERT INTO visual_dna(asset_id,subject,lighting,environment,style,search_text,source,updated_at) VALUES(?,?,?,?,?,?,?,?)",(aid,'adult blue-haired character','soft window light','millennium computer room','photoreal editorial','adult blue-haired character soft window light millennium computer room photoreal editorial','manual',now))
-con.execute("INSERT INTO asset_search(asset_id,name,prompt,negative_prompt,model,tags,visual_dna) VALUES(?,?,?,?,?,?,?)",(aid,'Blue Character.png','blue hair marine character','low quality','GPT Image','character','adult blue-haired character soft window light millennium computer room photoreal editorial'))
+con.execute("INSERT INTO asset_search(asset_id,name,prompt,negative_prompt,model,tags,visual_dna,reference) VALUES(?,?,?,?,?,?,?,?)",(aid,'Blue Character.png','blue hair marine character','low quality','GPT Image','character','adult blue-haired character soft window light millennium computer room photoreal editorial','PromptsRef inspiration browser-extension'))
 hit=con.execute("SELECT asset_id FROM asset_search WHERE asset_search MATCH ?",('"blue"*',)).fetchone()
 assert hit and hit[0]==aid
 con.execute("INSERT INTO asset_cjk_search(rowid,asset_id,text) VALUES(?,?,?)",(aid,aid,'蓝色大肥鱼 夜晚卧室 海洋少女'))
@@ -32,8 +32,9 @@ con.execute("INSERT INTO generation_index(asset_id,seed,steps,sampler,scheduler,
 con.execute("INSERT INTO semantic_embeddings(asset_id,model_id,dimensions,vector,fingerprint,indexed_at) VALUES(?,?,?,?,?,?)",(aid,'clip-vit-b32-qdrant-v1',2,b'12345678','schema-fp',now))
 con.execute("UPDATE vision_settings SET model=?,updated_at=? WHERE id=1",('vision-model',now))
 con.execute("INSERT INTO image_prompt_analyses(asset_id,provider,model,summary,prompt,visual_dna_json,created_at) VALUES(?,?,?,?,?,?,?)",(aid,'openai-compatible','vision-model','summary','generated prompt','{}',now))
+con.execute("INSERT INTO reference_sources(asset_id,source_url,page_url,page_title,source_type,metadata_json,captured_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",(aid,'https://cdn.example/a.png','https://promptsref.com/post','PromptsRef inspiration','browser-extension','{"intent":"remix"}',now,now,now))
 con.commit()
-assert con.execute("select value from app_meta where key='schema_version'").fetchone()[0]=='10'
+assert con.execute("select value from app_meta where key='schema_version'").fetchone()[0]=='11'
 assert con.execute("select portable_id from assets where id=?",(aid,)).fetchone()[0]=='il-schema-smoke'
 assert con.execute("select count(*) from generation_sessions").fetchone()[0]==1
 assert con.execute("select count(*) from saved_filters").fetchone()[0]==1
@@ -44,7 +45,8 @@ assert con.execute("select value from semantic_settings where key='enabled'").fe
 assert con.execute("select environment from visual_dna where asset_id=?",(aid,)).fetchone()[0]=='millennium computer room'
 assert con.execute("select model from vision_settings where id=1").fetchone()[0]=='vision-model'
 assert con.execute("select prompt from image_prompt_analyses where asset_id=?",(aid,)).fetchone()[0]=='generated prompt'
+assert con.execute("select page_title from reference_sources where asset_id=?",(aid,)).fetchone()[0]=='PromptsRef inspiration'
 dna_hit=con.execute("SELECT asset_id FROM asset_search WHERE asset_search MATCH ?",('"millennium"*',)).fetchone()
 assert dna_hit and dna_hit[0]==aid
 con.close()
-print('ImageLore v10 fresh schema: PASS')
+print('ImageLore v11 fresh schema: PASS')

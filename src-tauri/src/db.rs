@@ -241,9 +241,9 @@ fn filter_parts(filter: &LibraryFilter) -> (String, String, Vec<SqlValue>) {
                 args.push(SqlValue::Text(trigram));
             }
             for term in query.split_whitespace().filter(|x|!x.is_empty()){
-                where_parts.push("(a.name LIKE ? OR COALESCE(ps.prompt,'') LIKE ? OR COALESCE(ps.negative_prompt,'') LIKE ? OR COALESCE(ps.model,'') LIKE ? OR EXISTS(SELECT 1 FROM asset_tags sq_at JOIN tags sq_t ON sq_t.id=sq_at.tag_id WHERE sq_at.asset_id=a.id AND sq_t.name LIKE ?) OR COALESCE(vd.search_text,'') LIKE ? OR EXISTS(SELECT 1 FROM reference_sources rs WHERE rs.asset_id=a.id AND (rs.page_title LIKE ? OR rs.page_url LIKE ? OR rs.source_url LIKE ?)))".into());
+                where_parts.push("(a.name LIKE ? OR COALESCE(ps.prompt,'') LIKE ? OR COALESCE(ps.negative_prompt,'') LIKE ? OR COALESCE(ps.model,'') LIKE ? OR EXISTS(SELECT 1 FROM asset_tags sq_at JOIN tags sq_t ON sq_t.id=sq_at.tag_id WHERE sq_at.asset_id=a.id AND sq_t.name LIKE ?) OR COALESCE(vd.search_text,'') LIKE ? OR EXISTS(SELECT 1 FROM reference_sources rs WHERE rs.asset_id=a.id AND (rs.page_title LIKE ? OR rs.page_url LIKE ? OR rs.source_url LIKE ? OR rs.source_type LIKE ? OR rs.metadata_json LIKE ?)))".into());
                 let needle=SqlValue::Text(format!("%{}%",term));
-                for _ in 0..9{args.push(needle.clone())}
+                for _ in 0..11{args.push(needle.clone())}
             }
         }else{
             joins.push_str(" JOIN asset_search ON asset_search.asset_id=a.id ");

@@ -342,11 +342,18 @@ fn migrate_v11(conn:&Connection)->Result<(),String>{
            tokenize='unicode61 remove_diacritics 2'
          );"
     ).map_err(|e|e.to_string())?;
-    let ids:Vec<i64>={
-        let mut st=conn.prepare("SELECT id FROM assets ORDER BY id").map_err(|e|e.to_string())?;
-        st.query_map([],|r|r.get(0)).map_err(|e|e.to_string())?.filter_map(Result::ok).collect()
-    };
-    for id in ids{crate::db::reindex_asset(conn,id)?;}
+    let can_reindex=
+        has_column(conn,"assets","name")? &&
+        has_table(conn,"prompt_state")? &&
+        has_table(conn,"tags")? &&
+        has_table(conn,"asset_tags")?;
+    if can_reindex{
+        let ids:Vec<i64>={
+            let mut st=conn.prepare("SELECT id FROM assets ORDER BY id").map_err(|e|e.to_string())?;
+            st.query_map([],|r|r.get(0)).map_err(|e|e.to_string())?.filter_map(Result::ok).collect()
+        };
+        for id in ids{crate::db::reindex_asset(conn,id)?;}
+    }
     Ok(())
 }
 
@@ -433,6 +440,26 @@ pub fn apply(conn:&Connection)->Result<(),String>{
 mod tests{
 
     #[test]
+    fn migration_v11_adds_reference_sources(){
+        let conn=Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE app_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+             INSERT INTO app_meta VALUES('schema_version','10');
+             CREATE TABLE assets(id INTEGER PRIMARY KEY);
+             INSERT INTO assets(id) VALUES(1);"
+        ).unwrap();
+        apply(&conn).unwrap();
+        let version:String=conn.query_row("SELECT value FROM app_meta WHERE key='schema_version'",[],|r|r.get(0)).unwrap();
+        assert_eq!(version,"11");
+        conn.execute(
+            "INSERT INTO reference_sources(asset_id,source_url,page_url,page_title,source_type,metadata_json,captured_at,created_at,updated_at)
+             VALUES(1,'https://cdn.example/a.png','https://example.test/post','Inspiration','browser-extension','{}',1,1,1)",[]
+        ).unwrap();
+        let title:String=conn.query_row("SELECT page_title FROM reference_sources WHERE asset_id=1",[],|r|r.get(0)).unwrap();
+        assert_eq!(title,"Inspiration");
+    }
+
+    #[test]
     fn migration_v10_adds_remix_tables(){
         let conn=Connection::open_in_memory().unwrap();
         conn.execute_batch(
@@ -443,7 +470,7 @@ mod tests{
         ).unwrap();
         apply(&conn).unwrap();
         let version:String=conn.query_row("SELECT value FROM app_meta WHERE key='schema_version'",[],|r|r.get(0)).unwrap();
-        assert_eq!(version,"10");
+        assert_eq!(version,"11");
         conn.execute("INSERT INTO remix_drafts(base_asset_id,prompt,created_at,updated_at) VALUES(1,'p',1,1)",[]).unwrap();
         let draft=conn.last_insert_rowid();
         conn.execute("INSERT INTO remix_sources(draft_id,asset_id,fields_json,created_at) VALUES(?1,1,'[\"subject\"]',1)",params![draft]).unwrap();
@@ -461,7 +488,7 @@ mod tests{
         ).unwrap();
         apply(&conn).unwrap();
         let version:String=conn.query_row("SELECT value FROM app_meta WHERE key='schema_version'",[],|r|r.get(0)).unwrap();
-        assert_eq!(version,"10");
+        assert_eq!(version,"11");
         let base:String=conn.query_row("SELECT base_url FROM vision_settings WHERE id=1",[],|r|r.get(0)).unwrap();
         assert_eq!(base,"https://api.openai.com/v1");
         conn.execute("INSERT INTO assets(id) VALUES(1)",[]).unwrap();
@@ -498,7 +525,7 @@ mod tests{
         ).unwrap();
         apply(&conn).unwrap();
         let version:String=conn.query_row("SELECT value FROM app_meta WHERE key='schema_version'",[],|r|r.get(0)).unwrap();
-        assert_eq!(version,"10");
+        assert_eq!(version,"11");
         let hit:i64=conn.query_row(
             "SELECT asset_id FROM asset_cjk_search WHERE asset_cjk_search MATCH ?1",
             params!["\"蓝色大肥鱼\""],
@@ -517,7 +544,7 @@ mod tests{
         ).unwrap();
         apply(&conn).unwrap();
         let version:String=conn.query_row("SELECT value FROM app_meta WHERE key='schema_version'",[],|r|r.get(0)).unwrap();
-        assert_eq!(version,"10");
+        assert_eq!(version,"11");
         let enabled:String=conn.query_row("SELECT value FROM semantic_settings WHERE key='enabled'",[],|r|r.get(0)).unwrap();
         assert_eq!(enabled,"0");
         conn.execute("INSERT INTO assets(id) VALUES(1)",[]).unwrap();
@@ -539,7 +566,7 @@ mod tests{
         ).unwrap();
         apply(&conn).unwrap();
         let version:String=conn.query_row("SELECT value FROM app_meta WHERE key='schema_version'",[],|r|r.get(0)).unwrap();
-        assert_eq!(version,"10");
+        assert_eq!(version,"11");
         let row:(String,i64,String,f64)=conn.query_row(
             "SELECT seed,steps,sampler,cfg_scale FROM generation_index WHERE asset_id=1",[],
             |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))
@@ -559,7 +586,7 @@ mod tests{
         ).unwrap();
         apply(&conn).unwrap();
         let version:String=conn.query_row("SELECT value FROM app_meta WHERE key='schema_version'",[],|r|r.get(0)).unwrap();
-        assert_eq!(version,"10");
+        assert_eq!(version,"11");
         conn.execute(
             "INSERT INTO source_folders(path,name,created_at,updated_at) VALUES('D:/AI','AI',1,1)",[]
         ).unwrap();
@@ -613,7 +640,7 @@ mod tests{
         ).unwrap();
         apply(&conn).unwrap();
         let version:String=conn.query_row("SELECT value FROM app_meta WHERE key='schema_version'",[],|r|r.get(0)).unwrap();
-        assert_eq!(version,"10");
+        assert_eq!(version,"11");
         conn.execute(
             "INSERT INTO visual_dna(asset_id,environment,style,search_text,source,updated_at) VALUES(1,'千禧年电脑房','日系写实','千禧年电脑房 日系写实','manual',1)",[]
         ).unwrap();
