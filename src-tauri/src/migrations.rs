@@ -350,7 +350,9 @@ fn migrate_v11(conn:&Connection)->Result<(),String>{
     if can_reindex{
         let ids:Vec<i64>={
             let mut st=conn.prepare("SELECT id FROM assets ORDER BY id").map_err(|e|e.to_string())?;
-            st.query_map([],|r|r.get(0)).map_err(|e|e.to_string())?.filter_map(Result::ok).collect()
+            let rows=st.query_map([],|r|r.get(0)).map_err(|e|e.to_string())?;
+            let collected=rows.filter_map(Result::ok).collect();
+            collected
         };
         for id in ids{crate::db::reindex_asset(conn,id)?;}
     }
