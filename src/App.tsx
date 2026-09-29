@@ -18,6 +18,7 @@ import { ParentPicker } from "./components/ParentPicker";
 import { useImportJob } from "./hooks/useImportJob";
 import { useSemanticJob } from "./hooks/useSemanticJob";
 import { useCloseGuard } from "./hooks/useCloseGuard";
+import { nextAssetIndex,saveExtension } from "./previewWorkflow";
 
 const PAGE_SIZE=240;
 const emptyFacets:LibraryFacets={tags:[],models:[],collections:[],metadata_types:[],samplers:[],schedulers:[]};
@@ -76,6 +77,7 @@ export default function App(){
   const refreshSeq=useRef(0);
   const selectSeq=useRef(0);
   const autoSyncStarted=useRef(false);
+  const previewAssetId=useRef<number|null>(null);
   const{previewMode,setPreviewMode,leftWidth,rightWidth,drag}=useWorkspaceLayout();
 
   const refreshFacets=useCallback(()=>api.facets().then(setFacets).catch(()=>setFacets(emptyFacets)),[]);
@@ -171,16 +173,25 @@ export default function App(){
     return()=>{cancelled=true};
   },[parentOpen,debouncedParentQuery,current?.id]);
   useEffect(()=>{
-    if(!current){setPreview("");setLineage(emptyLineage);setCompareRecord(null);setAssetSession(null);return}
+    if(!current){previewAssetId.current=null;setPreview("");return}
     let cancelled=false;
     const assetId=current.id;
-    setPreview("");
-    setLineage(emptyLineage);
-    setCompareRecord(null);
+    const changedAsset=previewAssetId.current!==assetId;
+    previewAssetId.current=assetId;
+    if(changedAsset)setPreview("");
     setStatus("正在加载预览…");
     api.preview(assetId,previewMode==="fit"?2200:0,false)
       .then(src=>{if(!cancelled){setPreview(src);setStatus("就绪")}})
-      .catch(e=>{if(!cancelled){setPreview("");setStatus(`预览失败：${String(e)}`)}});
+      .catch(e=>{if(!cancelled){if(changedAsset)setPreview("");setStatus(`预览失败：${String(e)}`)}});
+    return()=>{cancelled=true};
+  },[current?.id,previewMode]);
+
+  useEffect(()=>{
+    if(!current){setLineage(emptyLineage);setCompareRecord(null);setAssetSession(null);return}
+    let cancelled=false;
+    const assetId=current.id;
+    setLineage(emptyLineage);
+    setCompareRecord(null);
     void Promise.all([
       api.lineage(assetId),
       api.assetSession(assetId).catch(()=>null)
@@ -190,7 +201,7 @@ export default function App(){
       if(!cancelled){setLineage(x);setCompareRecord(parent);setAssetSession(session)}
     }).catch(()=>{if(!cancelled){setLineage(emptyLineage);setAssetSession(null)}});
     return()=>{cancelled=true};
-  },[current?.id,previewMode]);
+  },[current?.id]);
 
   useEffect(()=>{
     if(!current||!compareRecord){setCompareParentSrc("");setCompareCurrentSrc("");return}
@@ -311,7 +322,7 @@ export default function App(){
   const saveAssetAs=async(asset:AssetSummary)=>{
     if(asset.missing){setStatus("文件缺失，无法另存为");return}
     if(!isTauri){setStatus("另存为仅在桌面版中可用");return}
-    const extension=asset.name.includes(".")?asset.name.split(".").pop()?.toLowerCase()||"png":(asset.format||"png").toLowerCase();
+    const extension=saveExtension(asset.name,asset.format||"");
     const destination=await save({defaultPath:asset.name,filters:[{name:"图片",extensions:[extension]}]});
     if(!destination)return;
     try{await api.copyAssetTo(asset.id,destination);setStatus("图片副本已保存："+destination)}catch(e){setStatus("另存为失败："+String(e))}
@@ -457,15 +468,15 @@ export default function App(){
         e.preventDefault();if(!assets.length)return;
         const index=current?assets.findIndex(x=>x.id===current.id):-1;
         const forward=key==="arrowright"||key==="j";
-        const next=Math.max(0,Math.min(assets.length-1,index+(forward?1:-1)));
-        if(assets[next]&&assets[next].id!==current?.id)void selectRecord(assets[next].id);
+        const next=nextAssetIndex(assets.length,index,forward?1:-1);
+        if(next>=0&&assets[next]&&assets[next].id!==current?.id)void selectRecord(assets[next].id);
         return;
       }
       if(key==="f"&&!e.ctrlKey&&!e.metaKey&&!e.altKey){e.preventDefault();if(current)void toggleAssetFavorite(current);return}
       if(e.altKey&&(e.key==="ArrowUp"||e.key==="ArrowDown")){
         e.preventDefault();if(!current)return;
-        const i=assets.findIndex(x=>x.id===current.id),n=e.key==="ArrowUp"?Math.max(0,i-1):Math.min(assets.length-1,i+1);
-        if(assets[n])void selectRecord(assets[n].id);
+        const i=assets.findIndex(x=>x.id===current.id),n=nextAssetIndex(assets.length,i,e.key==="ArrowUp"?-1:1);
+        if(n>=0&&assets[n])void selectRecord(assets[n].id);
       }
     };
     window.addEventListener("keydown",handler);return()=>window.removeEventListener("keydown",handler);
