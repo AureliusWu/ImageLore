@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Save to ImageLore",
+  "version": "0.25.0",
+  "description": "把网页图片连同来源信息保存到本地 ImageLore Inbox。",
+  "permissions": ["contextMenus", "downloads", "storage"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Save to ImageLore",
+    "default_popup": "popup.html"
+  }
+}
