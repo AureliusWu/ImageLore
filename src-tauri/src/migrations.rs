@@ -2,7 +2,7 @@ use crate::generation_index;
 use rusqlite::{params,Connection,OptionalExtension};
 use sha2::{Digest,Sha256};
 
-const LATEST:i64=10;
+const LATEST:i64=11;
 
 fn set_version(conn:&Connection,version:i64)->Result<(),String>{
     conn.execute(
@@ -318,6 +318,38 @@ fn migrate_v10(conn:&Connection)->Result<(),String>{
     ).map_err(|e|e.to_string())
 }
 
+
+fn migrate_v11(conn:&Connection)->Result<(),String>{
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS reference_sources (
+           id INTEGER PRIMARY KEY AUTOINCREMENT,
+           asset_id INTEGER NOT NULL,
+           source_url TEXT NOT NULL DEFAULT '',
+           page_url TEXT NOT NULL DEFAULT '',
+           page_title TEXT NOT NULL DEFAULT '',
+           source_type TEXT NOT NULL DEFAULT 'web',
+           metadata_json TEXT NOT NULL DEFAULT '{}',
+           captured_at INTEGER NOT NULL DEFAULT 0,
+           created_at INTEGER NOT NULL,
+           updated_at INTEGER NOT NULL,
+           UNIQUE(asset_id,source_url,page_url),
+           FOREIGN KEY(asset_id) REFERENCES assets(id) ON DELETE CASCADE
+         );
+         CREATE INDEX IF NOT EXISTS idx_reference_asset ON reference_sources(asset_id,captured_at DESC,id DESC);
+         DROP TABLE IF EXISTS asset_search;
+         CREATE VIRTUAL TABLE asset_search USING fts5(
+           asset_id UNINDEXED,name,prompt,negative_prompt,model,tags,visual_dna,reference,
+           tokenize='unicode61 remove_diacritics 2'
+         );"
+    ).map_err(|e|e.to_string())?;
+    let ids:Vec<i64>={
+        let mut st=conn.prepare("SELECT id FROM assets ORDER BY id").map_err(|e|e.to_string())?;
+        st.query_map([],|r|r.get(0)).map_err(|e|e.to_string())?.filter_map(Result::ok).collect()
+    };
+    for id in ids{crate::db::reindex_asset(conn,id)?;}
+    Ok(())
+}
+
 pub fn apply(conn:&Connection)->Result<(),String>{
     conn.execute_batch("CREATE TABLE IF NOT EXISTS app_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);").map_err(|e|e.to_string())?;
     let current:Option<String>=conn.query_row(
@@ -386,6 +418,11 @@ pub fn apply(conn:&Connection)->Result<(),String>{
     if version<10{
         migrate_v10(conn)?;
         version=10;
+        set_version(conn,version)?;
+    }
+    if version<11{
+        migrate_v11(conn)?;
+        version=11;
         set_version(conn,version)?;
     }
 
@@ -582,6 +619,18 @@ mod tests{
         ).unwrap();
         let columns:i64=conn.query_row("SELECT COUNT(*) FROM pragma_table_info('visual_dna')",[],|r|r.get(0)).unwrap();
         assert!(columns>=16);
+    }
+
+    #[test]
+    fn migration_v11_adds_reference_sources_and_search(){
+        let conn=Connection::open_in_memory().unwrap();
+        conn.execute_batch(include_str!("../schema.sql")).unwrap();
+        assert_eq!(conn.query_row("SELECT value FROM app_meta WHERE key='schema_version'",[],|r|r.get::<_,String>(0)).unwrap(),"11");
+        conn.execute("INSERT INTO assets(id,path,name,created_at,updated_at) VALUES(1,'a.png','a.png',1,1)",[]).unwrap();
+        conn.execute("INSERT INTO prompt_state(asset_id,updated_at) VALUES(1,1)",[]).unwrap();
+        conn.execute("INSERT INTO reference_sources(asset_id,source_url,page_url,page_title,source_type,metadata_json,captured_at,created_at,updated_at) VALUES(1,'https://cdn.example/a.png','https://example/post','灵感页面','browser-extension','{}',1,1,1)",[]).unwrap();
+        crate::db::reindex_asset(&conn,1).unwrap();
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM asset_search WHERE asset_search MATCH '灵感'",[],|r|r.get::<_,i64>(0)).unwrap(),1);
     }
 
 }
