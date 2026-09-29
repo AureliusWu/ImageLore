@@ -1,6 +1,7 @@
 import { useEffect,useRef,useState } from "react";
 import type { AssetRecord,AssetSummary } from "../types";
 import { AssetContextMenu,type AssetMenuAction } from "./AssetContextMenu";
+import { clampZoom,zoomFromWheel } from "../previewWorkflow";
 
 type PreviewMode="fit"|"actual";
 const bytes=(n:number|null)=>!n?"":n<1024?`${n} B`:n<1024*1024?`${(n/1024).toFixed(1)} KB`:`${(n/1024/1024).toFixed(1)} MB`;
@@ -13,7 +14,6 @@ const metadataLabel=(value:string)=>({
   "json":"通用 JSON",
   "none":"无生成元数据"
 } as Record<string,string>)[value]||value;
-const clampZoom=(value:number)=>Math.max(25,Math.min(400,Math.round(value)));
 
 export function PreviewPane({asset,src,mode,onMode,onImport,onOpen,onFolder,onCopyImage,onCopyPath,onSaveAs,onFavorite,onFindSimilar}:{
   asset:AssetRecord|null;src:string;mode:PreviewMode;onMode:(m:PreviewMode)=>void;onImport:()=>void;
@@ -49,9 +49,8 @@ export function PreviewPane({asset,src,mode,onMode,onImport,onOpen,onFolder,onCo
   const wheel=(e:React.WheelEvent<HTMLDivElement>)=>{
     if(!src)return;
     e.preventDefault();
-    const direction=e.deltaY<0?1:-1;
-    const step=zoom>=200?25:zoom>=100?10:5;
-    setActual((mode==="fit"?100:zoom)+direction*step);
+    if(e.deltaY===0)return;
+    setActual(zoomFromWheel(zoom,e.deltaY,mode));
   };
   const doubleClick=()=>mode==="fit"?actual():fit();
   const pointerDown=(e:React.PointerEvent<HTMLDivElement>)=>{
@@ -75,7 +74,7 @@ export function PreviewPane({asset,src,mode,onMode,onImport,onOpen,onFolder,onCo
   const image=src?<img src={src} alt={asset?.name||"预览"} draggable={false}
     onLoad={e=>setNatural({width:e.currentTarget.naturalWidth,height:e.currentTarget.naturalHeight})}
     onDoubleClick={doubleClick}
-    onContextMenu={e=>{e.preventDefault();e.stopPropagation();setMenu({x:Math.min(e.clientX,window.innerWidth-236),y:Math.min(e.clientY,window.innerHeight-310)})}}/>:null;
+    onContextMenu={e=>{e.preventDefault();e.stopPropagation();setMenu({x:e.clientX,y:e.clientY})}}/>:null;
 
   return <section className="preview-pane panel glass-surface">
     <div className="preview-head">

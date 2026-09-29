@@ -106,6 +106,13 @@
 - Inspector 基于容器宽度自适应窄栏
 - 主预览底部高频快捷操作条
 
+## v0.21.1 — Preview Regression Hardening ✅
+- 缩放模式切换保留当前预览，消除空状态闪烁
+- 预览加载与谱系 / Session 查询解耦
+- 缩放、切图、右键定位、另存为扩展名抽为可测试纯逻辑
+- Save As 同路径保护与文件复制回归测试
+- Node 行为测试 + Rust 单元测试接入常规 CI
+
 ## v1.0.0 — Stable Local Library
 - Windows 代码签名与自动更新
 - 启动故障恢复与 rotating logs

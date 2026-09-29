@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import type { AssetSummary } from "../types";
+import { contextMenuPosition } from "../previewWorkflow";
 
 export type AssetMenuAction=(asset:AssetSummary)=>void;
 
@@ -23,7 +24,8 @@ export function AssetContextMenu({asset,x,y,onClose,onOpen,onFolder,onCopyImage,
 
   const run=(fn?:AssetMenuAction)=>()=>{fn?.(asset);onClose()};
   const fileMissing=!!asset.missing;
-  return <div className="asset-context-menu" style={{left:Math.max(8,Math.min(x,window.innerWidth-244)),top:Math.max(8,Math.min(y,window.innerHeight-316))}} onPointerDown={e=>e.stopPropagation()}>
+  const position=contextMenuPosition(x,y,window.innerWidth,window.innerHeight);
+  return <div className="asset-context-menu" style={position} onPointerDown={e=>e.stopPropagation()}>
     {onOpen?<button onClick={run(onOpen)} disabled={fileMissing}>↗ 打开图片</button>:null}
     {onFolder?<button onClick={run(onFolder)} disabled={fileMissing}>⌖ 打开文件所在位置</button>:null}
     {onOpen||onFolder?<hr/>:null}
