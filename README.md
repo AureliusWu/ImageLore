@@ -1,4 +1,4 @@
-# ImageLore v0.23.0
+# ImageLore v0.24.0
 
 ![ImageLore 应用预览](docs/og.svg)
 
@@ -28,6 +28,8 @@ ImageLore 是一个 local-first 的 AI 视觉生成记忆库，用来保存图�
 - AI 分析结果保留 Provider / 模型 / 时间；默认只补充 Visual DNA 空字段，可载入 Prompt 编辑器或保存为独立 Revision
 - Vision API Key 仅保存在当前进程内存，也可由 IMAGELORE_VISION_API_KEY 环境变量提供，不写入 SQLite / Sidecar / 日志
 - Visual DNA 进入本地 FTS / CJK 搜索，并随 Sidecar v3 导入导出
+- Remix Workspace：从多张参考图按 Visual DNA 维度组合新的 Prompt 草稿
+- Remix 草稿独立保存，不改原记录；导入生成结果时自动写入 derived_from / reference 谱系与字段级来源
 - Prompt Revision 历史版本；保存版本会原子写入当前编辑内容，避免 autosave 竞态
 - 图库右键菜单可直接在文件管理器中定位原图
 - Semantic Security Hardening：固定 CLIP revision、ONNX SHA-256 / 大小校验、可信缓存原子安装
