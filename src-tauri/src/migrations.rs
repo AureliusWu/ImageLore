@@ -342,11 +342,13 @@ fn migrate_v11(conn:&Connection)->Result<(),String>{
            tokenize='unicode61 remove_diacritics 2'
          );"
     ).map_err(|e|e.to_string())?;
-    let can_reindex=
-        has_column(conn,"assets","name")? &&
-        has_table(conn,"prompt_state")? &&
-        has_table(conn,"tags")? &&
-        has_table(conn,"asset_tags")?;
+    let can_reindex=[
+        "path","name","favorite","width","height","file_size","format","mime_type","metadata_type",
+        "generation_json","fingerprint","portable_id","file_mtime","missing","created_at","updated_at"
+    ].iter().all(|column|has_column(conn,"assets",column).unwrap_or(false))
+        && has_table(conn,"prompt_state")?
+        && has_table(conn,"tags")?
+        && has_table(conn,"asset_tags")?;
     if can_reindex{
         let ids:Vec<i64>={
             let mut st=conn.prepare("SELECT id FROM assets ORDER BY id").map_err(|e|e.to_string())?;
@@ -659,7 +661,7 @@ mod tests{
         conn.execute("INSERT INTO prompt_state(asset_id,updated_at) VALUES(1,1)",[]).unwrap();
         conn.execute("INSERT INTO reference_sources(asset_id,source_url,page_url,page_title,source_type,metadata_json,captured_at,created_at,updated_at) VALUES(1,'https://cdn.example/a.png','https://example/post','灵感页面','browser-extension','{}',1,1,1)",[]).unwrap();
         crate::db::reindex_asset(&conn,1).unwrap();
-        assert_eq!(conn.query_row("SELECT COUNT(*) FROM asset_search WHERE asset_search MATCH '灵感'",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM asset_search WHERE asset_search MATCH '\"灵感\"*'",[],|r|r.get::<_,i64>(0)).unwrap(),1);
     }
 
 }
