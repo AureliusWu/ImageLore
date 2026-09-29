@@ -20,7 +20,7 @@
     "test:remix": "node --experimental-strip-types --test scripts/test_remix_workflow.mjs",
     "test:browser": "node --test scripts/test_browser_extension.mjs",
     "format": "npx --yes @biomejs/biome@2.5.14 format --write src browser-extension scripts vite.config.ts --files-ignore-unknown=true",
-    "format:check": "npx --yes @biomejs/biome@2.5.14 format --check src browser-extension scripts vite.config.ts --files-ignore-unknown=true",
+    "format:check": "npx --yes @biomejs/biome@2.5.14 format src browser-extension scripts vite.config.ts --files-ignore-unknown=true",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
