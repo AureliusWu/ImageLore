@@ -121,11 +121,21 @@
 - 1 MB × 5 本地滚动日志与资料库诊断入口
 - Visual DNA / Sidecar / Search / Recovery / Logging 回归测试
 
-## v0.23.0 — Image to Prompt
-- 从当前图片生成两层结果：结构化视觉分析 + 可生成 Prompt
-- 一键写入 Visual DNA
-- 将生成 Prompt 保存为当前 Prompt 或创建新 Revision
-- 明确记录分析来源与模型，避免覆盖用户已有内容
+## v0.23.0 — Image to Prompt ✅
+- OpenAI-compatible Vision Provider 配置
+- 当前图片 → 结构化 Visual DNA + 可生成 Prompt
+- 本地缩图后仅在显式分析时上传；API Key 仅驻留当前进程内存
+- 分析结果记录 Provider / 模型 / 时间 / 摘要 / Prompt / DNA
+- 默认只补充 Visual DNA 空字段；显式操作才覆盖已有手工内容
+- AI Prompt 可载入当前编辑器或保存为独立 Prompt Revision
+- Migration v9 + JSON / Provider / DNA merge / schema / contract 回归测试
+
+## v0.24.0 — Remix
+- 从一张或多张参考图选择可复用 Visual DNA 片段
+- 按主体 / 服装 / 姿势 / 构图 / 光线 / 风格维度组合 Prompt
+- 生成 Remix 草稿，不修改原记录
+- Remix 来源进入 Generation Lineage，记录引用了哪些图片与哪些 DNA 字段
+- 为后续浏览器 Save to ImageLore 预留来源 URL / reference metadata
 
 ## v1.0.0 — Stable Local Library
 - Windows 代码签名与自动更新

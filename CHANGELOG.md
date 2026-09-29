@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.23.0 — Image to Prompt
+
+- Added Migration v9 with persistent Vision Provider settings and auditable Image-to-Prompt analysis records.
+- Added an OpenAI-compatible vision workflow: the selected image is resized locally to a maximum edge of about 1600 px, sent only on explicit Analyze action, and parsed into structured Visual DNA plus a generation-ready Prompt.
+- Vision Base URL and model are persisted locally; API keys remain in process memory only, with optional IMAGELORE_VISION_API_KEY environment-variable loading. Keys are never written to SQLite, Sidecars or diagnostic logs.
+- Added an Image to Prompt review workspace inside the Visual DNA Inspector, showing provider, model, analysis time, summary and generated Prompt before any library content is changed.
+- Applying AI Visual DNA preserves existing non-empty fields by default; explicit overwrite requires confirmation and mixed manual/AI records are labeled accordingly.
+- Generated Prompts can be loaded into the normal Prompt editor or stored as a separate Prompt Revision without replacing the current Prompt.
+- Added Library Manager configuration for OpenAI-compatible Vision endpoints and session-only API keys.
+- Added regression coverage for JSON response parsing, endpoint normalization, safe DNA merging, Migration v9, fresh schema and frontend/native command contracts.
+
 ## 0.22.0 — Visual DNA Foundation
 
 - Added Migration v8 with structured Visual DNA for subject, character, outfit, pose, expression, composition, camera, lighting, environment, palette, material and style.

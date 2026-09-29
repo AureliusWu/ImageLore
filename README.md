@@ -1,4 +1,4 @@
-# ImageLore v0.22.0
+# ImageLore v0.23.0
 
 ![ImageLore 应用预览](docs/og.svg)
 
@@ -24,6 +24,9 @@ ImageLore 是一个 local-first 的 AI 视觉生成记忆库，用来保存图�
 - Prompt、Negative Prompt、模型、标签自动保存
 - Visual DNA：主体 / 角色 / 服装 / 姿势 / 表情 / 构图 / 镜头 / 光线 / 环境 / 色彩 / 材质 / 风格的结构化记录
 - Prompt Card：把 Prompt、模型、尺寸、Visual DNA 与谱系上下文汇总成一张研发卡片
+- Image to Prompt：调用可配置的 OpenAI-compatible 视觉模型，把当前图片拆成结构化 Visual DNA + 可生成 Prompt
+- AI 分析结果保留 Provider / 模型 / 时间；默认只补充 Visual DNA 空字段，可载入 Prompt 编辑器或保存为独立 Revision
+- Vision API Key 仅保存在当前进程内存，也可由 IMAGELORE_VISION_API_KEY 环境变量提供，不写入 SQLite / Sidecar / 日志
 - Visual DNA 进入本地 FTS / CJK 搜索，并随 Sidecar v3 导入导出
 - Prompt Revision 历史版本；保存版本会原子写入当前编辑内容，避免 autosave 竞态
 - 图库右键菜单可直接在文件管理器中定位原图
