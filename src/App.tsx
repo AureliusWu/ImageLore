@@ -3,7 +3,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { open,save } from "@tauri-apps/plugin-dialog";
 import { api,isTauri } from "./api";
 import { APP_VERSION } from "./version";
-import type { AssetRecord,AssetSession,AssetSummary,BackupRecord,DiagnosticStatus,DuplicateGroup,GenerationSession,ImagePromptAnalysis,ImportSummary,LibraryFacets,LibraryFilter,LibraryHealth,Lineage,ModelAlias,SavedFilter,SearchMode,SemanticStatus,SourceFolder,VisionSettings,VisualDna,VisualDnaPatch } from "./types";
+import type { AssetRecord,AssetSession,AssetSummary,BackupRecord,DiagnosticStatus,DuplicateGroup,GenerationSession,ImagePromptAnalysis,ImportSummary,LibraryFacets,LibraryFilter,LibraryHealth,Lineage,ModelAlias,RemixDraft,RemixSource,SavedFilter,SearchMode,SemanticStatus,SourceFolder,VisionSettings,VisualDna,VisualDnaPatch } from "./types";
 import { useDebouncedValue } from "./hooks/useDebouncedValue";
 import { useEditorDraft } from "./hooks/useEditorDraft";
 import { useNativeDrop } from "./hooks/useNativeDrop";
@@ -19,12 +19,14 @@ import { useImportJob } from "./hooks/useImportJob";
 import { useSemanticJob } from "./hooks/useSemanticJob";
 import { useCloseGuard } from "./hooks/useCloseGuard";
 import { nextAssetIndex,saveExtension } from "./previewWorkflow";
+import { buildRemixPrompt,nonEmptyDnaFields } from "./remixWorkflow";
 
 const PAGE_SIZE=240;
 const emptyFacets:LibraryFacets={tags:[],models:[],collections:[],metadata_types:[],samplers:[],schedulers:[]};
 const emptyLineage:Lineage={parents:[],children:[]};
 const parseTags=(text:string)=>[...new Set(text.split(/[,，]/).map(x=>x.trim()).filter(Boolean))];
 const isTextEntry=(target:EventTarget|null)=>target instanceof HTMLElement&&(target.matches("input,textarea,select")||target.isContentEditable);
+const emptyVisualDna:VisualDna={subject:"",character:"",outfit:"",pose:"",expression:"",composition:"",camera:"",lighting:"",environment:"",palette:"",material:"",style:"",source:"manual",updated_at:0};
 
 export default function App(){
   const[version,setVersion]=useState(APP_VERSION);
@@ -60,6 +62,9 @@ export default function App(){
   const[imagePromptAnalysis,setImagePromptAnalysis]=useState<ImagePromptAnalysis|null>(null);
   const[imagePromptLoading,setImagePromptLoading]=useState(false);
   const[visionSettings,setVisionSettings]=useState<VisionSettings|null>(null);
+  const[remixDraft,setRemixDraft]=useState<RemixDraft|null>(null);
+  const[remixSources,setRemixSources]=useState<RemixSource[]>([]);
+  const[remixPrompt,setRemixPrompt]=useState("");
   const[modelAliases,setModelAliases]=useState<ModelAlias[]>([]);
   const[savedFilters,setSavedFilters]=useState<SavedFilter[]>([]);
   const[sourceFolders,setSourceFolders]=useState<SourceFolder[]>([]);
@@ -69,6 +74,7 @@ export default function App(){
   const[backups,setBackups]=useState<BackupRecord[]>([]);
   const[duplicates,setDuplicates]=useState<DuplicateGroup[]>([]);
   const[parentOpen,setParentOpen]=useState(false);
+  const[parentMode,setParentMode]=useState<"lineage"|"remix">("lineage");
   const[parentQuery,setParentQuery]=useState("");
   const[parentChoice,setParentChoice]=useState<number|null>(null);
   const[parentResults,setParentResults]=useState<AssetSummary[]>([]);
@@ -173,11 +179,11 @@ export default function App(){
     let cancelled=false;
     setParentLoading(true);
     api.page({query:debouncedParentQuery,view:"all",tag:null,model:null,collection_id:null},0,100)
-      .then(page=>{if(!cancelled)setParentResults(page.items.filter(x=>x.id!==current?.id))})
+      .then(page=>{if(!cancelled)setParentResults(page.items.filter(x=>x.id!==current?.id&&!((parentMode==="remix")&&remixSources.some(s=>s.asset_id===x.id))))})
       .catch(()=>{if(!cancelled)setParentResults([])})
       .finally(()=>{if(!cancelled)setParentLoading(false)});
     return()=>{cancelled=true};
-  },[parentOpen,debouncedParentQuery,current?.id]);
+  },[parentOpen,debouncedParentQuery,current?.id,parentMode,remixSources]);
   useEffect(()=>{
     if(!current){previewAssetId.current=null;setPreview("");return}
     let cancelled=false;
@@ -210,15 +216,20 @@ export default function App(){
   },[current?.id]);
 
   useEffect(()=>{
-    if(!current){setVisualDna(null);setImagePromptAnalysis(null);return}
+    if(!current){setVisualDna(null);setImagePromptAnalysis(null);setRemixDraft(null);setRemixSources([]);setRemixPrompt("");return}
     let cancelled=false;
-    const assetId=current.id;
-    setVisualDna(null);setImagePromptAnalysis(null);
+    const assetId=current.id,assetName=current.name,assetPrompt=current.prompt;
+    setVisualDna(null);setImagePromptAnalysis(null);setRemixDraft(null);setRemixSources([]);setRemixPrompt("");
     Promise.all([
       api.visualDna(assetId).catch(()=>null),
-      api.latestImagePromptAnalysis(assetId).catch(()=>null)
-    ]).then(([dna,analysis])=>{
-      if(!cancelled){setVisualDna(dna);setImagePromptAnalysis(analysis)}
+      api.latestImagePromptAnalysis(assetId).catch(()=>null),
+      api.latestRemixDraft(assetId).catch(()=>null)
+    ]).then(([dna,analysis,draft])=>{
+      if(cancelled)return;
+      const base:RemixSource={asset_id:assetId,asset_name:assetName,fields:[],source_url:"",visual_dna:dna||emptyVisualDna};
+      setVisualDna(dna);setImagePromptAnalysis(analysis);setRemixDraft(draft);
+      setRemixSources(draft?.sources?.length?draft.sources:[base]);
+      setRemixPrompt(draft?.prompt||assetPrompt);
     });
     return()=>{cancelled=true};
   },[current?.id]);
@@ -509,8 +520,50 @@ export default function App(){
   const createSession=async()=>{if(!current)return;const name=window.prompt("新建 Generation Session","");if(!name?.trim())return;const note=window.prompt("会话说明（可留空）","")||"";try{const session=await api.createSession(name.trim(),note);await api.setAssetSession(current.id,session.id,"");await refreshSessions();setAssetSession(await api.assetSession(current.id));setStatus("Generation Session 已创建")}catch(e){setStatus("新建会话失败："+String(e))}};
   const editSessionNote=async()=>{if(!current||!assetSession)return;const note=window.prompt("当前图片在此会话中的备注",assetSession.asset_note||"");if(note===null)return;try{await api.setAssetSession(current.id,assetSession.session_id,note);setAssetSession(await api.assetSession(current.id));setStatus("会话备注已保存")}catch(e){setStatus("会话备注保存失败："+String(e))}};
   const editRelationNote=async(relationId:number,currentNote:string)=>{const note=window.prompt("Branch Note",currentNote);if(note===null||!current)return;try{await api.updateRelationNote(relationId,note);setLineage(await api.lineage(current.id));setStatus("分支备注已保存")}catch(e){setStatus("分支备注保存失败："+String(e))}};
-  const openParentPicker=()=>{setParentQuery("");setParentChoice(null);setParentOpen(true)};
-  const confirmParent=async()=>{if(!current||!parentChoice)return;try{await api.addRelation(parentChoice,current.id,"reference","");setParentOpen(false);setLineage(await api.lineage(current.id));setCompareRecord(await api.get(parentChoice));setStatus("父图已关联")}catch(e){setStatus("关联父图失败："+String(e))}};
+  const openParentPicker=()=>{setParentMode("lineage");setParentQuery("");setParentChoice(null);setParentOpen(true)};
+  const openRemixSourcePicker=()=>{setParentMode("remix");setParentQuery("");setParentChoice(null);setParentOpen(true)};
+  const confirmParent=async()=>{
+    if(!current||!parentChoice)return;
+    try{
+      if(parentMode==="remix"){
+        const [record,dna]=await Promise.all([api.get(parentChoice),api.visualDna(parentChoice).catch(()=>emptyVisualDna)]);
+        setRemixSources(xs=>[...xs,{asset_id:record.id,asset_name:record.name,fields:nonEmptyDnaFields(dna),source_url:"",visual_dna:dna}]);
+        setParentOpen(false);setStatus("已加入 Remix 参考图："+record.name);return;
+      }
+      await api.addRelation(parentChoice,current.id,"reference","");setParentOpen(false);setLineage(await api.lineage(current.id));setCompareRecord(await api.get(parentChoice));setStatus("父图已关联");
+    }catch(e){setStatus(parentMode==="remix"?"添加 Remix 参考图失败："+String(e):"关联父图失败："+String(e))}
+  };
+  const toggleRemixField=(assetId:number,field:string)=>setRemixSources(xs=>xs.map(source=>source.asset_id!==assetId?source:{...source,fields:source.fields.includes(field)?source.fields.filter(x=>x!==field):[...source.fields,field]}));
+  const removeRemixSource=(assetId:number)=>{if(assetId===current?.id)return;setRemixSources(xs=>xs.filter(x=>x.asset_id!==assetId))};
+  const composeRemix=()=>{if(!current)return;setRemixPrompt(buildRemixPrompt(prompt,remixSources,current.id));setStatus("Remix Prompt 已按所选 DNA 重新组合")};
+  const persistRemix=async()=>{
+    if(!current)throw new Error("没有当前图片");
+    const saved=await api.saveRemixDraft(remixDraft?.id??null,current.id,remixPrompt,remixSources.map(x=>({asset_id:x.asset_id,fields:x.fields,source_url:x.source_url})));
+    setRemixDraft(saved);setRemixSources(saved.sources);return saved;
+  };
+  const saveRemix=async()=>{try{await persistRemix();setStatus("Remix 草稿已保存")}catch(e){setStatus("保存 Remix 草稿失败："+String(e))}};
+  const copyRemix=()=>{if(remixPrompt.trim())void navigator.clipboard.writeText(remixPrompt).then(()=>setStatus("Remix Prompt 已复制"))};
+  const resetRemix=async()=>{
+    if(!current)return;
+    try{if(remixDraft)await api.deleteRemixDraft(remixDraft.id)}catch{}
+    const dna=visualDna||emptyVisualDna;
+    setRemixDraft(null);setRemixSources([{asset_id:current.id,asset_name:current.name,fields:[],source_url:"",visual_dna:dna}]);setRemixPrompt(prompt);setStatus("Remix 草稿已重置");
+  };
+  const importRemixResult=async()=>{
+    if(!current){return}
+    if(!isTauri){setStatus("导入 Remix 结果仅在桌面版中可用");return}
+    let saved:RemixDraft;
+    try{saved=await persistRemix()}catch(e){setStatus("请先保存有效 Remix 草稿："+String(e));return}
+    const picked=await open({multiple:false,filters:[{name:"图片",extensions:["png","jpg","jpeg","webp","bmp","gif"]}]});
+    if(!picked||Array.isArray(picked))return;
+    try{
+      await flushEditor();const result=await api.importPaths([picked]);
+      if(result.duplicates){setStatus("所选 Remix 结果与资料库现有图片完全相同，未建立重复谱系");return}
+      if(!result.last_id){setStatus("Remix 结果没有导入成功");return}
+      await api.applyRemixLineage(saved.id,result.last_id);
+      await refreshSessions();await refresh(result.last_id);setTab("lineage");setStatus("Remix 结果已导入，并记录全部参考来源与 DNA 字段");
+    }catch(e){setStatus("导入 Remix 结果失败："+String(e))}
+  };
 
   const confirmModal=async()=>{
     if(!modal)return;
@@ -560,11 +613,11 @@ export default function App(){
       <div className="splitter" onPointerDown={drag("left")}/>
       <PreviewPane asset={current} src={preview} mode={previewMode} onMode={setPreviewMode} onImport={chooseImages} onOpen={openAsset} onFolder={openAssetFolder} onCopyImage={copyAssetImage} onCopyPath={copyAssetPath} onSaveAs={saveAssetAs} onFavorite={toggleAssetFavorite} onFindSimilar={findSimilarAsset}/>
       <div className="splitter" onPointerDown={drag("right")}/>
-      <InspectorPane asset={current} tab={tab} onTab={setTab} visualDna={visualDna} onSaveVisualDna={saveVisualDna} imagePromptAnalysis={imagePromptAnalysis} imagePromptLoading={imagePromptLoading} visionModel={visionSettings?.model||""} onAnalyzeImage={analyzeCurrentImage} onApplyAnalysisDna={()=>void applyAnalysisDna(false)} onOverwriteAnalysisDna={()=>void applyAnalysisDna(true)} onUseAnalysisPrompt={useAnalysisPrompt} onSaveAnalysisRevision={()=>void saveAnalysisRevision()} onOpenVisionSettings={openManager} prompt={prompt} onPrompt={setPrompt} negative={negative} onNegative={setNegative} model={model} onModel={setModel} tagsText={tagsText} onTagsText={setTagsText} lineage={lineage} compareRecord={compareRecord} compareParentSrc={compareParentSrc} compareCurrentSrc={compareCurrentSrc} sessions={sessions} assetSession={assetSession} onCompare={compare} onCopy={copyPrompt} onSaveRevision={saveRevision} onHistory={openHistory} onFavorite={toggleFavorite} onFindSimilar={findSimilar} onRescan={rescan} onSidecar={exportSidecar} onCollection={openCollection} onRemove={()=>setModal({kind:"remove"})} onImportDerivative={importDerivative} onLinkParent={openParentPicker} onSetSession={setSession} onCreateSession={createSession} onEditSessionNote={editSessionNote} onEditRelationNote={editRelationNote} promptRef={promptRef}/>
+      <InspectorPane asset={current} tab={tab} onTab={setTab} visualDna={visualDna} onSaveVisualDna={saveVisualDna} imagePromptAnalysis={imagePromptAnalysis} imagePromptLoading={imagePromptLoading} visionModel={visionSettings?.model||""} onAnalyzeImage={analyzeCurrentImage} onApplyAnalysisDna={()=>void applyAnalysisDna(false)} onOverwriteAnalysisDna={()=>void applyAnalysisDna(true)} onUseAnalysisPrompt={useAnalysisPrompt} onSaveAnalysisRevision={()=>void saveAnalysisRevision()} onOpenVisionSettings={openManager} remixDraft={remixDraft} remixSources={remixSources} remixPrompt={remixPrompt} onRemixPrompt={setRemixPrompt} onAddRemixSource={openRemixSourcePicker} onRemoveRemixSource={removeRemixSource} onToggleRemixField={toggleRemixField} onComposeRemix={composeRemix} onSaveRemix={()=>void saveRemix()} onCopyRemix={copyRemix} onImportRemixResult={()=>void importRemixResult()} onResetRemix={()=>void resetRemix()} prompt={prompt} onPrompt={setPrompt} negative={negative} onNegative={setNegative} model={model} onModel={setModel} tagsText={tagsText} onTagsText={setTagsText} lineage={lineage} compareRecord={compareRecord} compareParentSrc={compareParentSrc} compareCurrentSrc={compareCurrentSrc} sessions={sessions} assetSession={assetSession} onCompare={compare} onCopy={copyPrompt} onSaveRevision={saveRevision} onHistory={openHistory} onFavorite={toggleFavorite} onFindSimilar={findSimilar} onRescan={rescan} onSidecar={exportSidecar} onCollection={openCollection} onRemove={()=>setModal({kind:"remove"})} onImportDerivative={importDerivative} onLinkParent={openParentPicker} onSetSession={setSession} onCreateSession={createSession} onEditSessionNote={editSessionNote} onEditRelationNote={editRelationNote} promptRef={promptRef}/>
     </main>
     <footer className="statusbar glass-surface"><span className={`runtime-dot ${isTauri?"native":"preview"}`}/><strong>{isTauri?"桌面版":"浏览器预览"}</strong><span>v{version}</span><span className="status-message">{status}</span>{importActive?<><progress max={Math.max(1,importProgress.total)} value={importProgress.processed}/><button onClick={cancelImportJob}>取消导入</button></>:null}{semanticActive?<><progress max={Math.max(1,semanticProgress.total)} value={semanticProgress.processed}/><button onClick={cancelSemanticIndex}>取消索引</button></>:null}<span>已加载 {assets.length}/{total}</span><button onClick={repairMissing} title="根据文件指纹查找移动后的文件">修复缺失文件</button><span className="shortcut">←→ / J K 切图 · F 收藏 · F6 提示词 · F7 预览 · Ctrl+S 保存</span></footer>
     <LibraryManager open={managerOpen} backups={backups} tags={facets.tags} collections={facets.collections} duplicates={duplicates} modelAliases={modelAliases} savedFilters={savedFilters} sourceFolders={sourceFolders} sourceSyncing={importActive} health={health} diagnostics={diagnostics} visionSettings={visionSettings} semanticStatus={semanticStatus} semanticIndexing={semanticActive} semanticProgress={semanticProgress} onRebuildSemantic={rebuildSemantic} onCancelSemantic={cancelSemanticIndex} onClearSemantic={clearSemantic} onDeleteSemanticModels={deleteSemanticModels} onClose={()=>setManagerOpen(false)} onBackup={createBackup} onRestore={restoreBackup} onOpenDataFolder={openDataFolder} onOpenLogsFolder={openLogsFolder} onSaveVisionSettings={saveVisionProvider} onSetVisionApiKey={setVisionKey} onRenameTag={renameTag} onDeleteTag={deleteTag} onRenameCollection={renameCollection} onDeleteCollection={deleteCollection} onUpsertModelAlias={upsertModelAlias} onDeleteModelAlias={deleteModelAlias} onDeleteSavedFilter={deleteSavedView} onAddSourceFolder={addSourceFolder} onRemoveSourceFolder={removeSourceFolder} onToggleSourceAutoSync={toggleSourceAutoSync} onSyncSourceFolders={syncSourceFolders}/>
-    <ParentPicker open={parentOpen} query={parentQuery} results={parentResults} choice={parentChoice} loading={parentLoading} onQuery={setParentQuery} onChoice={setParentChoice} onClose={()=>setParentOpen(false)} onConfirm={confirmParent}/>
+    <ParentPicker open={parentOpen} query={parentQuery} results={parentResults} choice={parentChoice} loading={parentLoading} title={parentMode==="remix"?"添加 Remix 参考图":"关联父图"} description={parentMode==="remix"?"选择一张资料库图片，把其中的 Visual DNA 片段加入当前 Remix 草稿。":"搜索整个 ImageLore 资料库，选择来源或参考父图。"} confirmLabel={parentMode==="remix"?"加入 Remix":"建立关联"} onQuery={setParentQuery} onChoice={setParentChoice} onClose={()=>setParentOpen(false)} onConfirm={confirmParent}/>
     <AppDialogs modal={modal} assets={assets} currentId={current?.id} text={dialogText} setText={setDialogText} choice={dialogChoice} setChoice={setDialogChoice} onClose={()=>setModal(null)} onConfirm={confirmModal}/>
   </div>
 }

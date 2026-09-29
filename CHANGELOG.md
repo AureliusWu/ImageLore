@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.24.0 — Remix Workspace
+
+- Added Migration v10 with persistent Remix drafts and provenance-aware reference sources.
+- Added a dedicated Remix Inspector workspace that starts from the current image and supports multiple library reference images.
+- Each source can contribute selected Visual DNA dimensions such as subject, outfit, pose, composition, camera, lighting, environment, palette, material and style.
+- Remix Prompt composition records where borrowed traits came from, deduplicates repeated DNA values and remains fully editable before saving.
+- Remix drafts are stored independently and never modify the source image Prompt.
+- Importing a Remix result records the base image as `derived_from` and additional references as `reference`, with relation notes listing the DNA fields actually used.
+- Existing metadata Prompt on imported result images is preserved; the Remix Prompt is only used when the result has no Prompt.
+- Remix results inherit the base image Generation Session when available.
+- Remix source storage reserves source URL and reference metadata fields for the upcoming browser Save to ImageLore workflow.
+- Added Node and Rust regression coverage for prompt composition, v10 migration, multi-source persistence, field filtering, Prompt preservation and lineage writes.
+
 ## 0.23.0 — Image to Prompt
 
 - Added Migration v9 with persistent Vision Provider settings and auditable Image-to-Prompt analysis records.

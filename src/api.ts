@@ -1,5 +1,5 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import type { AssetRecord, AssetSession, AssetSummary, BackupRecord, CollectionRecord, DiagnosticStatus, DuplicateGroup, GenerationSession, ImportSummary, LibraryFacets, LibraryFilter, LibraryHealth, LibraryPage, Lineage, ModelAlias, PromptPatch, Revision, SavedFilter, SemanticHit, SemanticStatus, SourceFolder, VisionSettings, ImagePromptAnalysis, VisualDna, VisualDnaPatch } from "./types";
+import type { AssetRecord, AssetSession, AssetSummary, BackupRecord, CollectionRecord, DiagnosticStatus, DuplicateGroup, GenerationSession, ImportSummary, LibraryFacets, LibraryFilter, LibraryHealth, LibraryPage, Lineage, ModelAlias, PromptPatch, Revision, SavedFilter, SemanticHit, SemanticStatus, SourceFolder, VisionSettings, ImagePromptAnalysis, VisualDna, VisualDnaPatch, RemixDraft, RemixSourceInput } from "./types";
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -158,6 +158,13 @@ async function mockCall<T>(command:string,args:Record<string,unknown>):Promise<T
       active_log:"C:/Users/Demo/AppData/Local/app.imagelore.desktop/logs/imagelore.log",
       active_log_size:4096,recovery_notice:null
     } as T;
+    case "latest_remix_draft":return null as T;
+    case "save_remix_draft":{
+      const inputs=(args.sources||[]) as RemixSourceInput[];
+      const sources=inputs.map(input=>({asset_id:input.asset_id,asset_name:mockAssets.find(x=>x.id===input.asset_id)?.name||"Reference",fields:input.fields,source_url:input.source_url,visual_dna:{subject:"",character:"",outfit:"",pose:"",expression:"",composition:"",camera:"",lighting:"",environment:"",palette:"",material:"",style:"",source:"manual",updated_at:0}}));
+      return {id:Number(args.id||1),base_asset_id:Number(args.baseAssetId),prompt:String(args.prompt||""),created_at:Math.floor(Date.now()/1000),updated_at:Math.floor(Date.now()/1000),sources} as T;
+    }
+    case "delete_remix_draft":case "apply_remix_lineage":return true as T;
     case "open_external":case "open_containing_folder":case "copy_asset_to":case "open_data_folder":case "open_logs_folder":return true as T;
     default:throw new Error(`Unknown mock command: ${command}`);
   }
@@ -237,6 +244,10 @@ export const api={
   analyzeImageToPrompt:(id:number)=>call<ImagePromptAnalysis>("analyze_image_to_prompt",{id}),
   applyImagePromptDna:(id:number,analysisId:number,overwrite=false)=>call<VisualDna>("apply_image_prompt_dna",{id,analysisId,overwrite}),
   saveImagePromptRevision:(id:number,analysisId:number)=>call<boolean>("save_image_prompt_revision",{id,analysisId}),
+  latestRemixDraft:(baseAssetId:number)=>call<RemixDraft|null>("latest_remix_draft",{baseAssetId}),
+  saveRemixDraft:(id:number|null,baseAssetId:number,prompt:string,sources:RemixSourceInput[])=>call<RemixDraft>("save_remix_draft",{id,baseAssetId,prompt,sources}),
+  deleteRemixDraft:(id:number)=>call<boolean>("delete_remix_draft",{id}),
+  applyRemixLineage:(draftId:number,childId:number)=>call<boolean>("apply_remix_lineage",{draftId,childId}),
   diagnosticsStatus:()=>call<DiagnosticStatus>("diagnostics_status"),
   openDataFolder:()=>call<boolean>("open_data_folder"),
   openLogsFolder:()=>call<boolean>("open_logs_folder"),

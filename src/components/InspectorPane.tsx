@@ -1,8 +1,9 @@
 import { useEffect,useMemo,useState } from "react";
-import type { AssetRecord,AssetSession,GenerationInfo,GenerationSession,ImagePromptAnalysis,Lineage,VisualDna,VisualDnaPatch } from "../types";
+import type { AssetRecord,AssetSession,GenerationInfo,GenerationSession,ImagePromptAnalysis,Lineage,RemixDraft,RemixSource,VisualDna,VisualDnaPatch } from "../types";
 import { ComparePanel } from "./ComparePanel";
+import { RemixPanel } from "./RemixPanel";
 
-export type InspectorTab="prompt"|"dna"|"info"|"lineage";
+export type InspectorTab="prompt"|"dna"|"remix"|"info"|"lineage";
 
 function InfoRow({label,value}:{label:string;value:unknown}){return <div className="info-row"><span>{label}</span><strong>{value===undefined||value===null||value===""?"—":String(value)}</strong></div>}
 const relationLabel=(value:string)=>({"derived_from":"派生","variation":"变体","edit":"编辑","upscale":"放大","reference":"参考"} as Record<string,string>)[value]||value;
@@ -23,10 +24,13 @@ const dnaFields:Array<[keyof Omit<VisualDnaPatch,"source">,string,string]>=[
 ];
 const sourceLabel=(value:string)=>({"manual":"手动","sidecar":"Sidecar","ai":"AI 分析","mixed":"手动 + AI"} as Record<string,string>)[value]||"手动";
 
-export function InspectorPane({asset,tab,onTab,visualDna,onSaveVisualDna,imagePromptAnalysis,imagePromptLoading,visionModel,onAnalyzeImage,onApplyAnalysisDna,onOverwriteAnalysisDna,onUseAnalysisPrompt,onSaveAnalysisRevision,onOpenVisionSettings,prompt,onPrompt,negative,onNegative,model,onModel,tagsText,onTagsText,lineage,compareRecord,compareParentSrc,compareCurrentSrc,sessions,assetSession,onCompare,onCopy,onSaveRevision,onHistory,onFavorite,onFindSimilar,onRescan,onSidecar,onCollection,onRemove,onImportDerivative,onLinkParent,onSetSession,onCreateSession,onEditSessionNote,onEditRelationNote,promptRef}:{
+export function InspectorPane({asset,tab,onTab,visualDna,onSaveVisualDna,imagePromptAnalysis,imagePromptLoading,visionModel,onAnalyzeImage,onApplyAnalysisDna,onOverwriteAnalysisDna,onUseAnalysisPrompt,onSaveAnalysisRevision,onOpenVisionSettings,remixDraft,remixSources,remixPrompt,onRemixPrompt,onAddRemixSource,onRemoveRemixSource,onToggleRemixField,onComposeRemix,onSaveRemix,onCopyRemix,onImportRemixResult,onResetRemix,prompt,onPrompt,negative,onNegative,model,onModel,tagsText,onTagsText,lineage,compareRecord,compareParentSrc,compareCurrentSrc,sessions,assetSession,onCompare,onCopy,onSaveRevision,onHistory,onFavorite,onFindSimilar,onRescan,onSidecar,onCollection,onRemove,onImportDerivative,onLinkParent,onSetSession,onCreateSession,onEditSessionNote,onEditRelationNote,promptRef}:{
   asset:AssetRecord|null;tab:InspectorTab;onTab:(t:InspectorTab)=>void;visualDna:VisualDna|null;onSaveVisualDna:(value:VisualDnaPatch)=>void|Promise<void>;
   imagePromptAnalysis:ImagePromptAnalysis|null;imagePromptLoading:boolean;visionModel:string;
   onAnalyzeImage:()=>void;onApplyAnalysisDna:()=>void;onOverwriteAnalysisDna:()=>void;onUseAnalysisPrompt:()=>void;onSaveAnalysisRevision:()=>void;onOpenVisionSettings:()=>void;
+  remixDraft:RemixDraft|null;remixSources:RemixSource[];remixPrompt:string;onRemixPrompt:(value:string)=>void;
+  onAddRemixSource:()=>void;onRemoveRemixSource:(assetId:number)=>void;onToggleRemixField:(assetId:number,field:string)=>void;
+  onComposeRemix:()=>void;onSaveRemix:()=>void;onCopyRemix:()=>void;onImportRemixResult:()=>void;onResetRemix:()=>void;
   prompt:string;onPrompt:(v:string)=>void;negative:string;onNegative:(v:string)=>void;model:string;onModel:(v:string)=>void;tagsText:string;onTagsText:(v:string)=>void;
   lineage:Lineage;compareRecord:AssetRecord|null;compareParentSrc:string;compareCurrentSrc:string;sessions:GenerationSession[];assetSession:AssetSession|null;
   onCompare:(id:number)=>void;onCopy:()=>void;onSaveRevision:()=>void;onHistory:()=>void;onFavorite:()=>void;onFindSimilar:()=>void;onRescan:()=>void;onSidecar:()=>void;onCollection:()=>void;onRemove:()=>void;onImportDerivative:()=>void;onLinkParent:()=>void;
@@ -53,7 +57,7 @@ export function InspectorPane({asset,tab,onTab,visualDna,onSaveVisualDna,imagePr
   const clearDna=()=>setDnaDraft({...emptyDna});
   return <aside className="inspector-pane panel glass-surface">
     <div className="record-head"><div><span className="eyebrow">生成记录</span><strong title={asset?.name||"提示词与上下文"}>{asset?.name||"提示词与上下文"}</strong></div><button className={`favorite-button ${asset?.favorite?"on":""}`} disabled={!asset} onClick={onFavorite} title="收藏">{asset?.favorite?"★":"☆"}</button></div>
-    <nav className="inspector-tabs"><button className={tab==="prompt"?"active":""} onClick={()=>onTab("prompt")}>✎ <span>提示词</span></button><button className={tab==="dna"?"active":""} onClick={()=>onTab("dna")}>◇ <span>视觉 DNA</span></button><button className={tab==="info"?"active":""} onClick={()=>onTab("info")}>ⓘ <span>生成信息</span></button><button className={tab==="lineage"?"active":""} onClick={()=>onTab("lineage")}>⑂ <span>谱系</span><b>{lineage.parents.length+lineage.children.length}</b></button></nav>
+    <nav className="inspector-tabs"><button className={tab==="prompt"?"active":""} onClick={()=>onTab("prompt")}>✎ <span>提示词</span></button><button className={tab==="dna"?"active":""} onClick={()=>onTab("dna")}>◇ <span>视觉 DNA</span></button><button className={tab==="remix"?"active":""} onClick={()=>onTab("remix")}>⧉ <span>Remix</span></button><button className={tab==="info"?"active":""} onClick={()=>onTab("info")}>ⓘ <span>信息</span></button><button className={tab==="lineage"?"active":""} onClick={()=>onTab("lineage")}>⑂ <span>谱系</span><b>{lineage.parents.length+lineage.children.length}</b></button></nav>
     <div className="inspector-body">
       {tab==="prompt"?<>
         <div className="field-head"><div><label>提示词</label><span>主要生成指令</span></div><div className="field-actions"><button disabled={!asset} onClick={onCopy}>复制</button><button disabled={!asset} onClick={onHistory}>历史</button><button className="save-button" disabled={!asset} onClick={onSaveRevision}>保存版本</button></div></div>
@@ -91,6 +95,7 @@ export function InspectorPane({asset,tab,onTab,visualDna,onSaveVisualDna,imagePr
         <div className="dna-grid">{dnaFields.map(([key,label,hint])=><label className="dna-field" key={key}><span>{label}<small>{hint}</small></span><textarea disabled={!asset} value={dnaDraft[key]} onChange={e=>updateDna(key,e.target.value)} rows={2} placeholder={"记录"+label+"…"}/></label>)}</div>
         <div className="dna-actions"><button disabled={!asset} onClick={clearDna}>清空草稿</button><button className="button primary" disabled={!asset} onClick={()=>void onSaveVisualDna(dnaDraft)}>保存 Visual DNA</button></div>
       </div>:null}
+      {tab==="remix"?<RemixPanel asset={asset} draft={remixDraft} sources={remixSources} prompt={remixPrompt} onPrompt={onRemixPrompt} onAddSource={onAddRemixSource} onRemoveSource={onRemoveRemixSource} onToggleField={onToggleRemixField} onCompose={onComposeRemix} onSave={onSaveRemix} onCopy={onCopyRemix} onImportResult={onImportRemixResult} onReset={onResetRemix}/>:null}
       {tab==="info"?<div className="info-list"><div className="info-hero"><span>i</span><div><strong>可复现上下文</strong><p>保留原始生成参数、稳定 Portable ID 与可移植 Sidecar。</p></div></div><InfoRow label="元数据来源" value={asset?.metadata_type}/><InfoRow label="模型" value={asset?.model}/><InfoRow label="尺寸" value={asset?.width&&asset.height?`${asset.width} × ${asset.height}`:"—"}/><InfoRow label="格式" value={asset?.format}/><InfoRow label="随机种子" value={generation.seed}/><InfoRow label="步数" value={generation.steps}/><InfoRow label="采样器" value={generation.sampler}/><InfoRow label="调度器" value={generation.scheduler}/><InfoRow label="CFG" value={generation.cfg_scale}/><InfoRow label="降噪强度" value={generation.denoise}/><InfoRow label="Portable ID" value={asset?.portable_id}/><InfoRow label="文件指纹" value={asset?.fingerprint?asset.fingerprint.slice(0,24)+"…":"—"}/><details><summary>原始生成 JSON</summary><pre>{asset?.generation_json||"{}"}</pre></details></div>:null}
       {tab==="lineage"?<div className="lineage-panel">
         <div className="lineage-hero"><span>⑂</span><div><strong>生成谱系</strong><p>记录生成会话、参考、编辑、变体和分支备注。</p></div></div>

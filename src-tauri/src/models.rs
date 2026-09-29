@@ -337,3 +337,29 @@ pub struct ImagePromptAnalysis {
     pub visual_dna:VisualDnaPatch,
     pub created_at:i64,
 }
+
+#[derive(Debug,Clone,Serialize,Deserialize)]
+pub struct RemixSourceInput {
+    pub asset_id:i64,
+    #[serde(default)] pub fields:Vec<String>,
+    #[serde(default)] pub source_url:String,
+}
+
+#[derive(Debug,Clone,Serialize)]
+pub struct RemixSource {
+    pub asset_id:i64,
+    pub asset_name:String,
+    pub fields:Vec<String>,
+    pub source_url:String,
+    pub visual_dna:VisualDna,
+}
+
+#[derive(Debug,Clone,Serialize)]
+pub struct RemixDraft {
+    pub id:i64,
+    pub base_asset_id:i64,
+    pub prompt:String,
+    pub created_at:i64,
+    pub updated_at:i64,
+    pub sources:Vec<RemixSource>,
+}
