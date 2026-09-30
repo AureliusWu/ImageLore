@@ -438,7 +438,6 @@ pub fn import_dropped_paths(
     immediate(state.inner(), paths, true)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -474,17 +473,16 @@ mod tests {
 
         let cancel = AtomicBool::new(false);
         let direct_only = supported_files(
-            vec![direct.to_string_lossy().to_string(), root.to_string_lossy().to_string()],
+            vec![
+                direct.to_string_lossy().to_string(),
+                root.to_string_lossy().to_string(),
+            ],
             false,
             &cancel,
         );
         assert_eq!(direct_only, vec![direct.clone()]);
 
-        let recursive = supported_files(
-            vec![root.to_string_lossy().to_string()],
-            true,
-            &cancel,
-        );
+        let recursive = supported_files(vec![root.to_string_lossy().to_string()], true, &cancel);
         assert!(recursive.contains(&direct));
         assert!(recursive.contains(&child));
         assert!(!recursive.contains(&ignored));
@@ -499,11 +497,7 @@ mod tests {
         fs::write(&image, b"x").unwrap();
         let cancel = AtomicBool::new(true);
 
-        let found = supported_files(
-            vec![image.to_string_lossy().to_string()],
-            false,
-            &cancel,
-        );
+        let found = supported_files(vec![image.to_string_lossy().to_string()], false, &cancel);
 
         assert!(found.is_empty());
         let _ = fs::remove_dir_all(root);

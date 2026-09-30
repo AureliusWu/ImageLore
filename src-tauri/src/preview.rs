@@ -130,7 +130,6 @@ pub fn prune_cache(cache_root: &Path, max_bytes: u64) {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
