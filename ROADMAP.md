@@ -160,12 +160,15 @@
 - 项目完整性检查改为格式化无关的结构断言
 
 ## v0.26.0 — Stability Acceptance
+- 当前开发版本已推进到 `0.26.0`；按本阶段任务实施。验收记录：[存储/恢复](docs/V0_26_STORAGE_ACCEPTANCE.md)、[关键工作流](docs/V0_26_WORKFLOW_ACCEPTANCE.md)、[原生规模](docs/V0_26_NATIVE_SCALE.md)。真实模型与完整发布退出标准尚需单独关闭。
+- [版本化桌面快捷方式](docs/DESKTOP_SHORTCUT.md)：本地原生运行目录与实际 EXE 版本联动，保护手工链接、拒绝自动降级、失败回退。
 - 执行方案、分阶段任务与可量化验收见 [v1.0.0 更新方案](docs/V1_0_0_PLAN.md)
 - 50k+ 大图库端到端性能验收：图库、关键词、CJK、Visual DNA、Reference、Remix
 - Backup / Restore 灾难恢复验收与故障注入矩阵
 - 稳定 Migration 兼容矩阵，覆盖支持的历史数据库版本 → 当前版本
 - 对启动恢复、Sidecar、来源同步和 AI 派生数据做长期一致性验收
 - 为 v1.0 代码签名 / 自动更新前建立可量化发布门槛
+- 50k 原生 SQL/512 维合成扫描已进入建议预算；75k 扩展英文/引号查询及尾延迟波动保留 WARN，不放宽预算。
 
 ## v1.0.0 — Stable Local Library
 - 以 v0.26 稳定性验收 → 可信分发 beta → RC 原生升级验收 → 正式发布分阶段推进；见 [实施与退出标准](docs/V1_0_0_PLAN.md)

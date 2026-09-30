@@ -1,4 +1,4 @@
-# ImageLore v0.25.1
+# ImageLore v0.26.0
 
 ![ImageLore 应用预览](docs/og.svg)
 
@@ -12,6 +12,7 @@ ImageLore 是一个 local-first 的 AI 视觉生成记忆库，用来保存图�
 ## 当前核心
 
 - 简体中文 Frutiger Aero 桌面界面
+- [随实际程序版本更新的桌面快捷方式](docs/DESKTOP_SHORTCUT.md)
 - 图片 / 文件夹 / 原生拖拽导入
 - 资料源目录：启动时自动同步或一键同步常用出图目录
 - Semantic Recall：本地 CLIP 图文向量搜索，支持自然语言描述找图与“查找相似图片”
@@ -46,8 +47,8 @@ ImageLore 是一个 local-first 的 AI 视觉生成记忆库，用来保存图�
 - 1 GB 缓存治理
 - A1111 / ComfyUI / NovelAI / InvokeAI / 通用 JSON Metadata Adapter
 - ComfyUI Prompt / Negative / Model / Seed / Steps / CFG / Sampler 等提取
-- 每 24 小时自动数据库备份、手动备份、完整性验证与安全恢复
-- 启动故障自动恢复：数据库无法打开时保留损坏原件，并尝试最近可验证备份
+- 自动数据库备份：启动、重新聚焦及每 15 分钟检查，距最近有效备份满 24 小时创建新备份；支持手动备份与安全恢复
+- 启动恢复：仅已确认的数据库损坏触发恢复，先保全 DB/WAL/SHM 原件，再选择最近可验证的 ImageLore 备份
 - 本地 rotating logs：1 MB × 5 份，并在资料库管理中提供数据 / 日志目录入口
 - 缺失文件重定位
 - Sidecar v3：Portable ID + fingerprint 跨库谱系恢复

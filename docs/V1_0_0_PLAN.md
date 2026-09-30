@@ -6,13 +6,15 @@
 
 本轮接手与验证记录：[HANDOFF_BASELINE_2026-09-30.md](HANDOFF_BASELINE_2026-09-30.md)。
 
+执行更新：后续指令已授权版本化桌面快捷方式，并按 ROADMAP 推进开发版本 `0.26.0`（schema 仍为 11）。A1–A4/A6/A7 的实现与回归见[存储验收](V0_26_STORAGE_ACCEPTANCE.md)、[工作流验收](V0_26_WORKFLOW_ACCEPTANCE.md)；A5 文件库原生测量见[规模记录](V0_26_NATIVE_SCALE.md)。这些记录区分自动回归、桌面操作、真实模型和安装器；本计划的原始接手基线保留供追溯。阶段 B 的证书、签名服务及可访问发行渠道尚未配置。
+
 ## 1. 版本目标与范围
 
 v1.0.0 的目标是让已有的本地图片生成记忆库能够长期、安全、可维护地使用。沿用 ROADMAP 的 Stable Local Library 定位，以稳定性验收、可恢复性和可信 Windows 分发为主线。
 
 Library、Metadata、Generation Explorer、Semantic Recall、Visual DNA、Image to Prompt、Remix、Reference、Sidecar 和 Lineage 已有实现。本次规划不把这些能力重复列为待开发功能，也不重建测试框架、重写大模块或整体替换界面。保留简体中文与现有 Frutiger Aero 设计，优先改善错误提示、等待反馈和真实工作流的连续性。
 
-本轮保持 `VERSION=0.25.1`；阶段验收完成后才使用现有版本脚本更新版本。规划中的版本号与工作量是建议，不代表已发布或交付承诺。EXE / NSIS / GitHub Release 仍须用户明确提出打包或发布需求后执行。
+接手轮次保持 `VERSION=0.25.1`，后续稳定性迭代已用现有版本脚本同步 `0.26.0`。用户的桌面快捷方式指令需要一个可运行的本地 EXE，因此执行无安装器构建及本地验证。NSIS / GitHub Release 与可信自动更新仍按后续阶段的明确发布需求及退出标准执行。规划中的版本号与工作量不代表已正式发布。
 
 ## 2. 已有证据与缺口
 
@@ -60,11 +62,11 @@ Library、Metadata、Generation Explorer、Semantic Recall、Visual DNA、Image 
 | A6 / P1 | Preview / Reference / Remix / 编辑保存与关闭的异步一致性 | 先复现再补现有 Node/Rust 回归；快速切图、迟到请求、失败、保存Revision、关闭flush和取消后的重启状态 |
 | A7 / P1 | 长期数据一致性与边界 | Inbox重复导入合并来源；来源目录重复同步/取消；多参考Remix结果谱系；Sidecar跨库往返；派生索引清空重建前后命中等价 |
 
-A1 与本轮 Reference 切图回归是接手时发现的最小修复；最终实现和验证结果见接手记录。A2–A7 仍为待执行任务，不能用已有局部单测替代整项验收。
+A1 与 Reference 切图回归首先在接手轮次完成。后续 A2–A7 已开展实现与回归，结果以上方独立记录为准；不能用局部自动测试代替真实模型、桌面长时间操作及安装器升级的整项验收。
 
 历史 fixture 候选来源：schema 1 `c2a06a5`；3 `0bfe4a3`；4 `6a60ba0`；5 `d3d74f8`；6 `60b7353`；7 `2395967`；8 `4b2dcb5`；9 `fdadeec`；10 `c2720fb`；11 `e93857c`。建立 fixture 时记录完整 SHA、生成命令与数据摘要。schema 2 应按历史 `1299f7f` 的实际初始化/迁移流程生成：该版本 `schema.sql` 的静态标记仍是 1，不能只修改标记伪造版本 2。未来 schema 必须安全拒绝，不尝试降级迁移。
 
-测试只使用临时目录、合成图片、合成元数据和独立测试账户/VM。`db::data_root` 当前使用系统用户数据目录，不能直接在用户的正常账户里用合成库启动应用并冒险覆盖现有库。
+测试只使用临时目录、合成图片、合成元数据和独立测试账户/VM。桌面合成验收使用受标记保护的 `IMAGELORE_TEST_DATA_DIR` 和独立 WebView2 profile，不打开正常用户资料库；默认用户路径及旧版迁移行为保持原有语义。
 
 ### 4.1 恢复矩阵
 

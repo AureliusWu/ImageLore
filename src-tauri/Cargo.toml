@@ -1,6 +1,6 @@
 [package]
 name = "imagelore"
-version = "0.25.1"
+version = "0.26.0"
 description = "Local-first AI generation memory library"
 authors = ["ImageLore"]
 edition = "2021"
@@ -10,7 +10,7 @@ name = "imagelore_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2" }
+tauri-build = { version = "2", features = [] }
 
 [dependencies]
 # Serves only ImageLore-managed cache files to the WebView, avoiding Base64 image IPC.

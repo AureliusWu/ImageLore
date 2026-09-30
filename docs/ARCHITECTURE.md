@@ -1,6 +1,6 @@
 # ImageLore Architecture
 
-> Current architecture baseline: v0.25.x
+> Current architecture baseline: v0.26.x (database schema 11)
 
 ## Product boundary
 
@@ -66,6 +66,10 @@ Current persistent data root:
 ```
 
 The legacy `%LOCALAPPDATA%/ImageLore/` layout is migrated forward on startup. Preview cache and semantic indexes are derived data and can be rebuilt; the library database, backups and model cache are treated as persistent user data.
+
+Startup integrity probing copies DB/WAL/SHM before SQLite opens them, because even a read-only WAL connection can rebuild SHM. Only confirmed corruption permits automatic replacement. Restore validates supported ImageLore schema and business relations, preserves raw originals, reserves the old files beside the database and uses an interrupted-transaction marker for rollback. Migrations run inside a transaction and retain schema 11.
+
+Native acceptance can select an isolated absolute directory using `IMAGELORE_TEST_DATA_DIR`; it must contain `.imagelore-acceptance-root` with the text `ImageLore acceptance fixture`. Missing or invalid markers stop startup. This path bypasses legacy migration; the asset protocol adds only its managed cache directory to the existing scope.
 
 ## Import and source synchronization
 

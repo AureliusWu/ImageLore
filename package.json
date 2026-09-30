@@ -1,7 +1,7 @@
 {
   "name": "imagelore",
   "private": true,
-  "version": "0.25.1",
+  "version": "0.26.0",
   "type": "module",
   "scripts": {
     "version:sync": "node scripts/sync_version.mjs",
@@ -15,10 +15,14 @@
     "tauri": "tauri",
     "tauri:dev": "node scripts/sync_version.mjs && tauri dev",
     "tauri:build": "node scripts/sync_version.mjs && tauri build --bundles nsis -- --locked",
-    "check": "node scripts/check_version.mjs && python scripts/check_project.py && python scripts/test_schema.py && python scripts/test_scale.py && python scripts/test_contract.py && npm run test:preview && npm run test:remix && npm run test:browser && npm run format:check && npm run lint",
+    "desktop:build": "node scripts/sync_version.mjs && tauri build --no-bundle -- --locked && powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/publish_desktop_runtime.ps1",
+    "desktop:shortcut": "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/update_desktop_shortcut.ps1 -ExecutablePath desktop-runtime/current/ImageLore.exe",
+    "check": "node scripts/check_version.mjs && python scripts/check_project.py && python scripts/test_schema.py && python scripts/test_scale.py && python scripts/test_contract.py && npm run test:preview && npm run test:remix && npm run test:browser && npm run test:stability && npm run test:shortcut && npm run format:check && npm run lint",
     "test:preview": "node --experimental-strip-types --test scripts/test_preview_workflow.mjs",
     "test:remix": "node --experimental-strip-types --test scripts/test_remix_workflow.mjs",
     "test:browser": "node --test scripts/test_browser_extension.mjs",
+    "test:stability": "node --experimental-strip-types --test scripts/test_stability_workflows.mjs",
+    "test:shortcut": "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_desktop_shortcut.ps1",
     "format": "npx --yes @biomejs/biome@2.5.14 format --write src browser-extension scripts vite.config.ts --files-ignore-unknown=true",
     "format:check": "npx --yes @biomejs/biome@2.5.14 format src browser-extension scripts vite.config.ts --files-ignore-unknown=true",
     "lint": "tsc --noEmit"
