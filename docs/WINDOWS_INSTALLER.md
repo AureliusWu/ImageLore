@@ -22,6 +22,8 @@ Before the current installer artifact is uploaded, the workflow verifies version
 
 ## Local developer build
 
+For the versioned desktop shortcut and a local executable without an installer, use `npm run desktop:build`. See [desktop shortcut maintenance](DESKTOP_SHORTCUT.md). This does not trigger the Windows release workflow.
+
 Install the standard Tauri Windows prerequisites, then double-click `BUILD_WINDOWS_EXE.bat` or run:
 
 ```bash
