@@ -22,7 +22,7 @@ mod vision;
 mod visual_dna;
 
 use state::AppState;
-use std::{fs, sync::Mutex};
+use std::{fs, path::Path, sync::Mutex};
 use tauri::Manager;
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
@@ -42,31 +42,76 @@ fn prepare_state() -> Result<AppState, String> {
         );
         e
     })?;
+    let connection = open_library_connection(&database_path, &data_dir, &backups_dir)?;
+    let cache_cleanup = cache_dir.clone();
+    std::thread::spawn(move || preview::prune_cache(&cache_cleanup, 1024 * 1024 * 1024));
+    diagnostics::log(&data_dir, "INFO", "startup: library ready");
+    Ok(AppState {
+        db: Mutex::new(connection),
+        data_dir,
+        cache_dir,
+        database_path,
+        backups_dir,
+        models_dir,
+        jobs: Mutex::new(std::collections::HashMap::new()),
+        next_job_id: std::sync::atomic::AtomicU64::new(1),
+        vision_api_key: Mutex::new(std::env::var("IMAGELORE_VISION_API_KEY").unwrap_or_default()),
+    })
+}
+
+fn confirmed_corruption(result: rusqlite::Result<String>) -> bool {
+    match result {
+        Ok(status) => status != "ok",
+        Err(rusqlite::Error::SqliteFailure(error, _)) => matches!(
+            error.code,
+            rusqlite::ErrorCode::DatabaseCorrupt | rusqlite::ErrorCode::NotADatabase
+        ),
+        Err(_) => false,
+    }
+}
+
+fn database_is_corrupt(path: &Path) -> bool {
+    let result =
+        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .and_then(|conn| {
+                conn.busy_timeout(std::time::Duration::ZERO)?;
+                conn.query_row("PRAGMA integrity_check(1)", [], |row| row.get(0))
+            });
+    confirmed_corruption(result)
+}
+
+fn open_library_connection(
+    database_path: &Path,
+    data_dir: &Path,
+    backups_dir: &Path,
+) -> Result<rusqlite::Connection, String> {
     let had_database = database_path.exists();
-    let connection = match db::init_db(&database_path) {
+    let connection = match db::init_db(database_path) {
         Ok(conn) => conn,
         Err(initial_error) => {
             diagnostics::log(
-                &data_dir,
+                data_dir,
                 "ERROR",
                 &format!("database initialization failed: {}", initial_error),
             );
-            if !had_database {
+            // Compatibility, migration, permission and lock errors must never replace
+            // an intact library. Only a read-only SQLite probe can authorize recovery.
+            if !had_database || !database_is_corrupt(database_path) {
                 return Err(initial_error);
             }
             match backup::recover_latest_valid_backup(
-                &database_path,
-                &data_dir,
-                &backups_dir,
+                database_path,
+                data_dir,
+                backups_dir,
                 &initial_error,
             )? {
                 Some(record) => {
                     diagnostics::log(
-                        &data_dir,
+                        data_dir,
                         "WARN",
                         &format!("startup recovery applied backup {}", record.name),
                     );
-                    db::init_db(&database_path).map_err(|retry| {
+                    db::init_db(database_path).map_err(|retry| {
                         format!(
                             "资料库自动恢复后仍无法打开：{}；原始错误：{}",
                             retry, initial_error
@@ -82,20 +127,7 @@ fn prepare_state() -> Result<AppState, String> {
             }
         }
     };
-    let cache_cleanup = cache_dir.clone();
-    std::thread::spawn(move || preview::prune_cache(&cache_cleanup, 1024 * 1024 * 1024));
-    diagnostics::log(&data_dir, "INFO", "startup: library ready");
-    Ok(AppState {
-        db: Mutex::new(connection),
-        data_dir,
-        cache_dir,
-        database_path,
-        backups_dir,
-        models_dir,
-        jobs: Mutex::new(std::collections::HashMap::new()),
-        next_job_id: std::sync::atomic::AtomicU64::new(1),
-        vision_api_key: Mutex::new(std::env::var("IMAGELORE_VISION_API_KEY").unwrap_or_default()),
-    })
+    Ok(connection)
 }
 
 fn write_startup_error(message: &str) {
@@ -217,4 +249,175 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running ImageLore");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::{params, Connection};
+    use std::{
+        path::PathBuf,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    fn test_root(label: &str) -> PathBuf {
+        let token = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("imagelore-startup-{label}-{token}"));
+        fs::create_dir_all(root.join("backups")).unwrap();
+        root
+    }
+
+    fn seed_library(path: &Path, marker: &str) -> Connection {
+        let conn = db::init_db(path).unwrap();
+        conn.execute_batch("CREATE TABLE startup_marker(value TEXT NOT NULL);")
+            .unwrap();
+        conn.execute(
+            "INSERT INTO startup_marker(value) VALUES(?1)",
+            params![marker],
+        )
+        .unwrap();
+        conn
+    }
+
+    fn marker(path: &Path) -> String {
+        Connection::open(path)
+            .unwrap()
+            .query_row("SELECT value FROM startup_marker", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn startup_connection_probe_requires_confirmed_corruption() {
+        assert!(!confirmed_corruption(Ok("ok".into())));
+        assert!(confirmed_corruption(
+            Ok("database integrity failure".into())
+        ));
+        for code in [rusqlite::ffi::SQLITE_CORRUPT, rusqlite::ffi::SQLITE_NOTADB] {
+            assert!(confirmed_corruption(Err(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(code),
+                None
+            ))));
+        }
+        for code in [
+            rusqlite::ffi::SQLITE_BUSY,
+            rusqlite::ffi::SQLITE_LOCKED,
+            rusqlite::ffi::SQLITE_PERM,
+            rusqlite::ffi::SQLITE_READONLY,
+            rusqlite::ffi::SQLITE_CANTOPEN,
+            rusqlite::ffi::SQLITE_IOERR,
+        ] {
+            assert!(
+                !confirmed_corruption(Err(rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(code),
+                    None
+                ))),
+                "SQLite code {code} is not evidence of database corruption"
+            );
+        }
+        assert!(!confirmed_corruption(Err(
+            rusqlite::Error::QueryReturnedNoRows
+        )));
+    }
+
+    #[test]
+    fn startup_connection_preserves_future_schema_and_existing_backup() {
+        let root = test_root("future");
+        let database = root.join("library.sqlite3");
+        let backup = root.join("backups/before.sqlite3");
+        let current = seed_library(&database, "future-current");
+        current
+            .execute(
+                "UPDATE app_meta SET value='12' WHERE key='schema_version'",
+                [],
+            )
+            .unwrap();
+        drop(current);
+        drop(seed_library(&backup, "older-backup"));
+
+        let result = open_library_connection(&database, &root, &root.join("backups"));
+        assert!(result.is_err(), "An unsupported schema must refuse startup");
+        assert_eq!(marker(&database), "future-current");
+        let version: String = Connection::open(&database)
+            .unwrap()
+            .query_row(
+                "SELECT value FROM app_meta WHERE key='schema_version'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, "12");
+        assert_eq!(marker(&backup), "older-backup");
+        assert!(!root.join("recovery").exists());
+        assert!(!root.join("recovery-last.txt").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn startup_connection_preserves_locked_library() {
+        let root = test_root("locked");
+        let database = root.join("library.sqlite3");
+        let backup = root.join("backups/before.sqlite3");
+        let current = seed_library(&database, "locked-current");
+        current
+            .execute_batch("PRAGMA journal_mode=DELETE; BEGIN EXCLUSIVE;")
+            .unwrap();
+        drop(seed_library(&backup, "older-backup"));
+
+        let result = open_library_connection(&database, &root, &root.join("backups"));
+        assert!(result.is_err());
+        current.execute_batch("ROLLBACK;").unwrap();
+        drop(current);
+        assert_eq!(marker(&database), "locked-current");
+        assert_eq!(marker(&backup), "older-backup");
+        assert!(!root.join("recovery").exists());
+        assert!(!root.join("recovery-last.txt").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn startup_connection_preserves_library_after_migration_error() {
+        let root = test_root("migration");
+        let database = root.join("library.sqlite3");
+        let backup = root.join("backups/before.sqlite3");
+        let current = Connection::open(&database).unwrap();
+        current.execute_batch("CREATE TABLE app_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL); INSERT INTO app_meta VALUES('schema_version','1'); CREATE TABLE startup_marker(value TEXT NOT NULL); INSERT INTO startup_marker VALUES('unmigrated-current');").unwrap();
+        drop(current);
+        drop(seed_library(&backup, "older-backup"));
+
+        let result = open_library_connection(&database, &root, &root.join("backups"));
+        assert!(
+            result.is_err(),
+            "Migration errors must not replace the active library"
+        );
+        assert_eq!(marker(&database), "unmigrated-current");
+        assert_eq!(marker(&backup), "older-backup");
+        assert!(!root.join("recovery").exists());
+        assert!(!root.join("recovery-last.txt").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn startup_connection_still_recovers_confirmed_corruption() {
+        let root = test_root("corrupt");
+        let database = root.join("library.sqlite3");
+        let backup = root.join("backups/before.sqlite3");
+        let corrupt = b"not a sqlite database";
+        fs::write(&database, corrupt).unwrap();
+        drop(seed_library(&backup, "recovered-backup"));
+
+        let result = open_library_connection(&database, &root, &root.join("backups"));
+        assert!(result.is_ok());
+        drop(result);
+        assert_eq!(marker(&database), "recovered-backup");
+        assert_eq!(marker(&backup), "recovered-backup");
+        assert!(root.join("recovery-last.txt").exists());
+        assert!(fs::read_dir(root.join("recovery"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|entry| fs::read(entry.path()).unwrap() == corrupt));
+        fs::remove_dir_all(root).unwrap();
+    }
 }
