@@ -102,7 +102,7 @@ fn latest(conn: &Connection, base_asset_id: i64) -> Result<Option<RemixDraft>, S
     id.map(|id| get(conn, id)).transpose()
 }
 
-fn save(
+pub(crate) fn save(
     conn: &mut Connection,
     id: Option<i64>,
     base_asset_id: i64,
@@ -197,7 +197,11 @@ fn field_labels(fields: &[String]) -> String {
         .join("、")
 }
 
-fn apply_lineage(conn: &mut Connection, draft_id: i64, child_id: i64) -> Result<bool, String> {
+pub(crate) fn apply_lineage(
+    conn: &mut Connection,
+    draft_id: i64,
+    child_id: i64,
+) -> Result<bool, String> {
     let draft = get(conn, draft_id)?;
     let child = db::get_asset(conn, child_id)?;
     if draft.sources.iter().any(|x| x.asset_id == child_id) {

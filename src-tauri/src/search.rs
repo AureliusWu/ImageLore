@@ -27,7 +27,19 @@ fn cjk_trigram_query(input: &str) -> Option<String> {
 }
 
 fn filter_parts(filter: &LibraryFilter) -> (String, String, Vec<SqlValue>) {
-    let mut joins = " LEFT JOIN generation_index gi ON gi.asset_id=a.id LEFT JOIN visual_dna vd ON vd.asset_id=a.id ".to_string();
+    let mut joins = String::new();
+    if filter.sampler.is_some()
+        || filter.scheduler.is_some()
+        || filter.seed.is_some()
+        || filter.steps_min.is_some()
+        || filter.steps_max.is_some()
+        || filter.cfg_min.is_some()
+        || filter.cfg_max.is_some()
+        || filter.denoise_min.is_some()
+        || filter.denoise_max.is_some()
+    {
+        joins.push_str(" LEFT JOIN generation_index gi ON gi.asset_id=a.id ");
+    }
     let mut where_parts = vec!["1=1".to_string()];
     let mut args = Vec::<SqlValue>::new();
 
@@ -37,8 +49,12 @@ fn filter_parts(filter: &LibraryFilter) -> (String, String, Vec<SqlValue>) {
             |c| matches!(c,'\u{3400}'..='\u{9fff}'|'\u{3040}'..='\u{30ff}'|'\u{ac00}'..='\u{d7af}'),
         );
         if has_cjk {
+            joins.push_str(" LEFT JOIN visual_dna vd ON vd.asset_id=a.id ");
             if let Some(trigram) = cjk_trigram_query(query) {
-                joins.push_str(" JOIN asset_cjk_search ON asset_cjk_search.asset_id=a.id ");
+                // Both migrations and reindex_asset assign the asset ID as the
+                // FTS rowid. Joining this indexed identity avoids loading the
+                // unindexed asset_id column and its full text for every match.
+                joins.push_str(" JOIN asset_cjk_search ON asset_cjk_search.rowid=a.id ");
                 where_parts.push("asset_cjk_search MATCH ?".into());
                 args.push(SqlValue::Text(trigram));
             }
@@ -247,5 +263,54 @@ mod tests {
         assert!(where_sql.contains("gi.denoise<=?"));
         assert!(where_sql.contains("a.height>a.width"));
         assert_eq!(args.len(), 4);
+    }
+
+    #[test]
+    fn rebuilding_derived_indexes_preserves_prompt_dna_reference_hits_and_null_dimensions() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(include_str!("../schema.sql")).unwrap();
+        conn.execute_batch(
+            "INSERT INTO assets(id,path,name,created_at,updated_at) VALUES(1,'/synthetic/1.png','first',1,1),(2,'/synthetic/2.png','second',1,2),(3,'/synthetic/3.png','third',1,3);
+             INSERT INTO prompt_state(asset_id,prompt,updated_at) VALUES(1,'blue character 蓝发角色',1);
+             INSERT INTO visual_dna(asset_id,search_text,updated_at) VALUES(2,'dnaanchor 红衣角色',1);
+             INSERT INTO reference_sources(asset_id,page_title,created_at,updated_at) VALUES(3,'referenceanchor 紫色光影',1,1);",
+        ).unwrap();
+        let queries = [
+            ("blue character", 1),
+            ("蓝", 1),
+            ("蓝发", 1),
+            ("蓝发角色", 1),
+            ("dnaanchor", 2),
+            ("红衣角色", 2),
+            ("referenceanchor", 3),
+            ("紫色光影", 3),
+        ];
+        let check = || {
+            for (query, expected) in queries {
+                let page = library_page(
+                    &conn,
+                    &LibraryFilter {
+                        query: query.into(),
+                        ..LibraryFilter::default()
+                    },
+                    0,
+                    20,
+                )
+                .unwrap();
+                assert_eq!(page.total, 1, "{query}");
+                assert_eq!(page.items[0].id, expected, "{query}");
+                assert_eq!((page.items[0].width, page.items[0].height), (None, None));
+            }
+        };
+        for id in 1..=3 {
+            db::reindex_asset(&conn, id).unwrap();
+        }
+        check();
+        conn.execute_batch("DELETE FROM asset_search; DELETE FROM asset_cjk_search;")
+            .unwrap();
+        for id in 1..=3 {
+            db::reindex_asset(&conn, id).unwrap();
+        }
+        check();
     }
 }

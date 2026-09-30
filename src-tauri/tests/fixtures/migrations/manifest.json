@@ -1,0 +1,85 @@
+{
+  "format": 1,
+  "fixtures": [
+    {
+      "schema": 1,
+      "commit": "c2a06a5256b46797fbb37aabc924024a219e629d",
+      "file": "schema-1.sql",
+      "sha256": "457692197923f582be10c3f262268f7424a9ba562d8e298e6974ce32e27be933",
+      "command": "git show c2a06a5256b46797fbb37aabc924024a219e629d:src-tauri/schema.sql"
+    },
+    {
+      "schema": 2,
+      "commit": "1299f7fa40a4fc0efd024a069ed101983ffa0241",
+      "file": "schema-2.sql",
+      "sha256": "6b59af9f39e31a4351579e60e3feecde296fe542967df53ef8cdfc332c43aadf",
+      "command": "git show 1299f7fa40a4fc0efd024a069ed101983ffa0241:src-tauri/schema.sql",
+      "migration_file": "schema-2/src/migrations.rs",
+      "migration_sha256": "8740675970c11883dd752c7ae197a592c1484ccfd73ee22cdf2a43ed3c717448",
+      "initialization": "Execute frozen migrations::apply on an empty database; static SQL marker remains schema 1. Tests never rewrite it to 2."
+    },
+    {
+      "schema": 3,
+      "commit": "0bfe4a307a28fde4990ad7e6a35ed44f0af7b0fb",
+      "file": "schema-3.sql",
+      "sha256": "c38771413c64cb892ba515b3651bd298ab4c070531f356c8403e31506bd7d800",
+      "command": "git show 0bfe4a307a28fde4990ad7e6a35ed44f0af7b0fb:src-tauri/schema.sql"
+    },
+    {
+      "schema": 4,
+      "commit": "6a60ba08088ad8b8501afedf1fb7c7709fa6126c",
+      "file": "schema-4.sql",
+      "sha256": "340337d389fe39402f9d6d684a6e654f56506d59d888784e4e3da21aa74cf957",
+      "command": "git show 6a60ba08088ad8b8501afedf1fb7c7709fa6126c:src-tauri/schema.sql"
+    },
+    {
+      "schema": 5,
+      "commit": "d3d74f80883f2c1ccdda326db24de0136233197e",
+      "file": "schema-5.sql",
+      "sha256": "bbec75e5abebacfd17b8855b23a3fd9ea42a0400d92da8b5191076f26fb558c7",
+      "command": "git show d3d74f80883f2c1ccdda326db24de0136233197e:src-tauri/schema.sql"
+    },
+    {
+      "schema": 6,
+      "commit": "60b7353c370afa81ea5e63ea53f394d1a5196283",
+      "file": "schema-6.sql",
+      "sha256": "b85ef74beab7f363d0afdc6a6736791f4aba5b987a664d0b4cdd89d3579dfb97",
+      "command": "git show 60b7353c370afa81ea5e63ea53f394d1a5196283:src-tauri/schema.sql"
+    },
+    {
+      "schema": 7,
+      "commit": "23959672b340524b6db9cf97298a4118f4668efb",
+      "file": "schema-7.sql",
+      "sha256": "56e65afaac1a795c2e6f821639dccfb4b0c854b0fea4f8c86dfc32955518d1d0",
+      "command": "git show 23959672b340524b6db9cf97298a4118f4668efb:src-tauri/schema.sql"
+    },
+    {
+      "schema": 8,
+      "commit": "4b2dcb53e10779bd8e03b66fa615ff29fa8f92ae",
+      "file": "schema-8.sql",
+      "sha256": "137d9eab2ffa8d5143721cb6292ebe909ac48429332e1dff91caac95aacc3d45",
+      "command": "git show 4b2dcb53e10779bd8e03b66fa615ff29fa8f92ae:src-tauri/schema.sql"
+    },
+    {
+      "schema": 9,
+      "commit": "fdadeece7d46e7889387b8cb4d0d493702d666dc",
+      "file": "schema-9.sql",
+      "sha256": "1cad7d09bbbe48a4e59f0d0e23120fc8a92688d1f34c71c1aa19148940cbb44b",
+      "command": "git show fdadeece7d46e7889387b8cb4d0d493702d666dc:src-tauri/schema.sql"
+    },
+    {
+      "schema": 10,
+      "commit": "c2720fb5cbd11cdff156e2aeb693cecfebf15dac",
+      "file": "schema-10.sql",
+      "sha256": "ac18a61bf5f303c4e0d2b5425577f7d6b96bc9800e51381447a168b549a5f752",
+      "command": "git show c2720fb5cbd11cdff156e2aeb693cecfebf15dac:src-tauri/schema.sql"
+    },
+    {
+      "schema": 11,
+      "commit": "e93857cb7176606b11d732db276ee9d1daff303b",
+      "file": "schema-11.sql",
+      "sha256": "a9bd924fa7749fd128cdf01c9f94234cb6a245043297ee907b1f93913598b2b4",
+      "command": "git show e93857cb7176606b11d732db276ee9d1daff303b:src-tauri/schema.sql"
+    }
+  ]
+}

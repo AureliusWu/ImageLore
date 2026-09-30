@@ -2,8 +2,47 @@ use crate::{models::VisualDnaPatch, references::ReferenceInput};
 use serde_json::Value;
 use std::{
     fs,
+    io::{self, Write},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
+    time::{SystemTime, UNIX_EPOCH},
 };
+
+static NEXT_WRITE: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
+    write_atomic_with(path, |file| file.write_all(text.as_bytes())).map_err(|e| e.to_string())
+}
+
+fn write_atomic_with<F>(path: &Path, write: F) -> io::Result<()>
+where
+    F: FnOnce(&mut fs::File) -> io::Result<()>,
+{
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let staging = path.with_file_name(format!(
+        "{}.tmp-{}-{nonce}-{}",
+        path.file_name()
+            .ok_or_else(|| io::Error::other("Sidecar 路径缺少文件名"))?
+            .to_string_lossy(),
+        std::process::id(),
+        NEXT_WRITE.fetch_add(1, Ordering::Relaxed),
+    ));
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&staging)?;
+    let written = write(&mut file).and_then(|_| file.sync_all());
+    drop(file);
+    // Same-directory replacement: never remove/truncate the previous Sidecar.
+    let result = written.and_then(|_| fs::rename(&staging, path));
+    if result.is_err() {
+        let _ = fs::remove_file(&staging);
+    }
+    result
+}
 
 #[derive(Debug, Clone)]
 pub struct ParentRef {
@@ -24,12 +63,17 @@ pub fn path_for(path: &Path) -> PathBuf {
     PathBuf::from(format!("{}.imagelore.json", path.to_string_lossy()))
 }
 
-pub fn read(path: &Path) -> Option<Value> {
-    let text = fs::read_to_string(path_for(path)).ok()?;
-    let value = serde_json::from_str::<Value>(&text).ok()?;
+pub fn read(path: &Path) -> Result<Option<Value>, String> {
+    let text = match fs::read_to_string(path_for(path)) {
+        Ok(text) => text,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("读取 Sidecar 失败：{error}")),
+    };
+    let value = serde_json::from_str::<Value>(&text)
+        .map_err(|error| format!("Sidecar JSON 损坏：{error}"))?;
     match value.get("schema").and_then(Value::as_str) {
-        Some("imagelore.sidecar.v2") | Some("imagelore.sidecar.v3") => Some(value),
-        _ => None,
+        Some("imagelore.sidecar.v2") | Some("imagelore.sidecar.v3") => Ok(Some(value)),
+        _ => Err("Sidecar schema 不受当前版本支持".into()),
     }
 }
 
@@ -203,6 +247,68 @@ pub fn visual_dna(value: &Value) -> Option<VisualDnaPatch> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn temp_root(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "imagelore-sidecar-{label}-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    #[test]
+    fn atomic_export_preserves_existing_sidecar_when_staging_write_fails() {
+        let root = temp_root("write-failure");
+        let path = root.join("image.png.imagelore.json");
+        fs::write(&path, b"previous complete sidecar").unwrap();
+        let error = write_atomic_with(&path, |file| {
+            file.write_all(b"incomplete new sidecar")?;
+            Err(io::Error::other("synthetic storage failure"))
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("synthetic storage failure"));
+        assert_eq!(fs::read(&path).unwrap(), b"previous complete sidecar");
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn atomic_export_replaces_existing_sidecar_and_cleans_staging() {
+        let root = temp_root("replace");
+        let path = root.join("image.png.imagelore.json");
+        fs::write(&path, "old").unwrap();
+        write_atomic(&path, "new complete sidecar").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new complete sidecar");
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn locked_destination_keeps_old_sidecar_when_atomic_replace_fails() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let root = temp_root("locked-replace");
+        let path = root.join("image.png.imagelore.json");
+        fs::write(&path, "previous complete sidecar").unwrap();
+        let lock = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&path)
+            .unwrap();
+        assert!(write_atomic(&path, "new complete sidecar").is_err());
+        drop(lock);
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "previous complete sidecar"
+        );
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn reads_web_reference_from_v3_sidecar() {

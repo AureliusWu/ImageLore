@@ -1,6 +1,7 @@
 mod backup;
 mod commands;
 mod db;
+mod desktop;
 mod diagnostics;
 mod file_ops;
 mod generation;
@@ -20,6 +21,9 @@ mod sources;
 mod state;
 mod vision;
 mod visual_dna;
+
+#[cfg(test)]
+mod native_scale_tests;
 
 use state::AppState;
 use std::{fs, path::Path, sync::Mutex};
@@ -70,14 +74,21 @@ fn confirmed_corruption(result: rusqlite::Result<String>) -> bool {
     }
 }
 
-fn database_is_corrupt(path: &Path) -> bool {
-    let result =
-        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .and_then(|conn| {
-                conn.busy_timeout(std::time::Duration::ZERO)?;
-                conn.query_row("PRAGMA integrity_check(1)", [], |row| row.get(0))
-            });
-    confirmed_corruption(result)
+fn database_is_corrupt(result: rusqlite::Result<String>) -> Result<bool, String> {
+    match result {
+        Ok(status) => Ok(status != "ok"),
+        Err(error) => {
+            let detail = error.to_string();
+            if confirmed_corruption(Err(error)) {
+                Ok(true)
+            } else {
+                Err(format!(
+                    "资料库安全检查无法完成：{}；请检查文件权限、磁盘空间与占用后重试",
+                    detail
+                ))
+            }
+        }
+    }
 }
 
 fn open_library_connection(
@@ -86,7 +97,19 @@ fn open_library_connection(
     backups_dir: &Path,
 ) -> Result<rusqlite::Connection, String> {
     let had_database = database_path.exists();
-    let connection = match db::init_db(database_path) {
+    // A read-only connection may rewrite a damaged WAL index. Inspect copies
+    // before init_db opens the original; recovery must preserve all raw bytes first.
+    let corrupt_before_open = if had_database {
+        database_is_corrupt(backup::integrity_probe_copy(database_path))?
+    } else {
+        false
+    };
+    let initial = if corrupt_before_open {
+        Err("无破坏检查已确认资料库损坏".to_string())
+    } else {
+        db::init_db(database_path)
+    };
+    let connection = match initial {
         Ok(conn) => conn,
         Err(initial_error) => {
             diagnostics::log(
@@ -95,8 +118,8 @@ fn open_library_connection(
                 &format!("database initialization failed: {}", initial_error),
             );
             // Compatibility, migration, permission and lock errors must never replace
-            // an intact library. Only a read-only SQLite probe can authorize recovery.
-            if !had_database || !database_is_corrupt(database_path) {
+            // an intact library. Only the pre-open copy probe can authorize recovery.
+            if !had_database || !corrupt_before_open {
                 return Err(initial_error);
             }
             match backup::recover_latest_valid_backup(
@@ -144,6 +167,8 @@ pub fn run() {
         .setup(|app|{
             match prepare_state(){
                 Ok(state)=>{
+                    app.asset_protocol_scope().allow_directory(&state.cache_dir, true)?;
+                    desktop::refresh_existing_shortcut(&state.data_dir);
                     app.manage(state);
                 }
                 Err(error)=>{
@@ -418,6 +443,68 @@ mod tests {
             .unwrap()
             .filter_map(Result::ok)
             .any(|entry| fs::read(entry.path()).unwrap() == corrupt));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn startup_corruption_preserves_exact_db_wal_shm_bytes_before_any_sqlite_open() {
+        let root = test_root("corrupt-sidecars");
+        let database = root.join("library.sqlite3");
+        let backup = root.join("backups/before.sqlite3");
+        let original_db = b"damaged database sentinel";
+        let original_wal = b"damaged wal sentinel";
+        let original_shm = b"damaged shm sentinel";
+        fs::write(&database, original_db).unwrap();
+        fs::write(database.with_extension("sqlite3-wal"), original_wal).unwrap();
+        fs::write(database.with_extension("sqlite3-shm"), original_shm).unwrap();
+        drop(seed_library(&backup, "restored"));
+        drop(open_library_connection(&database, &root, &root.join("backups")).unwrap());
+        assert_eq!(marker(&database), "restored");
+        let raw = fs::read_dir(root.join("recovery"))
+            .unwrap()
+            .map(|entry| fs::read(entry.unwrap().path()).unwrap())
+            .collect::<Vec<_>>();
+        for original in [
+            original_db.as_slice(),
+            original_wal.as_slice(),
+            original_shm.as_slice(),
+        ] {
+            assert!(raw.iter().any(|bytes| bytes.as_slice() == original));
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn startup_failed_raw_preservation_keeps_corrupt_sidecars_unchanged() {
+        let root = test_root("corrupt-sidecars-failed-preserve");
+        let database = root.join("library.sqlite3");
+        let backup = root.join("backups/before.sqlite3");
+        fs::write(&database, b"damaged database sentinel").unwrap();
+        fs::write(
+            database.with_extension("sqlite3-wal"),
+            b"damaged wal sentinel",
+        )
+        .unwrap();
+        fs::write(
+            database.with_extension("sqlite3-shm"),
+            b"damaged shm sentinel",
+        )
+        .unwrap();
+        fs::write(root.join("recovery"), b"file blocks preservation directory").unwrap();
+        drop(seed_library(&backup, "candidate"));
+        let files = [
+            database.clone(),
+            database.with_extension("sqlite3-wal"),
+            database.with_extension("sqlite3-shm"),
+        ];
+        let original = files
+            .iter()
+            .map(|path| fs::read(path).unwrap())
+            .collect::<Vec<_>>();
+        assert!(open_library_connection(&database, &root, &root.join("backups")).is_err());
+        for (path, bytes) in files.iter().zip(original) {
+            assert_eq!(fs::read(path).unwrap(), bytes);
+        }
         fs::remove_dir_all(root).unwrap();
     }
 }

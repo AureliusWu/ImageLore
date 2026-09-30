@@ -1,4 +1,8 @@
-use crate::{db, importer, models::SourceFolder, state::AppState};
+use crate::{
+    db, importer,
+    models::{ImportSummary, SourceFolder},
+    state::AppState,
+};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::{collections::HashSet, path::PathBuf};
 use tauri::{AppHandle, Manager, State};
@@ -115,20 +119,33 @@ pub fn start_sync_sources(app: AppHandle, ids: Vec<i64>) -> Result<u64, String> 
         return Err("找不到要同步的来源目录".into());
     }
 
-    importer::start_job_with_finish(app, roots, true, move |state, _summary, cancelled| {
-        if cancelled {
-            return;
-        }
-        if let Ok(conn) = state.db.lock() {
-            let stamp = db::now();
-            for id in matched_ids {
-                let _ = conn.execute(
-                    "UPDATE source_folders SET last_scan_at=?1,updated_at=?1 WHERE id=?2",
-                    params![stamp, id],
-                );
-            }
-        }
+    importer::start_job_with_finish(app, roots, true, move |state, summary, cancelled| {
+        let conn = state.db.lock().map_err(|error| error.to_string())?;
+        record_completed_scan(&conn, &matched_ids, summary, cancelled, db::now())
     })
+}
+
+pub(crate) fn record_completed_scan(
+    conn: &Connection,
+    ids: &[i64],
+    summary: &ImportSummary,
+    cancelled: bool,
+    stamp: i64,
+) -> Result<(), String> {
+    // The importer reports one batch summary. Until it can certify individual roots,
+    // retain every previous successful scan timestamp if any part of the batch failed.
+    if cancelled || summary.failed != 0 {
+        return Ok(());
+    }
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    for id in ids {
+        tx.execute(
+            "UPDATE source_folders SET last_scan_at=?1,updated_at=?1 WHERE id=?2",
+            params![stamp, id],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    tx.commit().map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -147,5 +164,43 @@ mod tests {
         assert_eq!(rows[0].path, "D:/AI");
         assert!(rows[0].auto_sync);
         assert_eq!(rows[0].last_scan_at, 42);
+    }
+
+    #[test]
+    fn failed_or_cancelled_batch_never_marks_any_root_successful() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(include_str!("../schema.sql")).unwrap();
+        for id in [1, 2] {
+            conn.execute("INSERT INTO source_folders(id,path,name,auto_sync,last_scan_at,created_at,updated_at) VALUES(?1,?2,?2,1,42,1,42)", params![id, format!("synthetic-{id}")]).unwrap();
+        }
+        let mut summary = ImportSummary {
+            added: 1,
+            skipped: 0,
+            duplicates: 0,
+            failed: 1,
+            last_id: Some(1),
+        };
+        record_completed_scan(&conn, &[1, 2], &summary, false, 100).unwrap();
+        assert!(list_from_conn(&conn)
+            .unwrap()
+            .iter()
+            .all(|source| source.last_scan_at == 42));
+        summary.failed = 0;
+        record_completed_scan(&conn, &[1, 2], &summary, true, 200).unwrap();
+        assert!(list_from_conn(&conn)
+            .unwrap()
+            .iter()
+            .all(|source| source.last_scan_at == 42));
+        record_completed_scan(&conn, &[1, 2], &summary, false, 300).unwrap();
+        assert!(list_from_conn(&conn)
+            .unwrap()
+            .iter()
+            .all(|source| source.last_scan_at == 300));
+        conn.execute_batch("CREATE TRIGGER synthetic_stamp_failure BEFORE UPDATE ON source_folders WHEN old.id=2 BEGIN SELECT RAISE(ABORT,'synthetic scan failure'); END").unwrap();
+        assert!(record_completed_scan(&conn, &[1, 2], &summary, false, 400).is_err());
+        assert!(list_from_conn(&conn)
+            .unwrap()
+            .iter()
+            .all(|source| source.last_scan_at == 300));
     }
 }

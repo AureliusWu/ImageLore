@@ -42,8 +42,13 @@ enum InsertOutcome {
     Duplicate(i64),
 }
 
-fn supported_files(roots: Vec<String>, recursive_dirs: bool, cancel: &AtomicBool) -> Vec<PathBuf> {
+fn discover_files(
+    roots: Vec<String>,
+    recursive_dirs: bool,
+    cancel: &AtomicBool,
+) -> (Vec<PathBuf>, i64) {
     let mut out = Vec::new();
+    let mut failed = 0;
     'roots: for raw in roots {
         if cancel.load(Ordering::Relaxed) {
             break;
@@ -54,21 +59,31 @@ fn supported_files(roots: Vec<String>, recursive_dirs: bool, cancel: &AtomicBool
                 out.push(root)
             }
         } else if root.is_dir() && recursive_dirs {
-            for entry in WalkDir::new(root)
-                .follow_links(false)
-                .into_iter()
-                .filter_map(Result::ok)
-            {
+            for entry in WalkDir::new(root).follow_links(false) {
                 if cancel.load(Ordering::Relaxed) {
                     break 'roots;
                 }
+                let entry = match entry {
+                    Ok(entry) => entry,
+                    Err(_) => {
+                        failed += 1;
+                        continue;
+                    }
+                };
                 if entry.file_type().is_file() && metadata::is_supported(entry.path()) {
                     out.push(entry.into_path())
                 }
             }
+        } else if !root.exists() {
+            failed += 1;
         }
     }
-    out
+    (out, failed)
+}
+
+#[cfg(test)]
+fn supported_files(roots: Vec<String>, recursive_dirs: bool, cancel: &AtomicBool) -> Vec<PathBuf> {
+    discover_files(roots, recursive_dirs, cancel).0
 }
 
 fn prepare(path: &Path) -> Option<PreparedAsset> {
@@ -78,7 +93,7 @@ fn prepare(path: &Path) -> Option<PreparedAsset> {
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let info = metadata::file_info(&canonical);
     let extract = metadata::extract_generation(&canonical);
-    let saved = sidecar::read(&canonical);
+    let saved = sidecar::read(&canonical).ok()?;
     let prompt = saved
         .as_ref()
         .map(|x| sidecar::text(x, "prompt"))
@@ -100,6 +115,9 @@ fn prepare(path: &Path) -> Option<PreparedAsset> {
     let visual_dna = saved.as_ref().and_then(sidecar::visual_dna);
     let references = saved.as_ref().map(sidecar::references).unwrap_or_default();
     let fingerprint = metadata::fingerprint(&canonical);
+    if fingerprint.is_empty() {
+        return None;
+    }
     let requested_portable = saved.as_ref().map(sidecar::portable_id).unwrap_or_default();
     let portable_id = if requested_portable.is_empty() {
         db::make_portable_id(&format!(
@@ -222,7 +240,7 @@ fn insert_new(state: &AppState, item: PreparedAsset) -> Result<InsertOutcome, St
     Ok(InsertOutcome::Added(id))
 }
 
-fn run_import<F>(
+pub(crate) fn run_import<F>(
     state: &AppState,
     roots: Vec<String>,
     recursive_dirs: bool,
@@ -232,13 +250,13 @@ fn run_import<F>(
 where
     F: FnMut(ImportProgress),
 {
-    let paths = supported_files(roots, recursive_dirs, cancel);
+    let (paths, discovery_failed) = discover_files(roots, recursive_dirs, cancel);
     let total = paths.len();
     let mut result = ImportSummary {
         added: 0,
         skipped: 0,
         duplicates: 0,
-        failed: 0,
+        failed: discovery_failed,
         last_id: None,
     };
 
@@ -304,7 +322,7 @@ where
                 result.last_id = Some(id)
             }
             Some(Err(_)) => result.failed += 1,
-            None => result.skipped += 1,
+            None => result.failed += 1,
         }
 
         progress(ImportProgress {
@@ -331,7 +349,7 @@ pub(crate) fn start_job_with_finish<F>(
     on_finish: F,
 ) -> Result<u64, String>
 where
-    F: FnOnce(&AppState, &ImportSummary, bool) + Send + 'static,
+    F: FnOnce(&AppState, &ImportSummary, bool) -> Result<(), String> + Send + 'static,
 {
     let state = app.state::<AppState>();
     let (job_id, cancel) = jobs::register(state.inner())?;
@@ -350,14 +368,16 @@ where
             },
         );
         let cancelled = cancel.load(Ordering::Relaxed);
-        let summary = run.unwrap_or(ImportSummary {
+        let mut summary = run.unwrap_or(ImportSummary {
             added: 0,
             skipped: 0,
             duplicates: 0,
             failed: 1,
             last_id: None,
         });
-        on_finish(state.inner(), &summary, cancelled);
+        if on_finish(state.inner(), &summary, cancelled).is_err() {
+            summary.failed += 1;
+        }
         let _ = app_for_thread.emit(
             "imagelore://import-progress",
             ImportProgress {
@@ -385,7 +405,7 @@ pub(crate) fn start_job(
     roots: Vec<String>,
     recursive_dirs: bool,
 ) -> Result<u64, String> {
-    start_job_with_finish(app, roots, recursive_dirs, |_, _, _| {})
+    start_job_with_finish(app, roots, recursive_dirs, |_, _, _| Ok(()))
 }
 
 #[tauri::command]
@@ -442,9 +462,444 @@ pub fn import_dropped_paths(
 mod tests {
     use super::*;
     use std::{
+        collections::HashMap,
         fs,
+        sync::{atomic::AtomicU64, Mutex},
         time::{SystemTime, UNIX_EPOCH},
     };
+
+    fn test_state(root: &Path) -> AppState {
+        fs::create_dir_all(root).unwrap();
+        let database_path = root.join("library.sqlite3");
+        AppState {
+            db: Mutex::new(db::init_db(&database_path).unwrap()),
+            data_dir: root.to_path_buf(),
+            cache_dir: root.join("cache"),
+            database_path,
+            backups_dir: root.join("backups"),
+            models_dir: root.join("models"),
+            jobs: Mutex::new(HashMap::new()),
+            next_job_id: AtomicU64::new(1),
+            vision_api_key: Mutex::new(String::new()),
+        }
+    }
+
+    fn image_fixture(root: &Path, name: &str, color: [u8; 3]) -> PathBuf {
+        let path = root.join(name);
+        image::RgbImage::from_pixel(3, 3, image::Rgb(color))
+            .save(&path)
+            .unwrap();
+        path
+    }
+
+    fn import_files(state: &AppState, paths: &[&Path]) -> ImportSummary {
+        run_import(
+            state,
+            paths
+                .iter()
+                .map(|path| path.to_string_lossy().to_string())
+                .collect(),
+            false,
+            &AtomicBool::new(false),
+            |_| {},
+        )
+        .unwrap()
+    }
+
+    fn exported(state: &AppState, id: i64) -> serde_json::Value {
+        let path = crate::commands::export_sidecar_for_state(state, id).unwrap();
+        serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    fn portable_content(mut value: serde_json::Value) -> serde_json::Value {
+        value.as_object_mut().unwrap().remove("image");
+        if let Some(dna) = value
+            .get_mut("visual_dna")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            dna.remove("source");
+            dna.remove("updated_at");
+        }
+        value["parents"]
+            .as_array_mut()
+            .unwrap()
+            .sort_by_key(|parent| parent["portable_id"].as_str().unwrap().to_string());
+        value
+    }
+
+    #[test]
+    fn inbox_remix_sidecar_round_trip_preserves_portable_lineage_and_context_after_restart() {
+        use crate::{models::RemixSourceInput, remix};
+        use serde_json::json;
+        let root = temp_root("cross-library-workflow");
+        let images = root.join("images-a");
+        fs::create_dir_all(&images).unwrap();
+        let first = test_state(&root.join("library-a"));
+        let base = image_fixture(&images, "base.png", [20, 40, 60]);
+        let light = image_fixture(&images, "light.png", [80, 100, 120]);
+        let child = image_fixture(&images, "result.png", [140, 160, 180]);
+        sidecar::write_atomic(&sidecar::path_for(&base), &json!({
+            "schema":"imagelore.sidecar.v3", "asset":{"portable_id":"portable-base"},
+            "prompt":"手工基础 prompt", "negative_prompt":"avoid noise", "model":"model-a",
+            "tags":["灵感", "reference"],
+            "visual_dna":{"subject":"蓝发角色", "style":"写实摄影"},
+            "session":{"name":"合成 Session", "session_note":"session notes", "asset_note":"base notes"},
+            "reference":{"source_url":"https://cdn.example/base.png", "page_url":"https://example/one", "page_title":"来源一", "captured_at":10,"metadata":{"purpose":"composition"}}
+        }).to_string()).unwrap();
+        sidecar::write_atomic(&sidecar::path_for(&light), &json!({
+            "schema":"imagelore.sidecar.v3", "asset":{"portable_id":"portable-light"},
+            "prompt":"lighting reference", "visual_dna":{"lighting":"霓虹侧光", "environment":"夜间街道"}
+        }).to_string()).unwrap();
+        assert_eq!(import_files(&first, &[&base, &light]).added, 2);
+        let (base_id, light_id) = {
+            let conn = first.db.lock().unwrap();
+            (
+                db::asset_by_portable_id(&conn, "portable-base")
+                    .unwrap()
+                    .unwrap(),
+                db::asset_by_portable_id(&conn, "portable-light")
+                    .unwrap()
+                    .unwrap(),
+            )
+        };
+        let duplicate = images.join("duplicate.png");
+        fs::copy(&base, &duplicate).unwrap();
+        sidecar::write_atomic(&sidecar::path_for(&duplicate), &json!({
+            "schema":"imagelore.sidecar.v3", "reference":{"source_url":"https://cdn.example/base.png", "page_url":"https://example/two", "page_title":"来源二", "captured_at":20,"metadata":{"purpose":"lighting"}}
+        }).to_string()).unwrap();
+        for _ in 0..3 {
+            let summary = import_files(&first, &[&duplicate]);
+            assert_eq!(summary.duplicates, 1);
+            assert_eq!(summary.added, 0);
+            assert_eq!(summary.failed, 0);
+        }
+        {
+            let conn = first.db.lock().unwrap();
+            assert_eq!(references::list(&conn, base_id).unwrap().len(), 2);
+            assert_eq!(
+                db::get_asset(&conn, base_id).unwrap().prompt,
+                "手工基础 prompt"
+            );
+            assert_eq!(visual_dna::get(&conn, base_id).unwrap().subject, "蓝发角色");
+        }
+        sidecar::write_atomic(
+            &sidecar::path_for(&child),
+            &json!({
+                "schema":"imagelore.sidecar.v3", "asset":{"portable_id":"portable-result"},
+                "prompt":"already supplied result prompt", "visual_dna":{"composition":"中心构图"}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(import_files(&first, &[&child]).added, 1);
+        let child_id = {
+            let mut conn = first.db.lock().unwrap();
+            let child_id = db::asset_by_portable_id(&conn, "portable-result")
+                .unwrap()
+                .unwrap();
+            let draft = remix::save(
+                &mut conn,
+                None,
+                base_id,
+                "Remix generated prompt".into(),
+                vec![
+                    RemixSourceInput {
+                        asset_id: base_id,
+                        fields: vec!["subject".into(), "style".into()],
+                        source_url: String::new(),
+                    },
+                    RemixSourceInput {
+                        asset_id: light_id,
+                        fields: vec!["lighting".into(), "environment".into()],
+                        source_url: "https://example/ref".into(),
+                    },
+                ],
+            )
+            .unwrap();
+            remix::apply_lineage(&mut conn, draft.id, child_id).unwrap();
+            remix::apply_lineage(&mut conn, draft.id, child_id).unwrap();
+            assert_eq!(
+                db::get_asset(&conn, child_id).unwrap().prompt,
+                "already supplied result prompt"
+            );
+            child_id
+        };
+        let base_export = exported(&first, base_id);
+        let light_export = exported(&first, light_id);
+        let child_export = exported(&first, child_id);
+        assert_eq!(child_export["parents"].as_array().unwrap().len(), 2);
+        assert!(child_export["parents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|parent| parent["relation_type"] == "derived_from"
+                && parent["note"] == "Remix · 主体、风格"));
+        assert!(child_export["parents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|parent| parent["relation_type"] == "reference"
+                && parent["note"] == "Remix · 光线、环境"));
+        assert_eq!(child_export["session"]["name"], "合成 Session");
+        assert_eq!(child_export["session"]["asset_note"], "Remix result");
+        let images_b = root.join("images-b");
+        fs::create_dir_all(&images_b).unwrap();
+        let mut copied = Vec::new();
+        for original in [&child, &light, &base] {
+            let destination = images_b.join(original.file_name().unwrap());
+            fs::copy(original, &destination).unwrap();
+            fs::copy(sidecar::path_for(original), sidecar::path_for(&destination)).unwrap();
+            copied.push(destination);
+        }
+        let second_root = root.join("library-b");
+        let second = test_state(&second_root);
+        assert_eq!(import_files(&second, &[&copied[0]]).added, 1);
+        {
+            let conn = second.db.lock().unwrap();
+            assert_eq!(
+                conn.query_row("SELECT COUNT(*) FROM pending_relations", [], |row| row
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                2
+            );
+            assert_eq!(
+                conn.query_row("SELECT COUNT(*) FROM relations", [], |row| row
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                0
+            );
+        }
+        assert_eq!(import_files(&second, &[&copied[1], &copied[2]]).added, 2);
+        for _ in 0..3 {
+            let repeated = import_files(&second, &[&copied[0], &copied[1], &copied[2]]);
+            assert_eq!(repeated.skipped, 3);
+            assert_eq!(repeated.failed, 0);
+        }
+        drop(second);
+        let reopened = test_state(&second_root);
+        for (portable, expected) in [
+            ("portable-base", base_export),
+            ("portable-light", light_export),
+            ("portable-result", child_export),
+        ] {
+            let id = {
+                let conn = reopened.db.lock().unwrap();
+                db::asset_by_portable_id(&conn, portable).unwrap().unwrap()
+            };
+            assert_eq!(
+                portable_content(exported(&reopened, id)),
+                portable_content(expected)
+            );
+        }
+        {
+            let conn = reopened.db.lock().unwrap();
+            assert_eq!(
+                conn.query_row("SELECT COUNT(*) FROM assets", [], |row| row
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                3
+            );
+            assert_eq!(
+                conn.query_row("SELECT COUNT(*) FROM pending_relations", [], |row| row
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                0
+            );
+            assert_eq!(
+                conn.query_row("SELECT COUNT(*) FROM relations", [], |row| row
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                2
+            );
+            assert_eq!(
+                conn.query_row("SELECT COUNT(*) FROM reference_sources", [], |row| row
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                2
+            );
+        }
+        drop(reopened);
+        drop(first);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn source_sync_failure_and_cancellation_preserve_success_timestamp_and_committed_data() {
+        let root = temp_root("source-scan");
+        let images = root.join("images");
+        fs::create_dir_all(&images).unwrap();
+        let state_root = root.join("library");
+        let state = test_state(&state_root);
+        let image_a = image_fixture(&images, "a.png", [1, 2, 3]);
+        let image_b = image_fixture(&images, "b.png", [4, 5, 6]);
+        {
+            let conn = state.db.lock().unwrap();
+            conn.execute("INSERT INTO source_folders(id,path,name,auto_sync,last_scan_at,created_at,updated_at) VALUES(1,?1,'Synthetic',1,42,1,42)", params![images.to_string_lossy()]).unwrap();
+        }
+        let cancel = AtomicBool::new(true);
+        let pre_cancel = run_import(
+            &state,
+            vec![images.to_string_lossy().to_string()],
+            true,
+            &cancel,
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(pre_cancel.added, 0);
+        crate::sources::record_completed_scan(
+            &state.db.lock().unwrap(),
+            &[1],
+            &pre_cancel,
+            true,
+            100,
+        )
+        .unwrap();
+        cancel.store(false, Ordering::Relaxed);
+        let partial = run_import(
+            &state,
+            vec![
+                image_a.to_string_lossy().to_string(),
+                image_b.to_string_lossy().to_string(),
+            ],
+            false,
+            &cancel,
+            |_| cancel.store(true, Ordering::Relaxed),
+        )
+        .unwrap();
+        assert_eq!(partial.added, 1);
+        crate::sources::record_completed_scan(&state.db.lock().unwrap(), &[1], &partial, true, 200)
+            .unwrap();
+        let failure = run_import(
+            &state,
+            vec![
+                images.to_string_lossy().to_string(),
+                root.join("unavailable-folder")
+                    .to_string_lossy()
+                    .to_string(),
+            ],
+            true,
+            &AtomicBool::new(false),
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(failure.added, 1);
+        assert_eq!(failure.failed, 1);
+        crate::sources::record_completed_scan(
+            &state.db.lock().unwrap(),
+            &[1],
+            &failure,
+            false,
+            300,
+        )
+        .unwrap();
+        {
+            let conn = state.db.lock().unwrap();
+            assert_eq!(
+                crate::sources::list_from_conn(&conn).unwrap()[0].last_scan_at,
+                42
+            );
+            conn.execute_batch("CREATE TRIGGER synthetic_import_failure BEFORE INSERT ON reference_sources BEGIN SELECT RAISE(ABORT,'synthetic reference failure'); END").unwrap();
+        }
+        let duplicate = images.join("duplicate.png");
+        fs::copy(&image_a, &duplicate).unwrap();
+        sidecar::write_atomic(&sidecar::path_for(&duplicate), r#"{"schema":"imagelore.sidecar.v3","reference":{"source_url":"https://example/failed.png","page_url":"https://example/failed"},"session":{"name":"must rollback"},"visual_dna":{"subject":"must rollback"}}"#).unwrap();
+        let failed_merge = import_files(&state, &[&duplicate]);
+        assert_eq!(failed_merge.failed, 1);
+        assert_eq!(failed_merge.duplicates, 0);
+        {
+            let conn = state.db.lock().unwrap();
+            assert_eq!(
+                conn.query_row("SELECT COUNT(*) FROM generation_sessions", [], |row| row
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                0
+            );
+            assert_eq!(
+                conn.query_row(
+                    "SELECT COUNT(*) FROM visual_dna WHERE subject<>''",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+                0
+            );
+            conn.execute_batch("DROP TRIGGER synthetic_import_failure")
+                .unwrap();
+        }
+        fs::remove_file(sidecar::path_for(&duplicate)).unwrap();
+        for invalid_sidecar in ["{truncated", r#"{"schema":"imagelore.sidecar.v99"}"#] {
+            fs::write(sidecar::path_for(&duplicate), invalid_sidecar).unwrap();
+            let invalid_summary = import_files(&state, &[&duplicate]);
+            assert_eq!(invalid_summary.failed, 1);
+            assert_eq!(invalid_summary.duplicates, 0);
+            assert_eq!(
+                fs::read_to_string(sidecar::path_for(&duplicate)).unwrap(),
+                invalid_sidecar
+            );
+        }
+        fs::remove_file(sidecar::path_for(&duplicate)).unwrap();
+        drop(state);
+        let state = test_state(&state_root);
+        {
+            let conn = state.db.lock().unwrap();
+            assert_eq!(
+                crate::sources::list_from_conn(&conn).unwrap()[0].last_scan_at,
+                42
+            );
+            assert_eq!(
+                conn.query_row("SELECT COUNT(*) FROM assets", [], |row| row
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                2
+            );
+            assert_eq!(
+                conn.query_row("SELECT COUNT(*) FROM generation_sessions", [], |row| row
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                0
+            );
+        }
+        let success = run_import(
+            &state,
+            vec![images.to_string_lossy().to_string()],
+            true,
+            &AtomicBool::new(false),
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(success.failed, 0);
+        crate::sources::record_completed_scan(
+            &state.db.lock().unwrap(),
+            &[1],
+            &success,
+            false,
+            400,
+        )
+        .unwrap();
+        drop(state);
+        let reopened = test_state(&state_root);
+        {
+            let conn = reopened.db.lock().unwrap();
+            assert_eq!(
+                crate::sources::list_from_conn(&conn).unwrap()[0].last_scan_at,
+                400
+            );
+            assert_eq!(
+                conn.query_row("SELECT COUNT(*) FROM assets", [], |row| row
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                2
+            );
+            assert_eq!(
+                conn.query_row("SELECT COUNT(*) FROM reference_sources", [], |row| row
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                0
+            );
+        }
+        drop(reopened);
+        fs::remove_dir_all(root).unwrap();
+    }
 
     fn temp_root(label: &str) -> PathBuf {
         let nonce = SystemTime::now()

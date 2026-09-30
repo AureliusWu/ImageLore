@@ -1,13 +1,22 @@
 use image::{DynamicImage, ImageFormat};
 use std::{
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
-    time::UNIX_EPOCH,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Mutex,
+    },
+    time::{Duration, Instant, UNIX_EPOCH},
 };
 use walkdir::WalkDir;
 
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+const CACHE_MAX_BYTES: u64 = 1024 * 1024 * 1024;
+const CACHE_PRUNE_INTERVAL: Duration = Duration::from_secs(60);
+static CACHE_PRUNE_LOCK: Mutex<()> = Mutex::new(());
+static CACHE_PRUNE_RUNS: std::sync::LazyLock<Mutex<HashMap<PathBuf, (Instant, bool)>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 fn load_scaled(path: &Path, max_edge: u32) -> Result<DynamicImage, String> {
     let image = image::open(path).map_err(|e| e.to_string())?;
@@ -72,7 +81,29 @@ pub fn cached_preview_path(
         }
         let _ = fs::remove_file(&temp);
     }
+    request_cache_prune(cache_root, &output);
     Ok(output.to_string_lossy().to_string())
+}
+
+fn request_cache_prune(cache_root: &Path, current: &Path) {
+    let Ok(mut runs) = CACHE_PRUNE_RUNS.lock() else {
+        return;
+    };
+    if let Some((last, running)) = runs.get(cache_root) {
+        if *running || last.elapsed() < CACHE_PRUNE_INTERVAL {
+            return;
+        }
+    }
+    runs.insert(cache_root.to_path_buf(), (Instant::now(), true));
+    let root = cache_root.to_path_buf();
+    let current = current.to_path_buf();
+    drop(runs);
+    std::thread::spawn(move || {
+        prune_cache_preserving(&root, CACHE_MAX_BYTES, Some(&current));
+        if let Ok(mut runs) = CACHE_PRUNE_RUNS.lock() {
+            runs.insert(root, (Instant::now(), false));
+        }
+    });
 }
 
 pub fn purge_asset_cache(cache_root: &Path, fingerprint: &str) {
@@ -95,6 +126,15 @@ pub fn purge_asset_cache(cache_root: &Path, fingerprint: &str) {
 }
 
 pub fn prune_cache(cache_root: &Path, max_bytes: u64) {
+    prune_cache_preserving(cache_root, max_bytes, None);
+}
+
+fn prune_cache_preserving(cache_root: &Path, max_bytes: u64, current: Option<&Path>) {
+    // Startup and ongoing cleanup share one worker; only complete derived WebP
+    // files count toward the soft cache budget. Writers' .tmp files stay intact.
+    let Ok(_guard) = CACHE_PRUNE_LOCK.lock() else {
+        return;
+    };
     let mut files = Vec::<(PathBuf, u64, u64)>::new();
     let mut total = 0u64;
     for entry in WalkDir::new(cache_root)
@@ -103,6 +143,9 @@ pub fn prune_cache(cache_root: &Path, max_bytes: u64) {
         .filter_map(Result::ok)
     {
         if !entry.file_type().is_file() {
+            continue;
+        }
+        if entry.path().extension().is_none_or(|x| x != "webp") {
             continue;
         }
         let Ok(meta) = entry.metadata() else { continue };
@@ -123,6 +166,9 @@ pub fn prune_cache(cache_root: &Path, max_bytes: u64) {
     for (path, size, _) in files {
         if total <= max_bytes {
             break;
+        }
+        if current == Some(path.as_path()) {
+            continue;
         }
         if fs::remove_file(path).is_ok() {
             total = total.saturating_sub(size)
@@ -195,6 +241,31 @@ mod tests {
         assert!(!root.join("a.webp").exists());
         assert!(!root.join("b.webp").exists());
 
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn prune_preserves_inflight_encoding_and_noncache_files() {
+        let root = temp_root("inflight");
+        fs::write(root.join("old.webp"), b"1234").unwrap();
+        fs::write(root.join("writing.webp.12.1.tmp"), b"5678").unwrap();
+        fs::write(root.join("source.png"), b"source").unwrap();
+        prune_cache(&root, 0);
+        assert!(!root.join("old.webp").exists());
+        assert!(root.join("writing.webp.12.1.tmp").exists());
+        assert!(root.join("source.png").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn ongoing_cleanup_preserves_the_just_returned_preview() {
+        let root = temp_root("current");
+        let current = root.join("current.webp");
+        fs::write(&current, b"1234").unwrap();
+        fs::write(root.join("old.webp"), b"5678").unwrap();
+        prune_cache_preserving(&root, 4, Some(&current));
+        assert!(current.exists());
+        assert!(!root.join("old.webp").exists());
         let _ = fs::remove_dir_all(root);
     }
 }

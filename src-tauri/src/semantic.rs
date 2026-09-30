@@ -604,7 +604,7 @@ pub fn cancel_semantic_index(state: State<'_, AppState>, job_id: u64) -> Result<
     jobs::cancel(state.inner(), job_id)
 }
 
-fn ranked(
+pub(crate) fn ranked(
     state: &AppState,
     query: &[f32],
     mut filter: LibraryFilter,
@@ -612,25 +612,24 @@ fn ranked(
     exclude: Option<i64>,
 ) -> Result<Vec<SemanticHit>, String> {
     filter.query.clear();
-    let candidates = {
+    let (candidates, rows) = {
         let conn = state.db.lock().map_err(|e| e.to_string())?;
-        search::filtered_summaries(&conn, &filter, 100_000)?
-    };
-    let allowed: HashSet<i64> = candidates.iter().map(|x| x.id).collect();
-    let assets: HashMap<i64, _> = candidates.into_iter().map(|x| (x.id, x)).collect();
-
-    let rows: Vec<(i64, Vec<u8>)> = {
-        let conn = state.db.lock().map_err(|e| e.to_string())?;
+        let candidates = search::filtered_summaries(&conn, &filter, 100_000)?;
         let mut st=conn.prepare(
-            "SELECT asset_id,vector FROM semantic_embeddings WHERE model_id=?1 AND dimensions=?2"
+            "SELECT se.asset_id,se.vector FROM semantic_embeddings se
+             JOIN assets a ON a.id=se.asset_id
+             WHERE se.model_id=?1 AND se.dimensions=?2 AND se.fingerprint=a.fingerprint AND a.missing=0"
         ).map_err(|e|e.to_string())?;
         let mapped = st
             .query_map(params![MODEL_ID, DIMENSIONS as i64], |r| {
                 Ok((r.get(0)?, r.get(1)?))
             })
             .map_err(|e| e.to_string())?;
-        mapped.filter_map(Result::ok).collect()
+        let rows: Vec<(i64, Vec<u8>)> = mapped.filter_map(Result::ok).collect();
+        (candidates, rows)
     };
+    let allowed: HashSet<i64> = candidates.iter().map(|x| x.id).collect();
+    let assets: HashMap<i64, _> = candidates.into_iter().map(|x| (x.id, x)).collect();
 
     let mut hits = Vec::new();
     for (id, blob) in rows {
@@ -701,10 +700,7 @@ pub fn semantic_search_similar(
 ) -> Result<Vec<SemanticHit>, String> {
     let blob: Option<Vec<u8>> = {
         let conn = state.db.lock().map_err(|e| e.to_string())?;
-        conn.query_row(
-            "SELECT vector FROM semantic_embeddings WHERE asset_id=?1 AND model_id=?2 AND dimensions=?3",
-            params![asset_id,MODEL_ID,DIMENSIONS as i64],|r|r.get(0)
-        ).optional().map_err(|e|e.to_string())?
+        reference_vector(&conn, asset_id)?
     };
     let blob = blob.ok_or("当前图片尚未建立语义索引")?;
     ranked(
@@ -714,6 +710,18 @@ pub fn semantic_search_similar(
         limit,
         Some(asset_id),
     )
+}
+
+fn reference_vector(conn: &rusqlite::Connection, asset_id: i64) -> Result<Option<Vec<u8>>, String> {
+    conn.query_row(
+        "SELECT se.vector FROM semantic_embeddings se JOIN assets a ON a.id=se.asset_id
+         WHERE se.asset_id=?1 AND se.model_id=?2 AND se.dimensions=?3
+           AND se.fingerprint=a.fingerprint AND a.missing=0",
+        params![asset_id, MODEL_ID, DIMENSIONS as i64],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -741,6 +749,73 @@ pub fn delete_semantic_models(state: State<'_, AppState>) -> Result<bool, String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn indexed_state() -> AppState {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(include_str!("../schema.sql")).unwrap();
+        let vector = to_blob(&normalize(vec![1.0; DIMENSIONS]));
+        for (id, missing) in [(1, 0), (2, 0), (3, 1)] {
+            conn.execute(
+                "INSERT INTO assets(id,path,name,fingerprint,missing,created_at,updated_at) VALUES(?1,?2,?3,'fresh',?4,1,1)",
+                params![id, format!("/synthetic/{id}.png"), format!("asset {id}"), missing],
+            ).unwrap();
+            conn.execute(
+                "INSERT INTO semantic_embeddings(asset_id,model_id,dimensions,vector,fingerprint,indexed_at) VALUES(?1,?2,?3,?4,'fresh',1)",
+                params![id, MODEL_ID, DIMENSIONS as i64, vector],
+            ).unwrap();
+        }
+        AppState {
+            db: std::sync::Mutex::new(conn),
+            data_dir: PathBuf::new(),
+            cache_dir: PathBuf::new(),
+            database_path: PathBuf::new(),
+            backups_dir: PathBuf::new(),
+            models_dir: PathBuf::new(),
+            jobs: std::sync::Mutex::new(HashMap::new()),
+            next_job_id: std::sync::atomic::AtomicU64::new(1),
+            vision_api_key: std::sync::Mutex::new(String::new()),
+        }
+    }
+
+    #[test]
+    fn ranked_omits_stale_and_missing_embeddings_until_rebuilt() {
+        let state = indexed_state();
+        {
+            let conn = state.db.lock().unwrap();
+            conn.execute("UPDATE assets SET fingerprint='changed' WHERE id=2", [])
+                .unwrap();
+        }
+        let query = normalize(vec![1.0; DIMENSIONS]);
+        let hits = ranked(&state, &query, LibraryFilter::default(), 10, None).unwrap();
+        assert_eq!(
+            hits.iter().map(|hit| hit.asset.id).collect::<Vec<_>>(),
+            vec![1]
+        );
+        {
+            let conn = state.db.lock().unwrap();
+            conn.execute(
+                "UPDATE semantic_embeddings SET fingerprint='changed' WHERE asset_id=2",
+                [],
+            )
+            .unwrap();
+        }
+        let rebuilt = ranked(&state, &query, LibraryFilter::default(), 10, None).unwrap();
+        assert_eq!(
+            rebuilt.iter().map(|hit| hit.asset.id).collect::<Vec<_>>(),
+            vec![2, 1]
+        );
+    }
+
+    #[test]
+    fn similar_reference_requires_current_nonmissing_embedding() {
+        let state = indexed_state();
+        let conn = state.db.lock().unwrap();
+        assert!(reference_vector(&conn, 1).unwrap().is_some());
+        conn.execute("UPDATE assets SET fingerprint='changed' WHERE id=1", [])
+            .unwrap();
+        assert!(reference_vector(&conn, 1).unwrap().is_none());
+        assert!(reference_vector(&conn, 3).unwrap().is_none());
+    }
 
     #[test]
     fn sha256_file_matches_known_digest() {

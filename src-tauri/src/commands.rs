@@ -387,6 +387,10 @@ pub fn rescan_metadata(state: State<'_, AppState>, id: i64) -> Result<AssetRecor
 
 #[tauri::command]
 pub fn export_sidecar(state: State<'_, AppState>, id: i64) -> Result<String, String> {
+    export_sidecar_for_state(state.inner(), id)
+}
+
+pub(crate) fn export_sidecar_for_state(state: &AppState, id: i64) -> Result<String, String> {
     let (asset, out, text) = {
         let conn = state.db.lock().map_err(|e| e.to_string())?;
         let asset = db::get_asset(&conn, id)?;
@@ -448,7 +452,7 @@ pub fn export_sidecar(state: State<'_, AppState>, id: i64) -> Result<String, Str
     if asset.missing != 0 || !Path::new(&asset.path).exists() {
         return Err("原图片文件不存在，无法导出 Sidecar".into());
     }
-    fs::write(&out, text).map_err(|e| e.to_string())?;
+    sidecar::write_atomic(&out, &text)?;
     Ok(out.to_string_lossy().to_string())
 }
 

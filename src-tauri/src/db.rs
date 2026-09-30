@@ -19,6 +19,24 @@ pub fn now() -> i64 {
 const DATA_DIR_NAME: &str = "app.imagelore.desktop";
 const LEGACY_DATA_DIR_NAME: &str = "ImageLore";
 
+fn acceptance_root(path: &Path) -> Result<PathBuf, String> {
+    if !path.is_absolute() {
+        return Err("验收数据目录必须是绝对路径".into());
+    }
+    let marker = fs::read_to_string(path.join(".imagelore-acceptance-root"))
+        .map_err(|_| "验收数据目录缺少隔离标记；已停止启动以保护原资料库".to_string())?;
+    if marker.trim() != "ImageLore acceptance fixture" {
+        return Err("验收数据目录标记无效".into());
+    }
+    fs::canonicalize(path).map_err(|e| e.to_string())
+}
+
+fn configured_acceptance_root() -> Result<Option<PathBuf>, String> {
+    std::env::var_os("IMAGELORE_TEST_DATA_DIR")
+        .map(|value| acceptance_root(Path::new(&value)))
+        .transpose()
+}
+
 fn copy_dir_all(source: &Path, target: &Path) -> Result<(), String> {
     fs::create_dir_all(target).map_err(|e| e.to_string())?;
     for entry in fs::read_dir(source).map_err(|e| e.to_string())? {
@@ -105,9 +123,14 @@ fn migrate_legacy_data(base: &Path, root: &Path) -> Result<(), String> {
 }
 
 pub fn data_root() -> Result<(PathBuf, PathBuf), String> {
-    let base = dirs::data_local_dir().ok_or("无法定位本地应用数据目录")?;
-    let root = base.join(DATA_DIR_NAME);
-    migrate_legacy_data(&base, &root)?;
+    let root = if let Some(root) = configured_acceptance_root()? {
+        root
+    } else {
+        let base = dirs::data_local_dir().ok_or("无法定位本地应用数据目录")?;
+        let root = base.join(DATA_DIR_NAME);
+        migrate_legacy_data(&base, &root)?;
+        root
+    };
     let cache = root.join("cache");
     fs::create_dir_all(cache.join("thumbnails")).map_err(|e| e.to_string())?;
     fs::create_dir_all(cache.join("previews")).map_err(|e| e.to_string())?;
@@ -115,6 +138,11 @@ pub fn data_root() -> Result<(PathBuf, PathBuf), String> {
 }
 
 pub fn error_log_root() -> PathBuf {
+    match configured_acceptance_root() {
+        Ok(Some(root)) => return root,
+        Err(_) => return std::env::temp_dir().join("imagelore-acceptance-errors"),
+        Ok(None) => {}
+    }
     dirs::data_local_dir()
         .map(|x| x.join(DATA_DIR_NAME))
         .unwrap_or_else(std::env::temp_dir)
@@ -510,6 +538,27 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(include_str!("../schema.sql")).unwrap();
         conn
+    }
+
+    #[test]
+    fn acceptance_directory_requires_absolute_marked_isolation() {
+        assert!(acceptance_root(Path::new("relative-library")).is_err());
+        let root = std::env::temp_dir().join(format!(
+            "imagelore-isolation-test-{}-{}",
+            std::process::id(),
+            now()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        assert!(acceptance_root(&root).is_err());
+        let marker = root.join(".imagelore-acceptance-root");
+        fs::write(&marker, "wrong marker").unwrap();
+        assert!(acceptance_root(&root).is_err());
+        fs::write(&marker, "ImageLore acceptance fixture\n").unwrap();
+        assert_eq!(
+            acceptance_root(&root).unwrap(),
+            fs::canonicalize(&root).unwrap()
+        );
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

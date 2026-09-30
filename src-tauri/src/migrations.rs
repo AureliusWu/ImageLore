@@ -2,7 +2,7 @@ use crate::generation_index;
 use rusqlite::{params, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
 
-const LATEST: i64 = 11;
+pub(crate) const LATEST: i64 = 11;
 
 fn set_version(conn: &Connection, version: i64) -> Result<(), String> {
     conn.execute(
@@ -403,6 +403,28 @@ fn migrate_v11(conn: &Connection) -> Result<(), String> {
 }
 
 pub fn apply(conn: &Connection) -> Result<(), String> {
+    // DDL, data backfills and the schema marker commit together. A failed step
+    // must leave the old version usable and retryable, including inside a caller transaction.
+    conn.execute_batch("SAVEPOINT imagelore_migration;")
+        .map_err(|e| e.to_string())?;
+    match apply_inner(conn) {
+        Ok(()) => match conn.execute_batch("RELEASE imagelore_migration;") {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                conn.execute_batch("ROLLBACK TO imagelore_migration; RELEASE imagelore_migration;")
+                    .map_err(|rollback| format!("{}；迁移提交回退失败：{}", error, rollback))?;
+                Err(error.to_string())
+            }
+        },
+        Err(error) => {
+            conn.execute_batch("ROLLBACK TO imagelore_migration; RELEASE imagelore_migration;")
+                .map_err(|rollback| format!("{}；迁移回退失败：{}", error, rollback))?;
+            Err(error)
+        }
+    }
+}
+
+fn apply_inner(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS app_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);",
     )
@@ -415,7 +437,14 @@ pub fn apply(conn: &Connection) -> Result<(), String> {
         )
         .optional()
         .map_err(|e| e.to_string())?;
-    let mut version = current.and_then(|x| x.parse::<i64>().ok()).unwrap_or(0);
+    let mut version = match current {
+        Some(value) => value
+            .parse::<i64>()
+            .ok()
+            .filter(|v| *v >= 1)
+            .ok_or_else(|| format!("无效数据库版本：{}", value))?,
+        None => 0,
+    };
 
     if version > LATEST {
         return Err(format!(
@@ -425,6 +454,12 @@ pub fn apply(conn: &Connection) -> Result<(), String> {
     }
 
     if version == 0 {
+        let existing: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name<>'app_meta' AND name NOT LIKE 'sqlite_%'", [], |r| r.get(0)
+        ).map_err(|e| e.to_string())?;
+        if existing != 0 {
+            return Err("现有数据库缺少 ImageLore schema 标记，拒绝覆盖初始化".into());
+        }
         conn.execute_batch(include_str!("../schema.sql"))
             .map_err(|e| e.to_string())?;
         set_version(conn, LATEST)?;
@@ -497,6 +532,319 @@ pub fn apply(conn: &Connection) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+
+    // Frozen source must stay byte-identical to its historical commit.
+    #[allow(clippy::all)]
+    mod historical_v2 {
+        include!("../tests/fixtures/migrations/schema-2/src/migrations.rs");
+    }
+
+    const HISTORY: [&str; 11] = [
+        include_str!("../tests/fixtures/migrations/schema-1.sql"),
+        include_str!("../tests/fixtures/migrations/schema-2.sql"),
+        include_str!("../tests/fixtures/migrations/schema-3.sql"),
+        include_str!("../tests/fixtures/migrations/schema-4.sql"),
+        include_str!("../tests/fixtures/migrations/schema-5.sql"),
+        include_str!("../tests/fixtures/migrations/schema-6.sql"),
+        include_str!("../tests/fixtures/migrations/schema-7.sql"),
+        include_str!("../tests/fixtures/migrations/schema-8.sql"),
+        include_str!("../tests/fixtures/migrations/schema-9.sql"),
+        include_str!("../tests/fixtures/migrations/schema-10.sql"),
+        include_str!("../tests/fixtures/migrations/schema-11.sql"),
+    ];
+
+    fn seed_history(conn: &Connection, version: usize) {
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        if version == 2 {
+            historical_v2::apply(conn).unwrap();
+        } else {
+            conn.execute_batch(HISTORY[version - 1]).unwrap();
+        }
+        let actual: String = conn
+            .query_row(
+                "SELECT value FROM app_meta WHERE key='schema_version'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(actual, version.to_string());
+        conn.execute_batch(
+            "INSERT INTO assets(id,path,name,generation_json,fingerprint,created_at,updated_at) VALUES
+                (1,'synthetic/one.png','历史蓝色大肥鱼.png','{\"seed\":\"42\",\"steps\":\"30\",\"sampler\":\"Euler\",\"cfg_scale\":\"6.5\"}','fp-one',10,20),
+                (2,'synthetic/two.png','second.png','{}','fp-two',11,21);
+             INSERT INTO prompt_state VALUES(1,'sentinel prompt','sentinel negative','fixture model',20),(2,'child prompt','','fixture model',21);
+             INSERT INTO prompt_revisions(asset_id,prompt,negative_prompt,model,tags_json,note,created_at) VALUES(1,'old prompt','old negative','old model','[\"海洋少女\"]','revision note',12);
+             INSERT INTO tags(id,name,created_at) VALUES(1,'海洋少女',10);
+             INSERT INTO asset_tags VALUES(1,1,10);
+             INSERT INTO collections(id,name,description,created_at,updated_at) VALUES(1,'fixture collection','sentinel collection',10,20);
+             INSERT INTO collection_assets VALUES(1,1,10);
+             INSERT INTO relations(parent_id,child_id,relation_type,note,created_at) VALUES(1,2,'derived_from','sentinel lineage',20);"
+        ).unwrap();
+        if version >= 3 {
+            conn.execute_batch(
+            "UPDATE assets SET portable_id='fixture-one' WHERE id=1; UPDATE assets SET portable_id='fixture-two' WHERE id=2;
+             INSERT INTO generation_sessions VALUES(1,'fixture session','session note',10,20);
+             INSERT INTO asset_sessions VALUES(1,1,'asset session note',10,20);
+             INSERT INTO model_aliases VALUES('fixture alias','fixture model',10,20);
+             INSERT INTO saved_filters VALUES(1,'fixture filter','{\"favorite\":true}',10,20);
+             INSERT INTO pending_relations VALUES('fixture-two','unavailable-parent','fp-missing','reference','pending note',20);"
+        ).unwrap();
+        }
+        if version >= 4 {
+            conn.execute_batch("INSERT INTO source_folders VALUES(1,'synthetic/source','fixture source',1,15,10,20);").unwrap();
+        }
+        if version >= 5 {
+            generation_index::rebuild_all(conn).unwrap();
+        }
+        if version >= 6 {
+            conn.execute_batch("INSERT INTO semantic_embeddings VALUES(1,'fixture-model',1,X'0000803F','fp-one',20); UPDATE semantic_settings SET value='1' WHERE key='enabled';").unwrap();
+        }
+        if version >= 8 {
+            conn.execute_batch("INSERT INTO visual_dna(asset_id,subject,environment,style,search_text,source,updated_at) VALUES(1,'fixture subject','千禧年电脑房','fixture style','fixture DNA','manual',20);").unwrap();
+        }
+        if version >= 9 {
+            conn.execute_batch("UPDATE vision_settings SET model='fixture vision' WHERE id=1; INSERT INTO image_prompt_analyses(asset_id,model,summary,prompt,visual_dna_json,created_at) VALUES(1,'fixture vision','analysis summary','analysis prompt','{\"subject\":\"fixture\"}',20);").unwrap();
+        }
+        if version >= 10 {
+            conn.execute_batch("INSERT INTO remix_drafts VALUES(1,1,'remix prompt',10,20); INSERT INTO remix_sources VALUES(1,2,'[\"subject\"]','https://example.test/source','{\"pageTitle\":\"sentinel\"}',1,20);").unwrap();
+        }
+        if version >= 11 {
+            conn.execute_batch("INSERT INTO reference_sources(asset_id,source_url,page_url,page_title,source_type,metadata_json,captured_at,created_at,updated_at) VALUES(1,'https://example.test/image.png','https://example.test/page','reference sentinel','web','{\"license\":\"synthetic\"}',15,10,20);").unwrap();
+        }
+        if version >= 11 {
+            crate::db::reindex_asset(conn, 1).unwrap();
+            crate::db::reindex_asset(conn, 2).unwrap();
+        }
+    }
+
+    fn snapshot(conn: &Connection, version: usize) -> Vec<String> {
+        let mut queries = vec![
+            "SELECT id,path,name,favorite,generation_json,fingerprint,missing,created_at,updated_at FROM assets ORDER BY id",
+            "SELECT * FROM prompt_state ORDER BY asset_id",
+            "SELECT * FROM prompt_revisions ORDER BY id",
+            "SELECT * FROM tags ORDER BY id",
+            "SELECT * FROM asset_tags ORDER BY asset_id,tag_id",
+            "SELECT * FROM collections ORDER BY id",
+            "SELECT * FROM collection_assets ORDER BY collection_id,asset_id",
+            "SELECT * FROM relations ORDER BY id",
+        ];
+        if version >= 3 {
+            queries.extend([
+                "SELECT id,portable_id FROM assets ORDER BY id",
+                "SELECT * FROM generation_sessions ORDER BY id",
+                "SELECT * FROM asset_sessions ORDER BY asset_id",
+                "SELECT * FROM model_aliases ORDER BY alias",
+                "SELECT * FROM saved_filters ORDER BY id",
+                "SELECT * FROM pending_relations ORDER BY child_portable_id",
+            ]);
+        }
+        if version >= 4 {
+            queries.push("SELECT * FROM source_folders ORDER BY id");
+        }
+        if version >= 5 {
+            queries.push("SELECT * FROM generation_index ORDER BY asset_id");
+        }
+        if version >= 6 {
+            queries.extend([
+                "SELECT * FROM semantic_embeddings ORDER BY asset_id",
+                "SELECT * FROM semantic_settings ORDER BY key",
+            ]);
+        }
+        if version >= 8 {
+            queries.push("SELECT * FROM visual_dna ORDER BY asset_id");
+        }
+        if version >= 9 {
+            queries.extend([
+                "SELECT * FROM vision_settings ORDER BY id",
+                "SELECT * FROM image_prompt_analyses ORDER BY id",
+            ]);
+        }
+        if version >= 10 {
+            queries.extend([
+                "SELECT * FROM remix_drafts ORDER BY id",
+                "SELECT * FROM remix_sources ORDER BY draft_id,asset_id",
+            ]);
+        }
+        if version >= 11 {
+            queries.push("SELECT * FROM reference_sources ORDER BY id");
+        }
+        queries
+            .into_iter()
+            .map(|query| {
+                let mut st = conn.prepare(query).unwrap();
+                let columns = st.column_count();
+                let mut rows = st.query([]).unwrap();
+                let mut text = query.to_string();
+                while let Some(row) = rows.next().unwrap() {
+                    for column in 0..columns {
+                        text.push_str(&format!("|{:?}", row.get_ref(column).unwrap()));
+                    }
+                    text.push('\n');
+                }
+                text
+            })
+            .collect()
+    }
+
+    fn temp_history(version: usize) -> (std::path::PathBuf, Connection) {
+        let token = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("imagelore-history-{}-{}.sqlite3", version, token));
+        let conn = Connection::open(&path).unwrap();
+        seed_history(&conn, version);
+        (path, conn)
+    }
+
+    #[test]
+    fn all_real_historical_schemas_migrate_without_business_data_loss() {
+        for version in 1..=11 {
+            let (path, conn) = temp_history(version);
+            let before = snapshot(&conn, version);
+            apply(&conn).unwrap_or_else(|e| panic!("schema {}: {}", version, e));
+            assert_eq!(
+                snapshot(&conn, version),
+                before,
+                "schema {} business data",
+                version
+            );
+            let portable: Vec<String> = conn
+                .prepare("SELECT portable_id FROM assets ORDER BY id")
+                .unwrap()
+                .query_map([], |r| r.get(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            assert_eq!(portable.len(), 2);
+            assert!(portable.iter().all(|id| !id.is_empty()));
+            assert_ne!(portable[0], portable[1]);
+            if version <= 2 {
+                assert_eq!(
+                    portable[0],
+                    legacy_portable_id(1, "synthetic/one.png", "fp-one", 10)
+                );
+            }
+            assert_eq!(conn.query_row("SELECT asset_id FROM asset_cjk_search WHERE asset_cjk_search MATCH '\"历史蓝色\"'", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+            assert!(
+                conn.query_row(
+                    "SELECT COUNT(*) FROM asset_search WHERE asset_search MATCH 'sentinel'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap()
+                    > 0
+            );
+            let migrated = snapshot(&conn, 11);
+            apply(&conn).unwrap();
+            assert_eq!(snapshot(&conn, 11), migrated, "schema {} repeated", version);
+            assert!(!conn
+                .prepare("PRAGMA foreign_key_check")
+                .unwrap()
+                .exists([])
+                .unwrap());
+            assert_eq!(
+                conn.query_row("PRAGMA integrity_check", [], |r| r.get::<_, String>(0))
+                    .unwrap(),
+                "ok"
+            );
+            assert_eq!(
+                conn.query_row(
+                    "SELECT seed FROM generation_index WHERE asset_id=1",
+                    [],
+                    |r| r.get::<_, String>(0)
+                )
+                .unwrap(),
+                "42"
+            );
+            drop(conn);
+            drop(crate::db::init_db(&path).unwrap());
+            std::fs::remove_file(path).unwrap();
+        }
+    }
+
+    #[test]
+    fn historical_migration_failure_rolls_back_every_step_and_retries() {
+        for version in 1..11 {
+            let (path, conn) = temp_history(version);
+            let before = snapshot(&conn, version);
+            conn.execute_batch("CREATE TRIGGER stop_migration BEFORE UPDATE OF value ON app_meta WHEN NEW.value='11' BEGIN SELECT RAISE(ABORT,'injected final-step failure'); END;").unwrap();
+            assert!(apply(&conn).unwrap_err().contains("injected"));
+            assert_eq!(
+                conn.query_row(
+                    "SELECT value FROM app_meta WHERE key='schema_version'",
+                    [],
+                    |r| r.get::<_, String>(0)
+                )
+                .unwrap(),
+                version.to_string()
+            );
+            assert_eq!(snapshot(&conn, version), before);
+            assert_eq!(has_table(&conn, "reference_sources").unwrap(), false);
+            if version <= 2 {
+                assert!(!has_column(&conn, "assets", "portable_id").unwrap());
+            }
+            drop(conn);
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch("DROP TRIGGER stop_migration;").unwrap();
+            apply(&conn).unwrap();
+            assert_eq!(snapshot(&conn, version), before);
+            drop(conn);
+            std::fs::remove_file(path).unwrap();
+        }
+    }
+
+    #[test]
+    fn future_and_invalid_schema_markers_do_not_mutate_business_data() {
+        let conn = Connection::open_in_memory().unwrap();
+        seed_history(&conn, 11);
+        let before = snapshot(&conn, 11);
+        for marker in ["12", "invalid", "0", "-1"] {
+            conn.execute(
+                "UPDATE app_meta SET value=?1 WHERE key='schema_version'",
+                [marker],
+            )
+            .unwrap();
+            assert!(apply(&conn).is_err());
+            assert_eq!(snapshot(&conn, 11), before);
+            assert_eq!(
+                conn.query_row(
+                    "SELECT value FROM app_meta WHERE key='schema_version'",
+                    [],
+                    |r| r.get::<_, String>(0)
+                )
+                .unwrap(),
+                marker
+            );
+        }
+    }
+
+    #[test]
+    fn fixture_sources_match_their_manifest_hashes() {
+        let manifest: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/migrations/manifest.json"))
+                .unwrap();
+        for (index, fixture) in manifest["fixtures"].as_array().unwrap().iter().enumerate() {
+            assert_eq!(
+                format!("{:x}", Sha256::digest(HISTORY[index].as_bytes())),
+                fixture["sha256"].as_str().unwrap()
+            );
+            assert_eq!(fixture["commit"].as_str().unwrap().len(), 40);
+        }
+        assert_eq!(
+            format!(
+                "{:x}",
+                Sha256::digest(
+                    include_str!("../tests/fixtures/migrations/schema-2/src/migrations.rs")
+                        .as_bytes()
+                )
+            ),
+            manifest["fixtures"][1]["migration_sha256"]
+                .as_str()
+                .unwrap()
+        );
+    }
 
     #[test]
     fn migration_v11_adds_reference_sources() {
