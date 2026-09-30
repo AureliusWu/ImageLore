@@ -39,3 +39,6 @@ jobs:
 
       - name: Verify project
         run: npm run check
+
+      - name: Build frontend bundle
+        run: npm run build
