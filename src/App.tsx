@@ -41,6 +41,7 @@ import { EMPTY_VISUAL_DNA, useAssetContext } from "./hooks/useAssetContext";
 import { useVisionWorkflow } from "./hooks/useVisionWorkflow";
 import { nextAssetIndex, saveExtension } from "./previewWorkflow";
 import { buildRemixPrompt, nonEmptyDnaFields } from "./remixWorkflow";
+import { startBackupSchedule } from "./backupWorkflow";
 
 const PAGE_SIZE = 240;
 const emptyFacets: LibraryFacets = {
@@ -158,6 +159,8 @@ export default function App() {
   const autoSyncStarted = useRef(false);
   const inboxFocusSyncAt = useRef(0);
   const previewAssetId = useRef<number | null>(null);
+  const currentAssetId = useRef(current?.id);
+  currentAssetId.current = current?.id;
   const { previewMode, setPreviewMode, leftWidth, rightWidth, drag } = useWorkspaceLayout();
 
   const refreshFacets = useCallback(
@@ -217,6 +220,9 @@ export default function App() {
     flush: flushEditor,
     saveRevision: saveEditorRevision,
     load: loadEditor,
+    getEditEpoch,
+    loadIfUnchanged,
+    rebaseIfCurrent,
   } = editor;
 
   const {
@@ -248,26 +254,32 @@ export default function App() {
       const seq = ++selectSeq.current;
       ++refreshSeq.current;
       setLoading(false);
-      await flushEditor();
       try {
+        await flushEditor();
+        const editEpoch = getEditEpoch();
         const record = await api.get(id);
         if (seq !== selectSeq.current) return;
+        if (!loadIfUnchanged(record, editEpoch)) {
+          setStatus("切图期间的编辑已保留，请再次选择图片");
+          return;
+        }
         setCurrent(record);
         setSelected(selection ?? new Set([id]));
       } catch (e) {
         if (seq === selectSeq.current) setStatus("记录加载失败：" + String(e));
       }
     },
-    [flushEditor],
+    [flushEditor, getEditEpoch, loadIfUnchanged],
   );
 
   const refresh = useCallback(
     async (preferId?: number) => {
       const seq = ++refreshSeq.current;
-      await flushEditor();
-      if (seq !== refreshSeq.current) return;
-      setLoading(true);
       try {
+        await flushEditor();
+        if (seq !== refreshSeq.current) return;
+        const editEpoch = getEditEpoch();
+        setLoading(true);
         let items: AssetSummary[] = [];
         let nextTotal = 0;
         if (searchMode === "semantic" && (similarSource || effectiveFilter.query.trim())) {
@@ -295,8 +307,11 @@ export default function App() {
         if (seq !== refreshSeq.current) return;
         setAssets(items);
         setTotal(nextTotal);
+        if (!loadIfUnchanged(next, editEpoch)) {
+          setStatus("图库已刷新，刷新期间的当前编辑已保留");
+          return;
+        }
         setCurrent(next);
-        loadEditor(next);
         setSelected(next ? new Set([next.id]) : new Set());
         if (searchMode === "semantic" && (similarSource || effectiveFilter.query.trim()))
           setStatus("语义召回完成");
@@ -311,7 +326,15 @@ export default function App() {
         if (seq === refreshSeq.current) setLoading(false);
       }
     },
-    [effectiveFilter, searchMode, similarSource, current?.id, flushEditor, loadEditor],
+    [
+      effectiveFilter,
+      searchMode,
+      similarSource,
+      current?.id,
+      flushEditor,
+      getEditEpoch,
+      loadIfUnchanged,
+    ],
   );
 
   const loadMore = useCallback(async () => {
@@ -352,7 +375,10 @@ export default function App() {
     void refreshSavedFilters();
   }, [refreshSessions, refreshSavedFilters]);
   useEffect(() => {
-    if (isTauri) void api.ensureAutoBackup().catch((e) => setStatus("自动备份失败：" + String(e)));
+    if (!isTauri) return;
+    return startBackupSchedule(window, api.ensureAutoBackup, (e) =>
+      setStatus("自动备份失败：" + String(e)),
+    );
   }, []);
   useEffect(() => {
     if (!parentOpen) return;
@@ -529,12 +555,22 @@ export default function App() {
     if (importActive) await cancelImportJob();
     if (semanticActive) await cancelSemanticIndex();
   }, [importActive, semanticActive, cancelImportJob, cancelSemanticIndex]);
-  useCloseGuard(flushEditor, importActive || semanticActive ? cancelBackground : undefined);
+  const cancelImportFromUi = () => {
+    void cancelImportJob().catch(() => {});
+  };
+  const cancelSemanticFromUi = () => {
+    void cancelSemanticIndex().catch(() => {});
+  };
+  useCloseGuard(
+    flushEditor,
+    importActive || semanticActive ? cancelBackground : undefined,
+    (error) => setStatus("关闭前保存或取消失败：" + String(error)),
+  );
   const importImmediate = useCallback(
     async (label: string, task: () => Promise<ImportSummary>) => {
-      await flushEditor();
-      setStatus(label);
       try {
+        await flushEditor();
+        setStatus(label);
         const result = await task();
         setStatus(
           "导入完成：新增 " +
@@ -559,11 +595,15 @@ export default function App() {
       starter: () => Promise<number>,
       fallback: () => Promise<ImportSummary>,
     ) => {
-      await flushEditor();
-      if (isTauri) {
-        await startImportJob(label, starter);
-      } else {
-        await importImmediate(label, fallback);
+      try {
+        await flushEditor();
+        if (isTauri) {
+          await startImportJob(label, starter);
+        } else {
+          await importImmediate(label, fallback);
+        }
+      } catch (e) {
+        setStatus("导入前保存失败：" + String(e));
       }
     },
     [flushEditor, startImportJob, importImmediate],
@@ -621,24 +661,28 @@ export default function App() {
       filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp", "bmp", "gif"] }],
     });
     if (!picked || Array.isArray(picked)) return;
-    await flushEditor();
-    const result = await api.importPaths([picked]);
-    if (result.duplicates) {
-      setStatus("该派生图与资料库中的现有图片内容完全相同，未建立重复谱系");
-      return;
-    }
-    if (result.last_id === current.id) {
-      setStatus("所选图片与当前记录内容完全相同，未建立自引用关系");
-      return;
-    }
-    if (result.last_id) {
-      await api.addRelation(current.id, result.last_id, "derived_from", "");
-      if (assetSession) await api.setAssetSession(result.last_id, assetSession.session_id, "");
-      await refreshSessions();
-      await refresh(result.last_id);
-      setTab("lineage");
-      setStatus("派生图已关联");
-      return;
+    try {
+      await flushEditor();
+      const result = await api.importPaths([picked]);
+      if (result.duplicates) {
+        setStatus("该派生图与资料库中的现有图片内容完全相同，未建立重复谱系");
+        return;
+      }
+      if (result.last_id === current.id) {
+        setStatus("所选图片与当前记录内容完全相同，未建立自引用关系");
+        return;
+      }
+      if (result.last_id) {
+        await api.addRelation(current.id, result.last_id, "derived_from", "");
+        if (assetSession) await api.setAssetSession(result.last_id, assetSession.session_id, "");
+        await refreshSessions();
+        await refresh(result.last_id);
+        setTab("lineage");
+        setStatus("派生图已关联");
+        return;
+      }
+    } catch (e) {
+      setStatus("导入派生图失败：" + String(e));
     }
   };
 
@@ -757,12 +801,22 @@ export default function App() {
   };
   const saveRevision = async () => {
     if (!current) return;
-    await saveEditorRevision("");
+    try {
+      await saveEditorRevision("");
+    } catch (e) {
+      setStatus("保存版本失败：" + String(e));
+    }
   };
   const openHistory = async () => {
-    if (current) {
+    if (!current) return;
+    const assetId = current.id;
+    try {
+      const revisions = await api.revisions(assetId);
+      if (currentAssetId.current !== assetId) return;
       setDialogChoice("");
-      setModal({ kind: "history", revisions: await api.revisions(current.id) });
+      setModal({ kind: "history", revisions });
+    } catch (e) {
+      setStatus("读取提示词历史失败：" + String(e));
     }
   };
   const openCollection = async () => {
@@ -772,14 +826,33 @@ export default function App() {
   };
   const rescan = async () => {
     if (!current) return;
-    await flushEditor();
-    const a = await api.rescan(current.id);
-    setCurrent(a);
-    loadEditor(a);
-    setStatus("元数据已刷新");
+    const assetId = current.id;
+    const selection = selectSeq.current;
+    try {
+      await flushEditor();
+      const editEpoch = getEditEpoch();
+      const a = await api.rescan(assetId);
+      if (currentAssetId.current !== assetId || selectSeq.current !== selection) return;
+      if (!loadIfUnchanged(a, editEpoch)) {
+        if (rebaseIfCurrent(a)) await flushEditor();
+        setStatus("元数据已刷新，刷新期间的当前编辑已保留");
+        return;
+      }
+      setCurrent(a);
+      setStatus("元数据已刷新");
+    } catch (e) {
+      setStatus("刷新元数据失败：" + String(e));
+    }
   };
   const exportSidecar = async () => {
-    if (current) setStatus(`Sidecar 已导出：${await api.exportSidecar(current.id)}`);
+    if (!current) return;
+    const assetId = current.id;
+    try {
+      await flushEditor();
+      setStatus(`Sidecar 已导出：${await api.exportSidecar(assetId)}`);
+    } catch (e) {
+      setStatus("Sidecar 导出失败：" + String(e));
+    }
   };
   const refreshMissing = async () => {
     setStatus("正在检查文件位置…");
@@ -833,6 +906,7 @@ export default function App() {
   };
   const createBackup = async () => {
     try {
+      await flushEditor();
       setStatus("正在备份资料库…");
       await api.createBackup();
       await refreshManager();
@@ -1020,10 +1094,14 @@ export default function App() {
       return;
     }
     if (!ids.length) return;
-    await flushEditor();
-    await startImportJob(ids.length === 1 ? "正在同步来源目录…" : "正在同步全部来源目录…", () =>
-      api.startSyncSources(ids),
-    );
+    try {
+      await flushEditor();
+      await startImportJob(ids.length === 1 ? "正在同步来源目录…" : "正在同步全部来源目录…", () =>
+        api.startSyncSources(ids),
+      );
+    } catch (e) {
+      setStatus("同步来源目录前保存失败：" + String(e));
+    }
   };
   const changeSearchMode = (mode: SearchMode) => {
     setSearchMode(mode);
@@ -1054,20 +1132,28 @@ export default function App() {
   };
   const clearSemantic = async () => {
     if (!window.confirm("清空语义索引？原图和资料库记录不会受到影响。")) return;
-    if (semanticActive) await cancelSemanticIndex();
-    await api.clearSemanticIndex();
-    setSimilarSource(null);
-    setSemanticScores(new Map());
-    await refreshSemanticStatus();
-    await refresh();
-    setStatus("语义索引已清空");
+    try {
+      if (semanticActive) await cancelSemanticIndex();
+      await api.clearSemanticIndex();
+      setSimilarSource(null);
+      setSemanticScores(new Map());
+      await refreshSemanticStatus();
+      await refresh();
+      setStatus("语义索引已清空");
+    } catch (e) {
+      setStatus("清空语义索引失败：" + String(e));
+    }
   };
   const deleteSemanticModels = async () => {
     if (!window.confirm("删除本地语义模型缓存？下次使用语义功能时会重新下载。")) return;
-    if (semanticActive) await cancelSemanticIndex();
-    await api.deleteSemanticModels();
-    await refreshSemanticStatus();
-    setStatus("本地语义模型缓存已删除");
+    try {
+      if (semanticActive) await cancelSemanticIndex();
+      await api.deleteSemanticModels();
+      await refreshSemanticStatus();
+      setStatus("本地语义模型缓存已删除");
+    } catch (e) {
+      setStatus("删除本地语义模型失败：" + String(e));
+    }
   };
 
   const setSession = async (sessionId: number | null) => {
@@ -1333,11 +1419,28 @@ export default function App() {
     }
     if (modal.kind === "history") {
       if (!dialogChoice) return;
-      const a = await api.restoreRevision(Number(dialogChoice));
-      setCurrent(a);
-      loadEditor(a);
-      setModal(null);
-      setStatus("历史版本已恢复");
+      const revision = modal.revisions.find((item) => item.id === Number(dialogChoice));
+      if (!revision || revision.asset_id !== currentAssetId.current) {
+        setStatus("提示词历史与当前图片不匹配，请重新打开历史");
+        return;
+      }
+      try {
+        await flushEditor();
+        if (currentAssetId.current !== revision.asset_id) return;
+        const editEpoch = getEditEpoch();
+        const a = await api.restoreRevision(revision.id);
+        setModal(null);
+        if (currentAssetId.current !== a.id) return;
+        if (!loadIfUnchanged(a, editEpoch)) {
+          if (rebaseIfCurrent(a)) await flushEditor();
+          setStatus("历史版本已恢复，恢复期间的当前编辑已保留");
+          return;
+        }
+        setCurrent(a);
+        setStatus("历史版本已恢复");
+      } catch (e) {
+        setStatus("恢复提示词历史失败：" + String(e));
+      }
       return;
     }
     if (modal.kind === "collection") {
@@ -1356,13 +1459,17 @@ export default function App() {
     }
     if (modal.kind === "remove") {
       if (!current) return;
-      await flushEditor();
-      await api.deleteAsset(current.id);
-      setModal(null);
-      setCurrent(null);
-      await refreshFacets();
-      await refresh();
-      setStatus("记录已移除");
+      try {
+        await flushEditor();
+        await api.deleteAsset(current.id);
+        setModal(null);
+        setCurrent(null);
+        await refreshFacets();
+        await refresh();
+        setStatus("记录已移除");
+      } catch (e) {
+        setStatus("移除记录失败：" + String(e));
+      }
     }
   };
 
@@ -1599,7 +1706,7 @@ export default function App() {
         {importActive ? (
           <>
             <progress max={Math.max(1, importProgress.total)} value={importProgress.processed} />
-            <button onClick={cancelImportJob}>取消导入</button>
+            <button onClick={cancelImportFromUi}>取消导入</button>
           </>
         ) : null}
         {semanticActive ? (
@@ -1608,7 +1715,7 @@ export default function App() {
               max={Math.max(1, semanticProgress.total)}
               value={semanticProgress.processed}
             />
-            <button onClick={cancelSemanticIndex}>取消索引</button>
+            <button onClick={cancelSemanticFromUi}>取消索引</button>
           </>
         ) : null}
         <span>
@@ -1636,7 +1743,7 @@ export default function App() {
         semanticIndexing={semanticActive}
         semanticProgress={semanticProgress}
         onRebuildSemantic={rebuildSemantic}
-        onCancelSemantic={cancelSemanticIndex}
+        onCancelSemantic={cancelSemanticFromUi}
         onClearSemantic={clearSemantic}
         onDeleteSemanticModels={deleteSemanticModels}
         onClose={() => setManagerOpen(false)}

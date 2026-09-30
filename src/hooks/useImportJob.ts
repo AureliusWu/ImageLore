@@ -154,6 +154,7 @@ export function useImportJob(
     } catch (e) {
       resolveDone();
       statusRef.current("取消导入失败：" + String(e));
+      throw e;
     } finally {
       doneWaitersRef.current = doneWaitersRef.current.filter((x) => x !== resolveDone);
     }

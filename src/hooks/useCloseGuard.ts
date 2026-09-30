@@ -2,9 +2,14 @@ import { useEffect, useRef } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isTauri } from "../api";
 
-export function useCloseGuard(beforeClose: () => Promise<void>, cancelTask?: () => Promise<void>) {
+export function useCloseGuard(
+  beforeClose: () => Promise<void>,
+  cancelTask?: () => Promise<void>,
+  onError?: (error: unknown) => void,
+) {
   const beforeRef = useRef(beforeClose);
   const cancelRef = useRef(cancelTask);
+  const errorRef = useRef(onError);
 
   useEffect(() => {
     beforeRef.current = beforeClose;
@@ -12,6 +17,9 @@ export function useCloseGuard(beforeClose: () => Promise<void>, cancelTask?: () 
   useEffect(() => {
     cancelRef.current = cancelTask;
   }, [cancelTask]);
+  useEffect(() => {
+    errorRef.current = onError;
+  }, [onError]);
 
   useEffect(() => {
     if (!isTauri) return;
@@ -22,14 +30,17 @@ export function useCloseGuard(beforeClose: () => Promise<void>, cancelTask?: () 
 
     win
       .onCloseRequested(async (event) => {
-        if (closing) return;
         event.preventDefault();
+        if (closing) return;
         closing = true;
         try {
           await beforeRef.current();
           await cancelRef.current?.();
-        } finally {
           await win.destroy();
+        } catch (error) {
+          // Saving reports its error to the editor. Keep the window available for retry.
+          closing = false;
+          errorRef.current?.(error);
         }
       })
       .then((fn) => {

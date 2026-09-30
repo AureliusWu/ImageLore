@@ -34,8 +34,10 @@ export function useEditorDraft(
   const baseline = useRef<Draft>({ ...empty });
   const timer = useRef<number | undefined>(undefined);
   const saving = useRef<Promise<void>>(Promise.resolve());
+  const editEpoch = useRef(0);
 
   const hydrate = useCallback((next: AssetRecord | null) => {
+    editEpoch.current++;
     const value: Draft = next
       ? {
           assetId: next.id,
@@ -46,7 +48,7 @@ export function useEditorDraft(
         }
       : { ...empty };
     draft.current = value;
-    baseline.current = value;
+    baseline.current = { ...value };
     setPromptState(value.prompt);
     setNegativeState(value.negative);
     setModelState(value.model);
@@ -58,21 +60,59 @@ export function useEditorDraft(
   }, [asset?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const setPrompt = (v: string) => {
+    if (draft.current.prompt !== v) editEpoch.current++;
     draft.current.prompt = v;
     setPromptState(v);
   };
   const setNegative = (v: string) => {
+    if (draft.current.negative !== v) editEpoch.current++;
     draft.current.negative = v;
     setNegativeState(v);
   };
   const setModel = (v: string) => {
+    if (draft.current.model !== v) editEpoch.current++;
     draft.current.model = v;
     setModelState(v);
   };
   const setTagsText = (v: string) => {
+    if (draft.current.tagsText !== v) editEpoch.current++;
     draft.current.tagsText = v;
     setTagsTextState(v);
   };
+
+  const hasUnsavedChanges = useCallback(() => {
+    const current = draft.current;
+    const base = baseline.current;
+    return (
+      current.assetId !== null &&
+      (current.assetId !== base.assetId ||
+        current.prompt !== base.prompt ||
+        current.negative !== base.negative ||
+        current.model !== base.model ||
+        !sameTags(parseTags(current.tagsText), parseTags(base.tagsText)))
+    );
+  }, []);
+  const getEditEpoch = useCallback(() => editEpoch.current, []);
+  const loadIfUnchanged = useCallback(
+    (next: AssetRecord | null, expectedEpoch: number) => {
+      if (editEpoch.current !== expectedEpoch || hasUnsavedChanges()) return false;
+      hydrate(next);
+      return true;
+    },
+    [hasUnsavedChanges, hydrate],
+  );
+  const rebaseIfCurrent = useCallback((next: AssetRecord) => {
+    if (draft.current.assetId !== next.id) return false;
+    editEpoch.current++;
+    baseline.current = {
+      assetId: next.id,
+      prompt: next.prompt,
+      negative: next.negative_prompt,
+      model: next.model,
+      tagsText: next.tags.join(", "),
+    };
+    return true;
+  }, []);
 
   const flush = useCallback(async () => {
     const snapshot = { ...draft.current };
@@ -80,6 +120,7 @@ export function useEditorDraft(
     if (assetId === null) return;
     window.clearTimeout(timer.current);
     saving.current = saving.current
+      .catch(() => {})
       .then(async () => {
         const base = baseline.current;
         if (base.assetId !== assetId) return;
@@ -103,7 +144,7 @@ export function useEditorDraft(
           onTagsSaved();
         }
         if (latest) {
-          baseline.current = {
+          const savedBaseline: Draft = {
             assetId: latest.id,
             prompt: latest.prompt,
             negative: latest.negative_prompt,
@@ -111,6 +152,7 @@ export function useEditorDraft(
             tagsText: latest.tags.join(", "),
           };
           if (draft.current.assetId === latest.id) {
+            baseline.current = savedBaseline;
             onSaved(latest);
             if (
               draft.current.prompt === snapshot.prompt &&
@@ -124,7 +166,10 @@ export function useEditorDraft(
           setStatus("已保存");
         }
       })
-      .catch((e) => setStatus(`保存失败：${String(e)}`));
+      .catch((e) => {
+        setStatus(`保存失败：${String(e)}`);
+        throw e;
+      });
     await saving.current;
   }, [onSaved, onTagsSaved, setStatus]);
 
@@ -136,6 +181,7 @@ export function useEditorDraft(
       window.clearTimeout(timer.current);
       let saved: AssetRecord | null = null;
       saving.current = saving.current
+        .catch(() => {})
         .then(async () => {
           if (draft.current.assetId !== assetId) return;
           setStatus("正在保存提示词版本…");
@@ -146,7 +192,7 @@ export function useEditorDraft(
             note,
           );
           saved = latest;
-          baseline.current = {
+          const savedBaseline: Draft = {
             assetId: latest.id,
             prompt: latest.prompt,
             negative: latest.negative_prompt,
@@ -154,6 +200,7 @@ export function useEditorDraft(
             tagsText: latest.tags.join(", "),
           };
           if (draft.current.assetId === latest.id) {
+            baseline.current = savedBaseline;
             onSaved(latest);
             if (
               draft.current.prompt === snapshot.prompt &&
@@ -171,7 +218,10 @@ export function useEditorDraft(
           onTagsSaved();
           setStatus("提示词版本已保存");
         })
-        .catch((e) => setStatus(`保存版本失败：${String(e)}`));
+        .catch((e) => {
+          setStatus(`保存版本失败：${String(e)}`);
+          throw e;
+        });
       await saving.current;
       return saved;
     },
@@ -190,7 +240,7 @@ export function useEditorDraft(
     if (!dirty) return;
     window.clearTimeout(timer.current);
     timer.current = window.setTimeout(() => {
-      void flush();
+      void flush().catch(() => {});
     }, 700);
     return () => window.clearTimeout(timer.current);
   }, [prompt, negative, model, tagsText, flush]);
@@ -198,7 +248,7 @@ export function useEditorDraft(
   useEffect(
     () => () => {
       window.clearTimeout(timer.current);
-      void flush();
+      void flush().catch(() => {});
     },
     [flush],
   );
@@ -215,5 +265,9 @@ export function useEditorDraft(
     flush,
     saveRevision,
     load: hydrate,
+    hasUnsavedChanges,
+    getEditEpoch,
+    loadIfUnchanged,
+    rebaseIfCurrent,
   };
 }

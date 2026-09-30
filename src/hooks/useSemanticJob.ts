@@ -139,6 +139,7 @@ export function useSemanticJob(
     } catch (e) {
       resolveDone();
       statusRef.current("取消语义索引失败：" + String(e));
+      throw e;
     } finally {
       doneWaitersRef.current = doneWaitersRef.current.filter((x) => x !== resolveDone);
     }

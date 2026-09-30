@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import ts from "typescript";
+import { BACKUP_CHECK_INTERVAL_MS, startBackupSchedule } from "../src/backupWorkflow.ts";
 import {
   MIN_ZOOM,
   MAX_ZOOM,
@@ -167,4 +168,92 @@ test("a late response from the previous asset cannot replace the current context
   assert.equal(current.visualDna.subject, "subject 2");
   assert.equal(current.remixSources[0].asset_id, second.id);
   assert.equal(current.remixPrompt, second.prompt);
+});
+
+test("automatic backup checks on startup, timer and focus without overlapping", async () => {
+  let timer;
+  let focus;
+  let checks = 0;
+  let finish;
+  const host = {
+    setInterval(callback, milliseconds) {
+      assert.equal(milliseconds, BACKUP_CHECK_INTERVAL_MS);
+      timer = callback;
+      return 7;
+    },
+    clearInterval(id) {
+      assert.equal(id, 7);
+      timer = undefined;
+    },
+    addEventListener(event, callback) {
+      assert.equal(event, "focus");
+      focus = callback;
+    },
+    removeEventListener(event, callback) {
+      assert.equal(event, "focus");
+      assert.equal(callback, focus);
+      focus = undefined;
+    },
+  };
+  const stop = startBackupSchedule(
+    host,
+    () => {
+      checks++;
+      return new Promise((resolve) => {
+        finish = resolve;
+      });
+    },
+    assert.fail,
+  );
+  await new Promise(setImmediate);
+  timer();
+  focus();
+  await new Promise(setImmediate);
+  assert.equal(checks, 1);
+  finish();
+  await new Promise(setImmediate);
+  timer();
+  await new Promise(setImmediate);
+  assert.equal(checks, 2);
+  finish();
+  await new Promise(setImmediate);
+  focus();
+  await new Promise(setImmediate);
+  assert.equal(checks, 3);
+  stop();
+  finish();
+  assert.equal(timer, undefined);
+  assert.equal(focus, undefined);
+});
+
+test("automatic backup failures remain visible and a later focus retries", async () => {
+  let focus;
+  let checks = 0;
+  const errors = [];
+  const host = {
+    setInterval: () => 1,
+    clearInterval() {},
+    addEventListener(_event, callback) {
+      focus = callback;
+    },
+    removeEventListener() {},
+  };
+  const stop = startBackupSchedule(
+    host,
+    async () => {
+      checks++;
+      throw new Error("backup disk failure");
+    },
+    (error) => errors.push(error.message),
+  );
+  await new Promise(setImmediate);
+  assert.deepEqual(errors, ["backup disk failure"]);
+  focus();
+  await new Promise(setImmediate);
+  assert.equal(checks, 2);
+  assert.equal(errors.length, 2);
+  stop();
+  focus();
+  await new Promise(setImmediate);
+  assert.equal(checks, 2);
 });

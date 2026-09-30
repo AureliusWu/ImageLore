@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { api } from "../api";
 import type {
@@ -38,6 +38,13 @@ export function useVisionWorkflow({
   setStatus,
 }: Params) {
   const [visionSettings, setVisionSettings] = useState<VisionSettings | null>(null);
+  const context = useRef({ assetId: current?.id, generation: 0 });
+  if (context.current.assetId !== current?.id) {
+    context.current = { assetId: current?.id, generation: context.current.generation + 1 };
+  }
+  const generation = context.current.generation;
+  const isCurrent = (assetId: number) =>
+    context.current.assetId === assetId && context.current.generation === generation;
 
   useEffect(() => {
     void api
@@ -46,10 +53,10 @@ export function useVisionWorkflow({
       .catch(() => setVisionSettings(null));
   }, []);
 
-  const refreshCurrent = async () => {
-    if (!current) return null;
-    const record = await api.get(current.id);
-    setCurrent(record);
+  const refreshCurrent = async (assetId: number) => {
+    const record = await api.get(assetId);
+    if (!isCurrent(assetId)) return null;
+    setCurrent((previous) => (previous?.id === assetId ? record : previous));
     setAssets((items) =>
       items.map((item) =>
         item.id === record.id ? { ...item, updated_at: record.updated_at } : item,
@@ -62,11 +69,12 @@ export function useVisionWorkflow({
     if (!current) return;
     try {
       const saved = await api.updateVisualDna(current.id, value);
+      if (!isCurrent(current.id)) return;
       setVisualDna(saved);
-      await refreshCurrent();
+      if (!(await refreshCurrent(current.id))) return;
       setStatus("Visual DNA 已保存并加入搜索索引");
     } catch (error) {
-      setStatus("保存 Visual DNA 失败：" + String(error));
+      if (isCurrent(current.id)) setStatus("保存 Visual DNA 失败：" + String(error));
     }
   };
 
@@ -76,45 +84,50 @@ export function useVisionWorkflow({
     setStatus("正在分析当前图片…");
     try {
       const analysis = await api.analyzeImageToPrompt(current.id);
+      if (!isCurrent(current.id) || analysis.asset_id !== current.id) return;
       setImagePromptAnalysis(analysis);
       setTab("dna");
       setStatus(`Image to Prompt 完成 · ${analysis.model}`);
     } catch (error) {
-      setStatus("Image to Prompt 失败：" + String(error));
+      if (isCurrent(current.id)) setStatus("Image to Prompt 失败：" + String(error));
     } finally {
-      setImagePromptLoading(false);
+      if (isCurrent(current.id)) setImagePromptLoading(false);
     }
   };
 
   const applyAnalysisDna = async (overwrite = false) => {
-    if (!current || !imagePromptAnalysis) return;
+    if (!current || !imagePromptAnalysis || imagePromptAnalysis.asset_id !== current.id) return;
     if (overwrite && !window.confirm("覆盖现有 Visual DNA？已有手工字段会被本次 AI 分析替换。")) {
       return;
     }
     try {
       const saved = await api.applyImagePromptDna(current.id, imagePromptAnalysis.id, overwrite);
+      if (!isCurrent(current.id)) return;
       setVisualDna(saved);
-      await refreshCurrent();
+      if (!(await refreshCurrent(current.id))) return;
       setStatus(overwrite ? "AI Visual DNA 已覆盖写入" : "AI Visual DNA 已补充到空字段");
     } catch (error) {
-      setStatus("写入 Visual DNA 失败：" + String(error));
+      if (isCurrent(current.id)) setStatus("写入 Visual DNA 失败：" + String(error));
     }
   };
 
   const useAnalysisPrompt = () => {
-    if (!imagePromptAnalysis?.prompt) return;
+    if (!current || imagePromptAnalysis?.asset_id !== current.id || !imagePromptAnalysis.prompt) {
+      return;
+    }
     setPrompt(imagePromptAnalysis.prompt);
     setTab("prompt");
     setStatus("AI Prompt 已载入编辑器，将按现有自动保存规则保存");
   };
 
   const saveAnalysisRevision = async () => {
-    if (!current || !imagePromptAnalysis) return;
+    if (!current || !imagePromptAnalysis || imagePromptAnalysis.asset_id !== current.id) return;
     try {
       await api.saveImagePromptRevision(current.id, imagePromptAnalysis.id);
+      if (!isCurrent(current.id)) return;
       setStatus("AI Prompt 已保存为独立 Revision");
     } catch (error) {
-      setStatus("保存 AI Prompt Revision 失败：" + String(error));
+      if (isCurrent(current.id)) setStatus("保存 AI Prompt Revision 失败：" + String(error));
     }
   };
 
