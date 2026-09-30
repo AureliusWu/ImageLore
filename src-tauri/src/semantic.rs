@@ -223,8 +223,8 @@ fn install_trusted(cache: &Path, spec: TrustedModelSpec) -> Result<PathBuf, Stri
 
     fs::create_dir_all(cache.join("trusted")).map_err(|e| e.to_string())?;
     let hub_cache = cache.join("hf");
-    let api = ApiBuilder::new()
-        .with_cache_dir(hub_cache.clone())
+    let api = ApiBuilder::from_cache(hf_hub::Cache::new(hub_cache.clone()))
+        .with_token(None)
         .with_progress(false)
         .build()
         .map_err(|e| format!("无法初始化固定版本模型下载器：{e}"))?;
