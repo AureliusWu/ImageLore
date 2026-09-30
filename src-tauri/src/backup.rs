@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
-use tauri::State;
+use tauri::{Manager, State};
 
 const MAX_BACKUPS: usize = 10;
 const AUTO_INTERVAL: i64 = 24 * 3600;
@@ -911,8 +911,13 @@ pub fn create_backup(state: State<'_, AppState>) -> Result<BackupRecord, String>
 }
 
 #[tauri::command]
-pub fn ensure_auto_backup(state: State<'_, AppState>) -> Result<Option<BackupRecord>, String> {
-    ensure_auto_at(state.inner(), now())
+pub async fn ensure_auto_backup(app: tauri::AppHandle) -> Result<Option<BackupRecord>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        ensure_auto_at(state.inner(), now())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

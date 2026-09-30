@@ -8,10 +8,19 @@
 - cargo test --locked --manifest-path src-tauri/Cargo.toml --lib backup::tests -- --test-threads=1：最终 24/24 通过，包含带 WAL 候选 DB/WAL/SHM 字节不变、首次安装失败、pending 暂存中断、原 DB 损坏且仍被占用的 Windows 回归。
 - cargo test --locked --manifest-path src-tauri/Cargo.toml --lib tests::startup_ -- --test-threads=1：9/9 通过（7 项启动回归与 2 项备份启动回归）。
 - 复制活跃 SHM 曾真实触发 Windows os error 33（文件部分被锁定）。最终副本探针仅复制 DB 与 WAL，在独立目录重建派生 SHM；没有放弱原有“合法 WAL 写锁下仍可读、但不可恢复”回归。所有最后修改均已由上述 backup/startup 目标复测通过，全项目门禁由本轮总体验收记录汇总。
+- 自动备份 async 包装调整后，完整 native 门禁通过：`cargo fmt --check`、`cargo check --locked`、`cargo clippy --locked -- -D warnings`、`cargo test --locked --lib`（95 passed / 1 ignored）。日志为 `<private-evidence>/backup-async-cargo-*-v026.txt`；此轮未重复运行已单独完成的 50k/75k ignored 规模用例。
 
 恢复用例覆盖：真实未 checkpoint 的已提交 WAL 写入→独立备份→后续编辑→pending 恢复→重新打开回读；最新坏备份跳过选择较旧有效库；无有效备份停止；空/普通 SQLite、未来 schema、孤儿关系、截断候选拒绝；五个恢复步骤的 IO/rename/磁盘失败注入后原件可读且 pending 可重试；原 DB/WAL/SHM 保全失败必须中止；独占锁及活跃 WAL writer 不发生替换；中断预留回滚。自动备份覆盖 8 个并发请求只生成 1 份、24h 前后边界、坏文件不能推迟有效备份、失败后重试、手动备份独立名称、保留 10 份有效备份。
 
 故障注入及中断用例是临时文件库上的受控状态模拟；没有声称真实磁盘耗尽、物理断电或隔离 Windows 安装器升级已验收。
+
+## 自动备份 IPC 调度
+
+启动时前端立即检查自动备份，之后每 15 分钟与窗口 focus 再检查；即便已有 24 小时内的备份，也先执行完整性、身份、外键与业务关系验证，不只读取 mtime。50k 桌面测试资料库的备份约 280 MB，该同步 IO/扫描此前直接在同步 IPC handler 中执行。
+
+`ensure_auto_backup` 现在仅在命令包装层改为 async：把拥有的 AppHandle 移入 `tauri::async_runtime::spawn_blocking`，在 closure 内取得同一个 AppState，再调用原 `ensure_auto_at`。备份判断、完整验证与快照仍共用原数据库 Mutex；State 与锁 guard 不跨 await，24 小时边界、无效候选处理及 8 个并发请求只产生一份的语义保持。返回值仍为 BackupRecord 或 null，内部业务错误与 JoinError 均拒绝原 Promise，前端 pending/finally 与错误显示不变。
+
+锁定依赖为 Tauri 2.12.0 / tauri-macros 2.7.0 / Wry 0.57.0。宏默认同步分支直接调用命令，async 分支把响应交给 runtime；spawn_blocking 使用专用阻塞池。此调整只移走同步 IPC 的阻塞工作，不放松验证或恢复保全。其它同步图库命令仍可能等待同一数据库锁，因此不能据此保证启动 FCP 达到 ≤3 秒；最终程序的正常启动与交互 profile 由桌面验收记录另报，恢复时安全复制开销也独立记录。
 
 ## 恢复安全边界
 
