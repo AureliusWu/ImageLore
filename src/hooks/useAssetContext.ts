@@ -56,6 +56,7 @@ export function useAssetContext(current: AssetRecord | null) {
     setRemixDraft(null);
     setRemixSources([]);
     setRemixPrompt("");
+    setReferenceSources([]);
 
     Promise.all([
       api.visualDna(assetId).catch(() => null),
