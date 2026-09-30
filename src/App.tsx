@@ -252,8 +252,6 @@ export default function App() {
   const selectRecord = useCallback(
     async (id: number, selection?: Set<number>) => {
       const seq = ++selectSeq.current;
-      ++refreshSeq.current;
-      setLoading(false);
       try {
         await flushEditor();
         const editEpoch = getEditEpoch();
@@ -275,6 +273,7 @@ export default function App() {
   const refresh = useCallback(
     async (preferId?: number) => {
       const seq = ++refreshSeq.current;
+      const selectionSeq = ++selectSeq.current;
       try {
         await flushEditor();
         if (seq !== refreshSeq.current) return;
@@ -298,6 +297,9 @@ export default function App() {
           nextTotal = page.total;
           setSemanticScores(new Map());
         }
+        setAssets(items);
+        setTotal(nextTotal);
+        if (selectionSeq !== selectSeq.current) return;
         const preferredVisible =
           preferId && items.some((x) => x.id === preferId) ? preferId : undefined;
         const nextId =
@@ -305,8 +307,7 @@ export default function App() {
           (current?.id && items.some((x) => x.id === current.id) ? current.id : items[0]?.id);
         const next = nextId ? await api.get(nextId).catch(() => null) : null;
         if (seq !== refreshSeq.current) return;
-        setAssets(items);
-        setTotal(nextTotal);
+        if (selectionSeq !== selectSeq.current) return;
         if (!loadIfUnchanged(next, editEpoch)) {
           setStatus("图库已刷新，刷新期间的当前编辑已保留");
           return;

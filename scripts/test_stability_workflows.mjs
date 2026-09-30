@@ -110,6 +110,181 @@ const asset = (id, prompt = `prompt ${id}`) => ({
   updated_at: 1,
 });
 
+const appSource = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+const appSyntax = ts.createSourceFile(
+  "App.tsx",
+  appSource,
+  ts.ScriptTarget.Latest,
+  true,
+  ts.ScriptKind.TSX,
+);
+function appCallbackSource(name) {
+  let callback;
+  function visit(node) {
+    if (
+      ts.isVariableDeclaration(node) &&
+      node.name.getText(appSyntax) === name &&
+      node.initializer &&
+      ts.isCallExpression(node.initializer) &&
+      node.initializer.expression.getText(appSyntax) === "useCallback"
+    ) {
+      callback = node.initializer.arguments[0].getText(appSyntax);
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(appSyntax);
+  assert.ok(callback, `Actual App callback ${name} was not found`);
+  return ts.transpileModule(`module.exports = ${callback};`, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+}
+const appCallbackSources = Object.fromEntries(
+  ["selectRecord", "refresh", "loadMore"].map((name) => [name, appCallbackSource(name)]),
+);
+
+function appWorkflowHarness(api, initial = {}) {
+  const values = {
+    current: asset(1),
+    assets: [asset(1), asset(2)],
+    total: 4,
+    loading: false,
+    effectiveFilter: { query: "" },
+    searchMode: "normal",
+    similarSource: null,
+    status: "",
+    ...initial,
+  };
+  const refreshSeq = { current: 0 };
+  const selectSeq = { current: 0 };
+  const setter = (key) => (value) => {
+    values[key] = typeof value === "function" ? value(values[key]) : value;
+  };
+  const draft = hookHarness("useEditorDraft", api);
+  const render = () => {
+    const editor = draft.render(
+      values.current,
+      (record) => {
+        if (values.current?.id === record.id) values.current = record;
+      },
+      async () => {},
+      setter("status"),
+    );
+    const scope = {
+      ...values,
+      api,
+      PAGE_SIZE: 240,
+      refreshSeq,
+      selectSeq,
+      flushEditor: editor.flush,
+      getEditEpoch: editor.getEditEpoch,
+      loadIfUnchanged: editor.loadIfUnchanged,
+      setLoading: setter("loading"),
+      setAssets: setter("assets"),
+      setTotal: setter("total"),
+      setSemanticScores: setter("scores"),
+      setCurrent: setter("current"),
+      setSelected: setter("selected"),
+      setStatus: setter("status"),
+    };
+    const callbacks = Object.fromEntries(
+      Object.entries(appCallbackSources).map(([name, source]) => {
+        const module = { exports: {} };
+        vm.runInNewContext(source, { ...scope, module });
+        return [name, module.exports];
+      }),
+    );
+    return { ...callbacks, editor };
+  };
+  return { values, render };
+}
+
+test("actual App selection does not discard an in-flight next page", async () => {
+  const page = deferred();
+  const record = deferred();
+  const app = appWorkflowHarness({ page: () => page.promise, get: () => record.promise });
+  const loading = app.render().loadMore();
+  assert.equal(app.values.loading, true);
+  const selection = app.render().selectRecord(2);
+  await Promise.resolve();
+  assert.equal(app.values.loading, true, "Selecting does not clear gallery loading");
+  record.resolve(asset(2));
+  await selection;
+  page.resolve({ items: [asset(3), asset(4)], total: 4 });
+  await loading;
+  assert.deepEqual(
+    Array.from(app.values.assets, (item) => item.id),
+    [1, 2, 3, 4],
+  );
+  assert.equal(app.values.current.id, 2);
+  assert.equal(app.values.loading, false);
+});
+
+test("actual App filter refresh rejects the previous page and pending selection", async () => {
+  const oldPage = deferred();
+  const newPage = deferred();
+  const oldRecord = deferred();
+  let pageRequests = 0;
+  const app = appWorkflowHarness({
+    page: () => (++pageRequests === 1 ? oldPage.promise : newPage.promise),
+    get: (id) => (id === 2 ? oldRecord.promise : Promise.resolve(asset(id))),
+  });
+  const paging = app.render().loadMore();
+  const selection = app.render().selectRecord(2);
+  app.values.effectiveFilter = { query: "new filter" };
+  const refreshing = app.render().refresh();
+  await Promise.resolve();
+  oldRecord.resolve(asset(2));
+  oldPage.resolve({ items: [asset(3), asset(4)], total: 4 });
+  await Promise.all([paging, selection]);
+  assert.equal(app.values.current.id, 1);
+  assert.equal(app.values.loading, true, "Old paging cannot clear the new refresh loading");
+  newPage.resolve({ items: [asset(10)], total: 1 });
+  await refreshing;
+  assert.deepEqual(
+    Array.from(app.values.assets, (item) => item.id),
+    [10],
+  );
+  assert.equal(app.values.current.id, 10);
+  assert.equal(app.values.loading, false);
+});
+
+test("actual App refresh applies its gallery without replacing a newer selection", async () => {
+  const page = deferred();
+  const app = appWorkflowHarness({
+    page: () => page.promise,
+    get: async (id) => asset(id),
+  });
+  const refresh = app.render().refresh();
+  await Promise.resolve();
+  await app.render().selectRecord(2);
+  page.resolve({ items: [asset(1), asset(2), asset(3)], total: 3 });
+  await refresh;
+  assert.deepEqual(
+    Array.from(app.values.assets, (item) => item.id),
+    [1, 2, 3],
+  );
+  assert.equal(app.values.current.id, 2);
+  assert.equal(app.values.loading, false);
+});
+
+test("actual App refresh record completion preserves input typed during the request", async () => {
+  const record = deferred();
+  const app = appWorkflowHarness({
+    page: async () => ({ items: [asset(1), asset(2)], total: 2 }),
+    get: () => record.promise,
+  });
+  const refresh = app.render().refresh();
+  await Promise.resolve();
+  await Promise.resolve();
+  app.render().editor.setPrompt("new input during refresh");
+  record.resolve(asset(1, "server prompt"));
+  await refresh;
+  assert.equal(app.render().editor.prompt, "new input during refresh");
+  assert.equal(app.values.current.prompt, "prompt 1");
+  assert.match(app.values.status, /编辑已保留/);
+  assert.equal(app.values.loading, false);
+});
+
 function visionParams(current) {
   const values = { current, analysis: null, dna: null, loading: false, prompt: "", status: "" };
   const setter = (key) => (value) => {

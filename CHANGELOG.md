@@ -7,6 +7,7 @@
 - Hardened Backup/Restore identity and relation validation, preserved DB/WAL/SHM before probing, added recoverable file reservation and tested failure stages.
 - Added startup, timer and focus backup checks with serialized 24-hour decisions and visible failures.
 - Fixed editor dirty detection, failed-save propagation, close protection and late Vision updates across asset changes.
+- Kept in-flight gallery pagination valid during rapid image selection, while filter refreshes still reject old pages and newer selections or edits survive delayed refreshes.
 - Made Sidecar writes atomic and surfaced malformed Sidecars, source discovery/import failures and failed scan timestamp commits.
 - Excluded stale or missing semantic embeddings, removed unnecessary search joins and retained CJK substring verification.
 - Added file-backed 50k/75k native benchmarks with 512-dimensional synthetic vectors and known-answer checks; acceptance records separate these from real-model and desktop evidence.
