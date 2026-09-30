@@ -129,3 +129,73 @@ pub fn prune_cache(cache_root: &Path, max_bytes: u64) {
         }
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_root(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "imagelore-preview-{label}-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    #[test]
+    fn cached_preview_is_created_reused_and_edge_is_clamped() {
+        let root = temp_root("cache");
+        let source = root.join("source.png");
+        DynamicImage::new_rgb8(400, 200).save(&source).unwrap();
+
+        let first = cached_preview_path(&source, &root, "fingerprint", 1, true).unwrap();
+        let first_path = PathBuf::from(&first);
+        assert!(first_path.exists());
+        assert!(first_path.ends_with("fingerprint-160.webp"));
+
+        let rendered = image::open(&first_path).unwrap();
+        assert_eq!((rendered.width(), rendered.height()), (160, 80));
+
+        let second = cached_preview_path(&source, &root, "fingerprint", 1, true).unwrap();
+        assert_eq!(first, second);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn purge_asset_cache_only_removes_matching_fingerprint_files() {
+        let root = temp_root("purge");
+        let previews = root.join("previews");
+        fs::create_dir_all(&previews).unwrap();
+        fs::write(previews.join("abc-160.webp"), b"a").unwrap();
+        fs::write(previews.join("other-160.webp"), b"b").unwrap();
+
+        purge_asset_cache(&root, "abc");
+
+        assert!(!previews.join("abc-160.webp").exists());
+        assert!(previews.join("other-160.webp").exists());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn prune_cache_can_reduce_cache_to_zero_bytes() {
+        let root = temp_root("prune");
+        fs::write(root.join("a.webp"), b"1234").unwrap();
+        fs::write(root.join("b.webp"), b"5678").unwrap();
+
+        prune_cache(&root, 0);
+
+        assert!(!root.join("a.webp").exists());
+        assert!(!root.join("b.webp").exists());
+
+        let _ = fs::remove_dir_all(root);
+    }
+}

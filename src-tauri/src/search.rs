@@ -205,3 +205,48 @@ pub fn library_page(
         limit,
     })
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fts_query_quotes_terms_and_escapes_quotes() {
+        assert_eq!(fts_query("  cat   dog  "), "\"cat\"* AND \"dog\"*");
+        assert_eq!(fts_query("a\"b"), "\"a\"\"b\"*");
+        assert_eq!(fts_query("   "), "");
+    }
+
+    #[test]
+    fn cjk_trigram_query_requires_three_character_terms() {
+        assert_eq!(cjk_trigram_query("猫"), None);
+        assert_eq!(
+            cjk_trigram_query("蓝色大肥鱼 测试"),
+            Some("\"蓝色大肥鱼\"".to_string())
+        );
+        assert_eq!(
+            cjk_trigram_query("蓝色大肥鱼 海洋少女"),
+            Some("\"蓝色大肥鱼\" AND \"海洋少女\"".to_string())
+        );
+    }
+
+    #[test]
+    fn filter_parts_keeps_numeric_and_orientation_constraints_parameterized() {
+        let filter = LibraryFilter {
+            steps_min: Some(20),
+            steps_max: Some(40),
+            cfg_min: Some(5.5),
+            denoise_max: Some(0.8),
+            orientation: Some("portrait".to_string()),
+            ..LibraryFilter::default()
+        };
+        let (_, where_sql, args) = filter_parts(&filter);
+        assert!(where_sql.contains("gi.steps>=?"));
+        assert!(where_sql.contains("gi.steps<=?"));
+        assert!(where_sql.contains("gi.cfg_scale>=?"));
+        assert!(where_sql.contains("gi.denoise<=?"));
+        assert!(where_sql.contains("a.height>a.width"));
+        assert_eq!(args.len(), 4);
+    }
+}

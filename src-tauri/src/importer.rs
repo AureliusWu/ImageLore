@@ -437,3 +437,75 @@ pub fn import_dropped_paths(
 ) -> Result<ImportSummary, String> {
     immediate(state.inner(), paths, true)
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    fn temp_root(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "imagelore-importer-{label}-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    #[test]
+    fn supported_files_handles_direct_and_recursive_inputs() {
+        let root = temp_root("files");
+        let nested = root.join("nested");
+        fs::create_dir_all(&nested).unwrap();
+        let direct = root.join("direct.png");
+        let child = nested.join("child.jpg");
+        let ignored = nested.join("notes.txt");
+        fs::write(&direct, b"not-decoded-here").unwrap();
+        fs::write(&child, b"not-decoded-here").unwrap();
+        fs::write(&ignored, b"text").unwrap();
+
+        let cancel = AtomicBool::new(false);
+        let direct_only = supported_files(
+            vec![direct.to_string_lossy().to_string(), root.to_string_lossy().to_string()],
+            false,
+            &cancel,
+        );
+        assert_eq!(direct_only, vec![direct.clone()]);
+
+        let recursive = supported_files(
+            vec![root.to_string_lossy().to_string()],
+            true,
+            &cancel,
+        );
+        assert!(recursive.contains(&direct));
+        assert!(recursive.contains(&child));
+        assert!(!recursive.contains(&ignored));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn supported_files_honors_pre_cancelled_job() {
+        let root = temp_root("cancel");
+        let image = root.join("image.png");
+        fs::write(&image, b"x").unwrap();
+        let cancel = AtomicBool::new(true);
+
+        let found = supported_files(
+            vec![image.to_string_lossy().to_string()],
+            false,
+            &cancel,
+        );
+
+        assert!(found.is_empty());
+        let _ = fs::remove_dir_all(root);
+    }
+}
