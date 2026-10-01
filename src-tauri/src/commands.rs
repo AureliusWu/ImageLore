@@ -472,19 +472,37 @@ pub fn preview_cache_path(
         return Err("原图片文件不存在".into());
     }
     let meta = fs::metadata(path).map_err(|e| e.to_string())?;
-    let actual_mtime = meta
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|x| x.as_secs() as i64)
-        .unwrap_or(asset.file_mtime);
-    let prefix = if asset.fingerprint.is_empty() {
-        format!("asset-{}", asset.id)
-    } else {
-        asset.fingerprint.clone()
-    };
-    let key = format!("{}-{}-{}", prefix, actual_mtime, meta.len());
+    let key = preview_cache_key(
+        &asset.fingerprint,
+        asset.id,
+        meta.len(),
+        meta.modified().ok(),
+        asset.file_mtime,
+    );
     preview::cached_preview_path(path, &state.cache_dir, &key, max_edge, thumbnail)
+}
+
+fn preview_cache_key(
+    fingerprint: &str,
+    asset_id: i64,
+    source_size: u64,
+    modified: Option<std::time::SystemTime>,
+    fallback_mtime_ms: i64,
+) -> String {
+    // Source stamps retain filesystem precision. The library stores milliseconds,
+    // so normalize that fallback to nanoseconds too; i128 also keeps signed
+    // fallback values without multiplication overflow. A unit label prevents
+    // reuse of cache names written with the former second-based key.
+    let actual_mtime_ns = modified
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|x| x.as_nanos() as i128)
+        .unwrap_or(i128::from(fallback_mtime_ms) * 1_000_000);
+    let prefix = if fingerprint.is_empty() {
+        format!("asset-{}", asset_id)
+    } else {
+        fingerprint.to_string()
+    };
+    format!("{}-mtime-ns-{}-{}", prefix, actual_mtime_ns, source_size)
 }
 
 #[tauri::command]
@@ -732,4 +750,128 @@ pub fn delete_collection(state: State<'_, AppState>, id: i64) -> Result<bool, St
     conn.execute("DELETE FROM collections WHERE id=?1", params![id])
         .map_err(|e| e.to_string())?;
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn preview_cache_fallback_uses_library_milliseconds_and_keeps_key_namespace() {
+        let library_mtime_ms = 1_790_752_500_123;
+        let source_modified = UNIX_EPOCH + Duration::from_millis(library_mtime_ms as u64);
+        let actual = preview_cache_key("fingerprint", 7, 822, Some(source_modified), 0);
+        let fallback = preview_cache_key("fingerprint", 7, 822, None, library_mtime_ms);
+        assert_eq!(actual, fallback);
+        assert!(actual.starts_with("fingerprint-"));
+        let legacy = format!("fingerprint-{}-822", library_mtime_ms / 1000);
+        assert_ne!(actual, legacy);
+
+        let without_fingerprint = preview_cache_key("", 7, 822, None, i64::MIN);
+        assert!(without_fingerprint.starts_with("asset-7-mtime-ns-"));
+        assert_ne!(
+            without_fingerprint,
+            preview_cache_key("", 7, 822, None, i64::MAX)
+        );
+    }
+
+    #[test]
+    fn same_size_image_replaced_within_one_second_gets_fresh_preview_cache() {
+        let root = std::env::temp_dir().join(format!(
+            "imagelore-preview-cache-key-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("source.bmp");
+        let cache = root.join("cache");
+        let fingerprint = "same-library-fingerprint";
+        let second = 1_790_752_500;
+
+        image::RgbImage::from_pixel(16, 16, image::Rgb([255, 0, 0]))
+            .save(&source)
+            .unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&source)
+            .unwrap()
+            .set_times(
+                fs::FileTimes::new().set_modified(UNIX_EPOCH + Duration::new(second, 123_400_000)),
+            )
+            .unwrap();
+        let first_meta = fs::metadata(&source).unwrap();
+        let first_stamp = first_meta
+            .modified()
+            .unwrap()
+            .duration_since(UNIX_EPOCH)
+            .unwrap();
+        let first_key = preview_cache_key(
+            fingerprint,
+            7,
+            first_meta.len(),
+            first_meta.modified().ok(),
+            0,
+        );
+        let first_cache =
+            preview::cached_preview_path(&source, &cache, &first_key, 2200, false).unwrap();
+        let first_cache_bytes = fs::read(&first_cache).unwrap();
+
+        image::RgbImage::from_pixel(16, 16, image::Rgb([0, 255, 0]))
+            .save(&source)
+            .unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&source)
+            .unwrap()
+            .set_times(
+                fs::FileTimes::new().set_modified(UNIX_EPOCH + Duration::new(second, 800_900_000)),
+            )
+            .unwrap();
+        let replacement_bytes = fs::read(&source).unwrap();
+        let second_meta = fs::metadata(&source).unwrap();
+        let second_stamp = second_meta
+            .modified()
+            .unwrap()
+            .duration_since(UNIX_EPOCH)
+            .unwrap();
+        let second_key = preview_cache_key(
+            fingerprint,
+            7,
+            second_meta.len(),
+            second_meta.modified().ok(),
+            0,
+        );
+        let second_cache =
+            preview::cached_preview_path(&source, &cache, &second_key, 2200, false).unwrap();
+        let first_pixel = image::open(&first_cache)
+            .unwrap()
+            .to_rgb8()
+            .get_pixel(0, 0)
+            .0;
+        let second_pixel = image::open(&second_cache)
+            .unwrap()
+            .to_rgb8()
+            .get_pixel(0, 0)
+            .0;
+        let source_preserved = fs::read(&source).unwrap() == replacement_bytes;
+        let previous_cache_preserved = fs::read(&first_cache).unwrap() == first_cache_bytes;
+        fs::remove_dir_all(&root).unwrap();
+
+        assert_eq!(first_meta.len(), second_meta.len());
+        assert_eq!(first_stamp.as_secs(), second_stamp.as_secs());
+        assert_ne!(first_stamp.subsec_nanos(), second_stamp.subsec_nanos());
+        assert_ne!(
+            first_key, second_key,
+            "Subsecond source changes need a fresh cache key"
+        );
+        assert_ne!(first_cache, second_cache);
+        assert_eq!(first_pixel, [255, 0, 0]);
+        assert_eq!(second_pixel, [0, 255, 0]);
+        assert!(source_preserved);
+        assert!(previous_cache_preserved);
+    }
 }
