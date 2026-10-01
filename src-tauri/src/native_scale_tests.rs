@@ -244,6 +244,7 @@ fn state_for(path: &Path) -> AppState {
     let root = path.parent().unwrap().to_path_buf();
     AppState {
         db: Mutex::new(db::init_db(path).unwrap()),
+        backup_operation: Mutex::new(()),
         data_dir: root.clone(),
         cache_dir: root.join("unused-cache"),
         database_path: path.to_path_buf(),

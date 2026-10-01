@@ -766,6 +766,7 @@ mod tests {
         }
         AppState {
             db: std::sync::Mutex::new(conn),
+            backup_operation: std::sync::Mutex::new(()),
             data_dir: PathBuf::new(),
             cache_dir: PathBuf::new(),
             database_path: PathBuf::new(),

@@ -52,6 +52,7 @@ fn prepare_state() -> Result<AppState, String> {
     diagnostics::log(&data_dir, "INFO", "startup: library ready");
     Ok(AppState {
         db: Mutex::new(connection),
+        backup_operation: Mutex::new(()),
         data_dir,
         cache_dir,
         database_path,

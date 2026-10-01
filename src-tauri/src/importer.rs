@@ -473,6 +473,7 @@ mod tests {
         let database_path = root.join("library.sqlite3");
         AppState {
             db: Mutex::new(db::init_db(&database_path).unwrap()),
+            backup_operation: Mutex::new(()),
             data_dir: root.to_path_buf(),
             cache_dir: root.join("cache"),
             database_path,

@@ -42,6 +42,7 @@ mod tests {
     fn state() -> AppState {
         AppState {
             db: Mutex::new(Connection::open_in_memory().unwrap()),
+            backup_operation: Mutex::new(()),
             data_dir: PathBuf::new(),
             cache_dir: PathBuf::new(),
             database_path: PathBuf::new(),

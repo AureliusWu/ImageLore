@@ -10,6 +10,9 @@ use std::{
 
 pub struct AppState {
     pub db: Mutex<Connection>,
+    // Backup operations acquire this before db. Validation and rotation must
+    // not occupy the connection needed by normal library reads and edits.
+    pub backup_operation: Mutex<()>,
     pub data_dir: PathBuf,
     pub cache_dir: PathBuf,
     pub database_path: PathBuf,

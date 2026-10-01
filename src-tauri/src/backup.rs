@@ -473,20 +473,21 @@ fn vacuum_snapshot_in_place(source: &Path, target: &Path) -> Result<(), String> 
 }
 
 fn create(state: &AppState, prefix: &str) -> Result<BackupRecord, String> {
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
-    create_locked(&conn, state, prefix)
+    let _operation = state.backup_operation.lock().map_err(|e| e.to_string())?;
+    create_locked(state, prefix)
 }
 
-fn create_locked(
-    conn: &Connection,
-    state: &AppState,
-    prefix: &str,
-) -> Result<BackupRecord, String> {
+// Caller holds backup_operation throughout the decision, snapshot, validation
+// and rotation. Only VACUUM needs the live library connection.
+fn create_locked(state: &AppState, prefix: &str) -> Result<BackupRecord, String> {
     fs::create_dir_all(&state.backups_dir).map_err(|e| e.to_string())?;
     let path = unique_path(&state.backups_dir, prefix);
     let result = (|| {
-        conn.execute_batch(&format!("VACUUM INTO '{}';", sql_path(&path)))
-            .map_err(|e| e.to_string())?;
+        {
+            let conn = state.db.lock().map_err(|e| e.to_string())?;
+            conn.execute_batch(&format!("VACUUM INTO '{}';", sql_path(&path)))
+                .map_err(|e| e.to_string())?;
+        }
         validate(&path)?;
         sync_file(&path)?;
         Ok::<_, String>(())
@@ -503,9 +504,11 @@ fn create_locked(
 }
 
 fn ensure_auto_at(state: &AppState, timestamp: i64) -> Result<Option<BackupRecord>, String> {
-    // Decision and snapshot share the write mutex, including concurrent timer,
-    // focus and manual requests. Invalid files cannot defer a real backup.
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    // Decision and snapshot share the backup operation mutex, including
+    // concurrent timer, focus and manual requests. Validate every candidate
+    // again without blocking the live library; invalid files cannot defer a
+    // real backup. All paths acquire backup_operation before db.
+    let _operation = state.backup_operation.lock().map_err(|e| e.to_string())?;
     let latest = records(&state.backups_dir)?
         .into_iter()
         .find(|item| validate(Path::new(&item.path)).is_ok());
@@ -516,7 +519,7 @@ fn ensure_auto_at(state: &AppState, timestamp: i64) -> Result<Option<BackupRecor
     {
         return Ok(None);
     }
-    Ok(Some(create_locked(&conn, state, "auto")?))
+    Ok(Some(create_locked(state, "auto")?))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -927,7 +930,9 @@ pub fn list_backups(state: State<'_, AppState>) -> Result<Vec<BackupRecord>, Str
 
 #[tauri::command]
 pub fn stage_restore(state: State<'_, AppState>, name: String) -> Result<bool, String> {
-    let _lock = state.db.lock().map_err(|e| e.to_string())?;
+    // Protect candidates and pending files from creation/rotation. Staging
+    // reads a backup, so it does not need the active library connection.
+    let _operation = state.backup_operation.lock().map_err(|e| e.to_string())?;
     finish_pending_stage(&state.data_dir)?;
     let file = PathBuf::from(&name);
     let base = file
@@ -1104,6 +1109,7 @@ mod tests {
         let conn = seed(&database_path, "current");
         AppState {
             db: std::sync::Mutex::new(conn),
+            backup_operation: std::sync::Mutex::new(()),
             data_dir: root.to_path_buf(),
             database_path,
             cache_dir: root.join("cache"),
@@ -1446,6 +1452,63 @@ mod tests {
         assert!(ensure_auto_at(&state, now()).is_err());
         fs::remove_file(&state.backups_dir).unwrap();
         assert!(ensure_auto_at(&state, now()).unwrap().is_some());
+        drop(state);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recent_valid_auto_backup_does_not_wait_for_library_connection() {
+        let root = test_root("recent-auto-library-lock");
+        let state = std::sync::Arc::new(test_state(&root));
+        let recent = create(&state, "manual").unwrap();
+        let library = state.db.lock().unwrap();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        let worker_state = std::sync::Arc::clone(&state);
+        let worker = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            result_tx
+                .send(ensure_auto_at(&worker_state, recent.created_at + 1))
+                .unwrap();
+        });
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        let completed_while_library_busy =
+            result_rx.recv_timeout(std::time::Duration::from_secs(1));
+        // Release and join even on the old blocking implementation, so a failed
+        // assertion never leaves a worker or open fixture behind.
+        drop(library);
+        worker.join().unwrap();
+        drop(state);
+        fs::remove_dir_all(root).unwrap();
+        assert!(
+            matches!(completed_while_library_busy, Ok(Ok(None))),
+            "A valid recent backup check must finish without the library connection: {completed_while_library_busy:?}"
+        );
+    }
+
+    #[test]
+    fn auto_backup_revalidates_a_recent_backup_after_external_corruption() {
+        let root = test_root("recent-auto-external-corruption");
+        let state = test_state(&root);
+        let recent = create(&state, "manual").unwrap();
+        assert!(ensure_auto_at(&state, recent.created_at + 1)
+            .unwrap()
+            .is_none());
+        let damaged = b"externally damaged after a successful check";
+        fs::write(&recent.path, damaged).unwrap();
+        let replacement = ensure_auto_at(&state, recent.created_at + 2)
+            .unwrap()
+            .expect("A previously valid but now corrupt backup cannot suppress a new snapshot");
+        validate(Path::new(&replacement.path)).unwrap();
+        assert!(!Path::new(&recent.path).exists());
+        let rejected = fs::read_dir(root.join("backups/rejected"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        assert_eq!(rejected.len(), 1);
+        assert_eq!(fs::read(&rejected[0]).unwrap(), damaged);
         drop(state);
         fs::remove_dir_all(root).unwrap();
     }
