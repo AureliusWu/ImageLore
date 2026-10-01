@@ -18,7 +18,11 @@ The repository follows a main-only development model. A Windows installer build 
 
 Ordinary commits to `main` do not build an EXE.
 
-Before the current installer artifact is uploaded, the workflow verifies version/lockfile consistency and performs the Windows in-place-upgrade smoke test from the v0.19.0 baseline.
+Before building the current installer, the same checkout runs the existing frontend check/build and Rust fmt, locked check, strict clippy and full library tests. The workflow records the triggering SHA and verifies that it and tracked sources remain unchanged before installer bundling and before upload/publication.
+
+The Windows in-place-upgrade smoke test from the v0.19.0 baseline remains required before upload. Its baseline checkout uses a fresh directory under `RUNNER_TEMP`; the workflow does not recursively delete an existing baseline directory. `scripts/test_windows_upgrade.ps1` refuses execution unless `GITHUB_ACTIONS=true` and `RUNNER_ENVIRONMENT=github-hosted`. There is no local or self-hosted override. Every recursive cleanup resolves and checks exactly the two expected ImageLore data directories under `LOCALAPPDATA`, rejecting reparse points in their ancestors or contents.
+
+The smoke test checks the existing install directory, executable and registered versions, the unique installed-app entry and the Start menu target. A synthetic database built from the actual v0.19.0 schema 7 seeds an asset, prompt, tag membership, collection membership and prompt revision. Each of two upgraded launches must append the current diagnostics `startup: library ready` evidence before receiving `WM_CLOSE` and exiting normally. After each close, read-only checks require schema 11, SQLite integrity, foreign-key integrity and all seeded business fields. Preserved backup and model sentinel files must retain their SHA-256 hashes. The model sentinel proves file preservation only; it does not exercise model inference. The startup log proves backend library initialization, not full UI readiness. Updater, signing and interactive save/cancel acceptance remain separate gates.
 
 ## Local developer build
 
