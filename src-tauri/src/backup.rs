@@ -9,6 +9,15 @@ use tauri::{Manager, State};
 
 const MAX_BACKUPS: usize = 10;
 const AUTO_INTERVAL: i64 = 24 * 3600;
+// Full integrity checks revisit index pages. A bounded, connection-local cache
+// avoids repeatedly reading them; it is released when the probe closes and
+// does not alter the live library's cache or any persistent database setting.
+const VALIDATION_CACHE_KIB: i64 = 32 * 1024;
+
+fn configure_validation(conn: &Connection) -> rusqlite::Result<()> {
+    conn.busy_timeout(std::time::Duration::ZERO)?;
+    conn.pragma_update(None, "cache_size", -VALIDATION_CACHE_KIB)
+}
 
 fn now() -> i64 {
     SystemTime::now()
@@ -69,8 +78,7 @@ fn validate(path: &Path) -> Result<(), String> {
 fn validate_in_place(path: &Path) -> Result<(), String> {
     let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|e| e.to_string())?;
-    conn.busy_timeout(std::time::Duration::ZERO)
-        .map_err(|e| e.to_string())?;
+    configure_validation(&conn).map_err(|e| e.to_string())?;
     let result: String = conn
         .query_row("PRAGMA integrity_check", [], |r| r.get(0))
         .map_err(|e| e.to_string())?;
@@ -648,7 +656,7 @@ pub(crate) fn integrity_probe_copy(database: &Path) -> rusqlite::Result<String> 
         OpenFlags::SQLITE_OPEN_READ_ONLY,
     )
     .and_then(|conn| {
-        conn.busy_timeout(std::time::Duration::ZERO)?;
+        configure_validation(&conn)?;
         conn.query_row("PRAGMA integrity_check(1)", [], |r| r.get::<_, String>(0))
     });
     let _ = fs::remove_dir_all(&probe_dir);
@@ -754,6 +762,14 @@ fn check_restore_write_access(database: &Path, allow_corrupt: bool) -> Result<bo
         ) {
             Ok(value) if supported_marker(&value) => (),
             Ok(value) => return Err(format!("活动资料库版本 {} 不受支持，拒绝恢复覆盖", value)),
+            Err(error) if allow_corrupt && known_sqlite_damage(&error) => return Ok(true),
+            Err(error) => return Err(error.to_string()),
+        }
+        // cache_size can read a damaged schema. Preserve the same corruption
+        // classification as the actual integrity probe; neither cache setup
+        // nor a permission/locking failure can authorize replacement.
+        match conn.pragma_update(None, "cache_size", -VALIDATION_CACHE_KIB) {
+            Ok(()) => (),
             Err(error) if allow_corrupt && known_sqlite_damage(&error) => return Ok(true),
             Err(error) => return Err(error.to_string()),
         }
@@ -968,6 +984,51 @@ pub fn stage_restore(state: State<'_, AppState>, name: String) -> Result<bool, S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires an explicitly marked, isolated file-backed acceptance library"]
+    fn profile_file_backed_validation() {
+        use std::time::Instant;
+        let root = PathBuf::from(std::env::var_os("IMAGELORE_STORAGE_PROFILE_DIR").unwrap());
+        assert!(root.is_absolute());
+        assert_eq!(
+            fs::read_to_string(root.join(".imagelore-acceptance-root"))
+                .unwrap()
+                .trim(),
+            "ImageLore acceptance fixture"
+        );
+        let database = root.join("library.sqlite3");
+        let before = fs::read(&database).unwrap();
+        for sample in 0..3 {
+            let start = Instant::now();
+            assert_eq!(integrity_probe_copy(&database).unwrap(), "ok");
+            println!(
+                "{{\"sample\":{sample},\"operation\":\"production_copy_integrity\",\"ms\":{}}}",
+                start.elapsed().as_secs_f64() * 1000.0
+            );
+            let start = Instant::now();
+            validate(&database).unwrap();
+            println!(
+                "{{\"sample\":{sample},\"operation\":\"production_validate\",\"ms\":{}}}",
+                start.elapsed().as_secs_f64() * 1000.0
+            );
+            // Same bundled SQLite and full integrity check. This experiment
+            // changes only the temporary connection's page-cache allowance.
+            for cache_kib in [2000, 32768, 65536] {
+                let conn = Connection::open_with_flags(&database, OpenFlags::SQLITE_OPEN_READ_ONLY)
+                    .unwrap();
+                conn.pragma_update(None, "cache_size", -cache_kib).unwrap();
+                let start = Instant::now();
+                assert_eq!(
+                    conn.query_row("PRAGMA integrity_check", [], |r| r.get::<_, String>(0))
+                        .unwrap(),
+                    "ok"
+                );
+                println!("{{\"sample\":{sample},\"operation\":\"full_integrity\",\"cache_kib\":{cache_kib},\"ms\":{}}}", start.elapsed().as_secs_f64() * 1000.0);
+            }
+        }
+        assert_eq!(fs::read(database).unwrap(), before);
+    }
 
     #[test]
     fn backup_names_do_not_collide() {
