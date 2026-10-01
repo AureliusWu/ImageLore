@@ -4,15 +4,18 @@
 
 - Added version-aware Windows desktop shortcuts backed by the actual EXE version, safe ownership checks, cross-process serialization, downgrade protection and local runtime rollback.
 - Added transactional schema 1–11 migration fixtures tied to historical commits and interruption/retry checks.
-- Hardened Backup/Restore identity and relation validation, preserved DB/WAL/SHM before probing, added recoverable file reservation and tested failure stages.
+- Hardened Backup/Restore identity and relation validation, probed isolated DB/WAL copies, preserved raw DB/WAL/SHM before recovery checks on or replacement of originals, and tested recoverable file reservation and failure stages.
 - Added startup, timer and focus backup checks with serialized 24-hour decisions and visible failures.
-- Moved automatic backup validation and snapshot work from the synchronous IPC handler to the blocking pool, retaining the shared database lock and visible errors.
+- Moved automatic backup work to the blocking pool and serialized backup decisions, validation and rotation with a dedicated operation lock; the live database lock covers only the snapshot, with full safety checks and visible errors retained.
+- Shared unchanged small-image previews between Fit and full-size modes using actual source dimensions, while preserving large-image resizing and thumbnail isolation.
+- Invalidated preview caches on subsecond source replacement with nanosecond file timestamps and an explicit cache-key namespace.
 - Initialized public CLIP downloads from the library's isolated cache without reading or sending user Hugging Face credentials, retaining fixed revisions and model hash checks.
 - Fixed editor dirty detection, failed-save propagation, close protection and late Vision updates across asset changes.
 - Kept in-flight gallery pagination valid during rapid image selection, while filter refreshes still reject old pages and newer selections or edits survive delayed refreshes.
 - Made Sidecar writes atomic and surfaced malformed Sidecars, source discovery/import failures and failed scan timestamp commits.
 - Excluded stale or missing semantic embeddings, removed unnecessary search joins and retained CJK substring verification.
 - Added file-backed 50k/75k native benchmarks with 512-dimensional synthetic vectors and known-answer checks; acceptance records separate these from real-model and desktop evidence.
+- Verified a three-image native CLIP download/index/text/similar flow with trusted file hashes and independently checked backup vectors; large-scale quality, startup, memory and cold cancellation remain acceptance work.
 
 
 ## 0.25.1 — Codebase Hygiene

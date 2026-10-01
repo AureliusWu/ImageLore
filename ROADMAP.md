@@ -160,7 +160,7 @@
 - 项目完整性检查改为格式化无关的结构断言
 
 ## v0.26.0 — Stability Acceptance
-- 当前开发版本已推进到 `0.26.0`；按本阶段任务实施。验收记录：[存储/恢复](docs/V0_26_STORAGE_ACCEPTANCE.md)、[关键工作流](docs/V0_26_WORKFLOW_ACCEPTANCE.md)、[原生规模](docs/V0_26_NATIVE_SCALE.md)。真实模型与完整发布退出标准尚需单独关闭。
+- 当前开发版本已推进到 `0.26.0`；按本阶段任务实施。验收记录：[存储/恢复](docs/V0_26_STORAGE_ACCEPTANCE.md)、[关键工作流](docs/V0_26_WORKFLOW_ACCEPTANCE.md)、[原生规模](docs/V0_26_NATIVE_SCALE.md)、[桌面程序](docs/V0_26_DESKTOP_ACCEPTANCE.md)、[真实模型](docs/V0_26_MODEL_ACCEPTANCE.md)。实际快捷方式、桌面保存重启和恢复已有验证；CLIP 三图集成已通过，启动/内存、全规模模型和完整退出标准仍需关闭。
 - [版本化桌面快捷方式](docs/DESKTOP_SHORTCUT.md)：本地原生运行目录与实际 EXE 版本联动，保护手工链接、拒绝自动降级、失败回退。
 - 执行方案、分阶段任务与可量化验收见 [v1.0.0 更新方案](docs/V1_0_0_PLAN.md)
 - 50k+ 大图库端到端性能验收：图库、关键词、CJK、Visual DNA、Reference、Remix

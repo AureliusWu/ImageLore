@@ -22,4 +22,6 @@ npm run desktop:shortcut
 
 本地运行目录不纳入 Git；图片和资料库仍使用独立数据目录。`desktop:build` 不生成 NSIS、不触发 GitHub Release。签名安装包和自动更新仍按 ROADMAP 的后续阶段验收。
 
+本轮已经实际生成桌面 `ImageLore v0.26.0.lnk`，目标为 `<project>\desktop-runtime\current\ImageLore.exe`。程序身份、发布回退与隔离原生操作证据见[桌面验收](V0_26_DESKTOP_ACCEPTANCE.md)。快捷方式的版本跟随已安装/已构建 EXE；下载远程更新属于后续 updater 阶段。
+
 回归命令 `npm run test:shortcut` 使用临时桌面及带版本资源的合成 EXE，不运行这些 EXE，不接触实际桌面。
