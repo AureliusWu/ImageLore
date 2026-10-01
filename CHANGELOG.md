@@ -10,6 +10,10 @@
 - Shared unchanged small-image previews between Fit and full-size modes using actual source dimensions, while preserving large-image resizing and thumbnail isolation.
 - Invalidated preview caches on subsecond source replacement with nanosecond file timestamps and an explicit cache-key namespace.
 - Initialized public CLIP downloads from the library's isolated cache without reading or sending user Hugging Face credentials, retaining fixed revisions and model hash checks.
+- Bounded temporary full-database validation caches, kept manual backup/restore preparation off the window thread, and waited for manual and automatic safety work before close.
+- Made model downloads and preparation waits cancellable with finite network timeouts, registered terminal listeners before starting index jobs, and prevented stale model queries from overwriting readiness after cache deletion.
+- Removed silent semantic candidate truncation above 100,000 assets, with a deterministic regression; performance at that scale remains unbenchmarked.
+- Passed an isolated v0.19.0-to-v0.26.0 NSIS upgrade with two normal closes and full data readbacks after six same-source gates; the candidate remains unsigned and has no updater publication.
 - Fixed editor dirty detection, failed-save propagation, close protection and late Vision updates across asset changes.
 - Kept in-flight gallery pagination valid during rapid image selection, while filter refreshes still reject old pages and newer selections or edits survive delayed refreshes.
 - Made Sidecar writes atomic and surfaced malformed Sidecars, source discovery/import failures and failed scan timestamp commits.
