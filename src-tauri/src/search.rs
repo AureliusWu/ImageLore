@@ -154,7 +154,7 @@ pub(crate) fn filtered_summaries(
     limit: i64,
 ) -> Result<Vec<AssetSummary>, String> {
     let (joins, where_sql, mut args) = filter_parts(filter);
-    let limit = limit.clamp(1, 100_000);
+    let limit = limit.max(1);
     let sql = format!(
         "{} {} WHERE {} GROUP BY a.id LIMIT ?",
         db::SELECT_SUMMARY,

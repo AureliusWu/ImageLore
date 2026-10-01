@@ -14,7 +14,7 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-function hookHarness(name, api = {}, getCurrentWindow = () => {}) {
+function hookHarness(name, api = {}, getCurrentWindow = () => {}, eventApi = null) {
   const slots = [];
   const pending = [];
   let cursor = 0;
@@ -76,10 +76,12 @@ function hookHarness(name, api = {}, getCurrentWindow = () => {}) {
       if (dependency === "@tauri-apps/api/window") return { getCurrentWindow };
       if (dependency === "@tauri-apps/api/event") {
         return {
-          listen: async (_event, listener) => {
-            eventListener = listener;
-            return () => {};
-          },
+          listen:
+            eventApi?.listen ??
+            (async (_event, listener) => {
+              eventListener = listener;
+              return () => {};
+            }),
         };
       }
       throw new Error(`Unexpected Hook dependency: ${dependency}`);
@@ -982,6 +984,270 @@ for (const kind of ["Import", "Semantic"]) {
     assert.equal(attempts, 2);
   });
 }
+
+test("semantic start waits until its terminal listener is registered before dispatching a native job", async () => {
+  const registration = deferred();
+  let starts = 0;
+  const hook = hookHarness(
+    "useSemanticJob",
+    {
+      startSemanticIndex: async () => {
+        starts++;
+        return 7;
+      },
+    },
+    undefined,
+    { listen: () => registration.promise },
+  );
+  const read = () =>
+    hook.render(
+      () => {},
+      () => {},
+    );
+  const start = read().start();
+  await Promise.resolve();
+  assert.equal(starts, 0, "a job cannot finish before the listener can receive its terminal");
+  registration.resolve(() => {});
+  assert.equal(await start, true);
+  assert.equal(starts, 1);
+});
+
+test("semantic listener registration failure refuses a native job and leaves close unblocked", async () => {
+  let starts = 0;
+  let status = "";
+  const hook = hookHarness(
+    "useSemanticJob",
+    {
+      startSemanticIndex: async () => {
+        starts++;
+        return 7;
+      },
+    },
+    undefined,
+    {
+      listen: async () => {
+        throw new Error("listener unavailable");
+      },
+    },
+  );
+  const read = () =>
+    hook.render(
+      () => {},
+      (value) => (status = value),
+    );
+  assert.equal(await read().start(), false);
+  assert.equal(starts, 0);
+  assert.equal(read().active, false);
+  assert.match(status, /listener unavailable/);
+  await read().cancel();
+});
+
+test("semantic cancellation during listener registration still waits for start and the actual native terminal", async () => {
+  const registration = deferred();
+  let listener;
+  let starts = 0;
+  let cancels = 0;
+  const hook = hookHarness(
+    "useSemanticJob",
+    {
+      startSemanticIndex: async () => {
+        starts++;
+        return 7;
+      },
+      cancelSemanticIndex: async () => {
+        cancels++;
+        return true;
+      },
+    },
+    undefined,
+    {
+      listen: (_event, callback) => {
+        listener = callback;
+        return registration.promise;
+      },
+    },
+  );
+  const read = () =>
+    hook.render(
+      () => {},
+      () => {},
+    );
+  const start = read().start();
+  let finished = false;
+  const cancel = read()
+    .cancel()
+    .then(() => {
+      finished = true;
+    });
+  await Promise.resolve();
+  assert.equal(starts, 0);
+  assert.equal(cancels, 0);
+  registration.resolve(() => {});
+  await start;
+  await new Promise(setImmediate);
+  assert.equal(starts, 1);
+  assert.equal(cancels, 1);
+  assert.equal(finished, false, "native acknowledgement does not mean the worker has stopped");
+  listener({
+    payload: {
+      job_id: 7,
+      processed: 0,
+      total: 3,
+      indexed: 0,
+      skipped: 0,
+      failed: 0,
+      current_name: "",
+      done: true,
+      cancelled: true,
+    },
+  });
+  await cancel;
+  assert.equal(read().active, false);
+});
+
+test("semantic model preparation failure preserves its recoverable reason and authoritative final progress", async () => {
+  let status = "";
+  const hook = hookHarness("useSemanticJob", { startSemanticIndex: async () => 7 });
+  const callbacks = [() => {}, (value) => (status = value)];
+  await hook.render(...callbacks).start();
+  hook.emitProgress({
+    job_id: 7,
+    processed: 2,
+    total: 3,
+    indexed: 1,
+    skipped: 0,
+    failed: 1,
+    current_name: "固定版本模型下载失败：连接超时，请重试",
+    done: true,
+    cancelled: false,
+  });
+  const final = hook.render(...callbacks);
+  assert.match(status, /连接超时，请重试/);
+  assert.equal(final.progress.processed, 2);
+  assert.equal(final.active, false);
+});
+
+test("semantic cancellation acknowledgement waits for this job terminal before allowing retry", async () => {
+  const hook = hookHarness("useSemanticJob", {
+    startSemanticIndex: async () => 7,
+    cancelSemanticIndex: async () => true,
+  });
+  const callbacks = [() => {}, () => {}];
+  const job = hook.render(...callbacks);
+  await job.start();
+  let completed = false;
+  const cancellation = job.cancel().then(() => (completed = true));
+  await new Promise(setImmediate);
+  assert.equal(completed, false);
+  assert.equal(hook.render(...callbacks).active, true);
+  assert.equal(await job.start(), false);
+  hook.emitProgress({
+    job_id: 8,
+    processed: 0,
+    total: 3,
+    indexed: 0,
+    skipped: 0,
+    failed: 0,
+    current_name: "",
+    done: true,
+    cancelled: true,
+  });
+  await new Promise(setImmediate);
+  assert.equal(completed, false);
+  hook.emitProgress({
+    job_id: 7,
+    processed: 1,
+    total: 3,
+    indexed: 1,
+    skipped: 0,
+    failed: 0,
+    current_name: "",
+    done: true,
+    cancelled: true,
+  });
+  await cancellation;
+  assert.equal(hook.render(...callbacks).progress.processed, 1);
+  assert.equal(hook.render(...callbacks).active, false);
+});
+
+test("semantic start buffers its early terminal and ignores another job and late completed-job progress", async () => {
+  const pending = deferred();
+  let starts = 0;
+  let done = 0;
+  const hook = hookHarness("useSemanticJob", {
+    startSemanticIndex: async () => (++starts === 1 ? pending.promise : 8),
+    cancelSemanticIndex: async () => {
+      throw new Error("completed job must not be cancelled");
+    },
+  });
+  const callbacks = [() => done++, () => {}];
+  const job = hook.render(...callbacks);
+  const starting = job.start();
+  const terminal = {
+    job_id: 7,
+    processed: 3,
+    total: 3,
+    indexed: 3,
+    skipped: 0,
+    failed: 0,
+    current_name: "",
+    done: true,
+    cancelled: false,
+  };
+  hook.emitProgress({ ...terminal, job_id: 99 });
+  hook.emitProgress(terminal);
+  pending.resolve(7);
+  await starting;
+  assert.equal(hook.render(...callbacks).active, false);
+  assert.equal(hook.render(...callbacks).progress.processed, 3);
+  assert.equal(done, 1);
+  await job.cancel();
+  await job.start();
+  hook.emitProgress(terminal);
+  assert.equal(hook.render(...callbacks).active, true);
+  assert.equal(done, 1);
+  hook.emitProgress({ ...terminal, job_id: 8 });
+  assert.equal(done, 2);
+});
+
+test("closing with semantic preparation in flight waits beyond cancellation acknowledgement", async () => {
+  const jobHook = hookHarness("useSemanticJob", {
+    startSemanticIndex: async () => 7,
+    cancelSemanticIndex: async () => true,
+  });
+  const job = jobHook.render(
+    () => {},
+    () => {},
+  );
+  await job.start();
+  let onClose;
+  let destroyed = 0;
+  const closeHook = hookHarness("useCloseGuard", {}, () => ({
+    onCloseRequested: async (callback) => {
+      onClose = callback;
+      return () => {};
+    },
+    destroy: async () => destroyed++,
+  }));
+  closeHook.render(async () => {}, job.cancel);
+  await new Promise(setImmediate);
+  const closing = onClose({ preventDefault() {} });
+  await new Promise(setImmediate);
+  assert.equal(destroyed, 0);
+  jobHook.emitProgress({
+    job_id: 7,
+    processed: 0,
+    total: 3,
+    indexed: 0,
+    skipped: 0,
+    failed: 0,
+    current_name: "",
+    done: true,
+    cancelled: true,
+  });
+  await closing;
+  assert.equal(destroyed, 1);
+});
 
 test("closing with a real import cancellation failure keeps the window open", async () => {
   const jobHook = hookHarness("useImportJob", {

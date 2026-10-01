@@ -8,15 +8,18 @@ use fastembed::{
     ImageEmbedding, ImageInitOptionsUserDefined, InitOptionsUserDefined, Pooling, TextEmbedding,
     TokenizerFiles, UserDefinedEmbeddingModel, UserDefinedImageEmbeddingModel,
 };
-use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+mod download;
+use download::{Control, ModelError, ModelResult};
 use rusqlite::{params, OptionalExtension};
-use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
-    fs::{self, File},
-    io::Read,
+    fs,
     path::{Path, PathBuf},
-    sync::atomic::Ordering,
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, Mutex, MutexGuard, OnceLock, Weak,
+    },
+    time::Duration,
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 use walkdir::WalkDir;
@@ -24,6 +27,70 @@ use walkdir::WalkDir;
 pub const MODEL_ID: &str = "clip-vit-b32-qdrant-v1";
 const DIMENSIONS: usize = 512;
 const TRUST_MANIFEST_VERSION: u32 = 1;
+static MODEL_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>> = OnceLock::new();
+static STAGE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+fn model_operation(cache: &Path) -> ModelResult<Arc<Mutex<()>>> {
+    let mut locks = MODEL_LOCKS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .map_err(|e| ModelError::Failed(e.to_string()))?;
+    locks.retain(|_, value| value.strong_count() > 0);
+    if let Some(lock) = locks.get(cache).and_then(Weak::upgrade) {
+        return Ok(lock);
+    }
+    let lock = Arc::new(Mutex::new(()));
+    locks.insert(cache.to_path_buf(), Arc::downgrade(&lock));
+    Ok(lock)
+}
+
+fn model_guard<'a, T>(lock: &'a Mutex<T>, control: &Control<'_>) -> ModelResult<MutexGuard<'a, T>> {
+    loop {
+        control.check()?;
+        match lock.try_lock() {
+            Ok(guard) => {
+                control.check()?;
+                return Ok(guard);
+            }
+            Err(std::sync::TryLockError::WouldBlock) => {
+                std::thread::sleep(Duration::from_millis(50))
+            }
+            Err(error) => return Err(ModelError::Failed(error.to_string())),
+        }
+    }
+}
+
+fn unique_stage(cache: &Path, label: &str) -> ModelResult<PathBuf> {
+    loop {
+        let path = cache.join(format!(
+            ".trusted-{}-{}-{}",
+            label,
+            std::process::id(),
+            STAGE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        match fs::create_dir(&path) {
+            Ok(()) => return Ok(path),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+}
+
+fn discard_stage(stage: &Path, error: ModelError) -> ModelError {
+    if let Err(cleanup) = fs::remove_dir_all(stage) {
+        if matches!(error, ModelError::Cancelled) {
+            // Preserve the cancellation result. An OS cleanup failure leaves
+            // only this unique, unpublished stage; it cannot be loaded.
+            eprintln!(
+                "cancelled model stage cleanup failed {}: {cleanup}",
+                stage.display()
+            );
+        } else {
+            return ModelError::Failed(format!("{error}；临时模型文件清理失败，请重试：{cleanup}"));
+        }
+    }
+    error
+}
 
 #[derive(Clone, Copy)]
 struct SupportFile {
@@ -124,6 +191,47 @@ fn set_setting(conn: &rusqlite::Connection, key: &str, value: &str) -> Result<()
     Ok(())
 }
 
+fn cache_generation(conn: &rusqlite::Connection) -> Result<u64, String> {
+    let value: Option<String> = conn
+        .query_row(
+            "SELECT value FROM semantic_settings WHERE key='cache_generation'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    match value {
+        None => Ok(0),
+        Some(value) => value
+            .parse()
+            .map_err(|_| "语义模型状态版本无效，已保留模型缓存".into()),
+    }
+}
+
+fn publish_readiness(
+    conn: &mut rusqlite::Connection,
+    key: &str,
+    generation: u64,
+    ready: bool,
+) -> Result<(), String> {
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    if cache_generation(&tx)? == generation {
+        set_setting(&tx, key, if ready { "1" } else { "0" })?;
+    }
+    tx.commit().map_err(|e| e.to_string())
+}
+
+fn invalidate_model_readiness(conn: &mut rusqlite::Connection) -> Result<(), String> {
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    let next = cache_generation(&tx)?
+        .checked_add(1)
+        .ok_or("语义模型状态版本已达上限，已保留模型缓存")?;
+    set_setting(&tx, "vision_ready", "0")?;
+    set_setting(&tx, "text_ready", "0")?;
+    set_setting(&tx, "cache_generation", &next.to_string())?;
+    tx.commit().map_err(|e| e.to_string())
+}
+
 fn normalize(mut vector: Vec<f32>) -> Vec<f32> {
     let norm = vector.iter().map(|x| x * x).sum::<f32>().sqrt();
     if norm > 0.0 {
@@ -157,208 +265,271 @@ fn score(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b).map(|(x, y)| x * y).sum()
 }
 
+#[cfg(test)]
 fn sha256_file(path: &Path) -> Result<String, String> {
-    let mut file = File::open(path).map_err(|e| e.to_string())?;
-    let mut hasher = Sha256::new();
-    let mut buffer = [0u8; 1024 * 1024];
-    loop {
-        let read = file.read(&mut buffer).map_err(|e| e.to_string())?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-    }
-    Ok(hasher
-        .finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect())
+    download::digest(
+        path,
+        &Control {
+            cancel: None,
+            report: &|_| {},
+        },
+    )
+    .map_err(|e| e.to_string())
 }
 
-fn validate_json(path: &Path, max_bytes: u64) -> Result<(), String> {
-    let meta =
-        fs::metadata(path).map_err(|e| format!("模型配套文件缺失 {}：{e}", path.display()))?;
+fn validate_json(path: &Path, max_bytes: u64, control: &Control<'_>) -> ModelResult<()> {
+    control.check()?;
+    let meta = fs::metadata(path)
+        .map_err(|e| ModelError::Failed(format!("模型配套文件缺失 {}：{e}", path.display())))?;
     if meta.len() == 0 || meta.len() > max_bytes {
-        return Err(format!(
+        return Err(ModelError::Failed(format!(
             "模型配套文件大小异常：{} ({} bytes)",
             path.display(),
             meta.len()
-        ));
+        )));
     }
-    let data = fs::read(path).map_err(|e| e.to_string())?;
+    let data = download::read(path, max_bytes, control)?;
     serde_json::from_slice::<serde_json::Value>(&data)
-        .map_err(|e| format!("模型配套 JSON 无效 {}：{e}", path.display()))?;
-    Ok(())
+        .map_err(|e| ModelError::Failed(format!("模型配套 JSON 无效 {}：{e}", path.display())))?;
+    control.check()
 }
 
-fn validate_trusted(dir: &Path, spec: TrustedModelSpec) -> Result<(), String> {
+fn validate_trusted_controlled(
+    dir: &Path,
+    spec: TrustedModelSpec,
+    control: &Control<'_>,
+) -> ModelResult<()> {
+    control.check()?;
     let onnx = dir.join("model.onnx");
-    let meta = fs::metadata(&onnx).map_err(|e| format!("可信模型缺失 {}：{e}", onnx.display()))?;
+    let meta = fs::metadata(&onnx)
+        .map_err(|e| ModelError::Failed(format!("可信模型缺失 {}：{e}", onnx.display())))?;
     if meta.len() != spec.onnx_size {
-        return Err(format!(
+        return Err(ModelError::Failed(format!(
             "模型大小校验失败：{}，期望 {} bytes，实际 {} bytes",
             spec.name,
             spec.onnx_size,
             meta.len()
-        ));
+        )));
     }
-    let digest = sha256_file(&onnx)?;
-    if digest != spec.onnx_sha256 {
-        return Err(format!(
+    control.phase("正在准备本地模型：完整核验 SHA-256…")?;
+    if download::digest(&onnx, control)? != spec.onnx_sha256 {
+        return Err(ModelError::Failed(format!(
             "模型 SHA-256 校验失败：{}。已拒绝加载。",
             spec.name
-        ));
+        )));
     }
     for file in spec.support {
-        validate_json(&dir.join(file.path), file.max_bytes)?
+        validate_json(&dir.join(file.path), file.max_bytes, control)?;
     }
-    Ok(())
+    control.check()
 }
 
-fn install_trusted(cache: &Path, spec: TrustedModelSpec) -> Result<PathBuf, String> {
+#[cfg(test)]
+fn validate_trusted(dir: &Path, spec: TrustedModelSpec) -> Result<(), String> {
+    validate_trusted_controlled(
+        dir,
+        spec,
+        &Control {
+            cancel: None,
+            report: &|_| {},
+        },
+    )
+    .map_err(|e| e.to_string())
+}
+
+fn install_trusted_with(
+    cache: &Path,
+    spec: TrustedModelSpec,
+    control: &Control<'_>,
+    fetch: impl Fn(&str, &Path, u64, Option<u64>) -> ModelResult<()>,
+) -> ModelResult<PathBuf> {
+    control.check()?;
     let target = trusted_dir(cache, spec);
-    if validate_trusted(&target, spec).is_ok() {
-        return Ok(target);
+    match validate_trusted_controlled(&target, spec, control) {
+        Ok(()) => return Ok(target),
+        Err(ModelError::Cancelled) => return Err(ModelError::Cancelled),
+        Err(ModelError::Failed(_)) => {}
     }
-
-    fs::create_dir_all(cache.join("trusted")).map_err(|e| e.to_string())?;
-    let hub_cache = cache.join("hf");
-    let api = ApiBuilder::from_cache(hf_hub::Cache::new(hub_cache.clone()))
-        .with_token(None)
-        .with_progress(false)
-        .build()
-        .map_err(|e| format!("无法初始化固定版本模型下载器：{e}"))?;
-    let repo = api.repo(Repo::with_revision(
-        spec.repo.to_string(),
-        RepoType::Model,
-        spec.revision.to_string(),
-    ));
-
-    let stage = cache.join(format!(".trusted-{}-{}", spec.name, std::process::id()));
-    if stage.exists() {
-        fs::remove_dir_all(&stage).map_err(|e| e.to_string())?
-    }
-    fs::create_dir_all(&stage).map_err(|e| e.to_string())?;
-
-    let install_result = (|| -> Result<(), String> {
-        let source_model = repo
-            .get("model.onnx")
-            .map_err(|e| format!("固定版本模型下载失败 {}@{}：{e}", spec.repo, spec.revision))?;
-        let source_meta = fs::metadata(&source_model).map_err(|e| e.to_string())?;
-        if source_meta.len() != spec.onnx_size {
-            return Err(format!(
-                "下载模型大小不符合可信清单：期望 {} bytes，实际 {} bytes",
-                spec.onnx_size,
-                source_meta.len()
-            ));
-        }
-        let source_digest = sha256_file(&source_model)?;
-        if source_digest != spec.onnx_sha256 {
-            return Err(format!(
-                "下载模型 SHA-256 与可信清单不一致：{}。已拒绝安装。",
-                spec.name
-            ));
-        }
-        fs::copy(&source_model, stage.join("model.onnx")).map_err(|e| e.to_string())?;
-
+    control.check()?;
+    fs::create_dir_all(cache.join("trusted"))?;
+    let stage = unique_stage(cache, spec.name)?;
+    let result = (|| -> ModelResult<()> {
+        control.phase("正在准备本地模型：下载固定公开版本…")?;
+        fetch(
+            "model.onnx",
+            &stage.join("model.onnx"),
+            spec.onnx_size,
+            Some(spec.onnx_size),
+        )?;
         for support in spec.support {
-            let source = repo
-                .get(support.path)
-                .map_err(|e| format!("固定版本配套文件下载失败 {}：{e}", support.path))?;
-            let meta = fs::metadata(&source).map_err(|e| e.to_string())?;
-            if meta.len() == 0 || meta.len() > support.max_bytes {
-                return Err(format!(
-                    "配套文件大小超过安全上限：{} ({} bytes)",
-                    support.path,
-                    meta.len()
-                ));
-            }
-            fs::copy(&source, stage.join(support.path)).map_err(|e| e.to_string())?;
-            validate_json(&stage.join(support.path), support.max_bytes)?;
+            control.check()?;
+            fetch(
+                support.path,
+                &stage.join(support.path),
+                support.max_bytes,
+                None,
+            )?;
+            validate_json(&stage.join(support.path), support.max_bytes, control)?;
         }
-
-        let manifest = serde_json::json!({
-            "manifest_version":TRUST_MANIFEST_VERSION,
-            "model_id":MODEL_ID,
-            "component":spec.name,
-            "repository":spec.repo,
-            "revision":spec.revision,
-            "onnx_sha256":spec.onnx_sha256,
-            "onnx_size":spec.onnx_size
-        });
+        let manifest = serde_json::json!({"manifest_version":TRUST_MANIFEST_VERSION,"model_id":MODEL_ID,"component":spec.name,"repository":spec.repo,"revision":spec.revision,"onnx_sha256":spec.onnx_sha256,"onnx_size":spec.onnx_size});
         fs::write(
             stage.join("trusted-manifest.json"),
-            serde_json::to_vec_pretty(&manifest).map_err(|e| e.to_string())?,
-        )
-        .map_err(|e| e.to_string())?;
-        validate_trusted(&stage, spec)
+            serde_json::to_vec_pretty(&manifest).map_err(|e| ModelError::Failed(e.to_string()))?,
+        )?;
+        validate_trusted_controlled(&stage, spec, control)
     })();
-
-    if let Err(error) = install_result {
-        let _ = fs::remove_dir_all(&stage);
-        let _ = fs::remove_dir_all(&hub_cache);
-        return Err(error);
+    if let Err(error) = result {
+        // The fetch future and its output file have already been dropped. Only
+        // this invocation's unique stage is removed, never another download.
+        return Err(discard_stage(&stage, error));
     }
-
-    let backup = cache.join(format!(".trusted-{}-old", spec.name));
-    if backup.exists() {
-        let _ = fs::remove_dir_all(&backup);
+    if let Err(error) = control.check() {
+        return Err(discard_stage(&stage, error));
+    }
+    let backup = match unique_stage(cache, &format!("{}-old", spec.name)) {
+        Ok(path) => path,
+        Err(error) => return Err(discard_stage(&stage, error)),
+    };
+    if let Err(error) = fs::remove_dir(&backup) {
+        return Err(discard_stage(&stage, error.into()));
     }
     if target.exists() {
-        fs::rename(&target, &backup).map_err(|e| format!("无法替换旧模型缓存：{e}"))?
+        if let Err(error) = fs::rename(&target, &backup) {
+            let _ = fs::remove_dir_all(&stage);
+            return Err(ModelError::Failed(format!("无法替换旧模型缓存：{error}")));
+        }
     }
+    // Do not interrupt the rename/rollback critical section. A cancel arriving
+    // here may keep a completely verified cache, but cannot start encoding.
     if let Err(error) = fs::rename(&stage, &target) {
         if backup.exists() {
-            let _ = fs::rename(&backup, &target);
+            if let Err(rollback) = fs::rename(&backup, &target) {
+                return Err(ModelError::Failed(format!(
+                    "可信模型安装失败：{error}；旧模型保留于 {}，回滚失败：{rollback}",
+                    backup.display()
+                )));
+            }
         }
         let _ = fs::remove_dir_all(&stage);
-        return Err(format!("可信模型原子安装失败：{error}"));
+        return Err(ModelError::Failed(format!("可信模型原子安装失败：{error}")));
     }
     if backup.exists() {
         let _ = fs::remove_dir_all(&backup);
     }
-    let _ = fs::remove_dir_all(&hub_cache);
+    control.check()?;
     Ok(target)
 }
 
-fn image_model(cache: PathBuf) -> Result<ImageEmbedding, String> {
-    let dir = install_trusted(&cache, VISION_SPEC)?;
-    let onnx = fs::read(dir.join("model.onnx")).map_err(|e| e.to_string())?;
-    let preprocessor = fs::read(dir.join("preprocessor_config.json")).map_err(|e| e.to_string())?;
-    let model = UserDefinedImageEmbeddingModel::new(onnx, preprocessor);
-    ImageEmbedding::try_new_from_user_defined(
-        model,
+fn install_trusted(
+    cache: &Path,
+    spec: TrustedModelSpec,
+    control: &Control<'_>,
+) -> ModelResult<PathBuf> {
+    // A valid private trusted cache takes the network-free branch before the
+    // fetch closure is invoked. No HF builder, global cache or token is read.
+    let client = std::cell::OnceCell::new();
+    install_trusted_with(
+        cache,
+        spec,
+        control,
+        |name, destination, max_bytes, exact_size| {
+            if client.get().is_none() {
+                client
+                    .set(download::client()?)
+                    .map_err(|_| ModelError::Failed("模型下载器初始化失败".into()))?;
+            }
+            let url = format!(
+                "https://huggingface.co/{}/resolve/{}/{}",
+                spec.repo, spec.revision, name
+            );
+            tauri::async_runtime::block_on(download::file(
+                client.get().unwrap(),
+                &url,
+                destination,
+                max_bytes,
+                exact_size,
+                control,
+            ))
+        },
+    )
+}
+
+fn image_model(cache: PathBuf, control: &Control<'_>) -> ModelResult<ImageEmbedding> {
+    let operation = model_operation(&cache)?;
+    let guard = model_guard(&operation, control)?;
+    let dir = install_trusted(&cache, VISION_SPEC, control)?;
+    control.phase("正在准备本地视觉模型：读取可信文件…")?;
+    let onnx = download::read(&dir.join("model.onnx"), VISION_SPEC.onnx_size, control)?;
+    let preprocessor = download::read(
+        &dir.join("preprocessor_config.json"),
+        VISION_SUPPORT[0].max_bytes,
+        control,
+    )?;
+    drop(guard);
+    control.phase("正在准备本地视觉模型：初始化 ONNX，取消将在本阶段结束后生效…")?;
+    let model = ImageEmbedding::try_new_from_user_defined(
+        UserDefinedImageEmbeddingModel::new(onnx, preprocessor),
         ImageInitOptionsUserDefined::new().with_intra_threads(2),
     )
-    .map_err(|e| format!("可信视觉模型加载失败：{e}"))
+    .map_err(|e| ModelError::Failed(format!("可信视觉模型加载失败：{e}")))?;
+    control.check()?;
+    Ok(model)
 }
 
 fn text_vector(cache: PathBuf, query: String) -> Result<Vec<f32>, String> {
-    let dir = install_trusted(&cache, TEXT_SPEC)?;
-    let tokenizer = TokenizerFiles {
-        tokenizer_file: fs::read(dir.join("tokenizer.json")).map_err(|e| e.to_string())?,
-        config_file: fs::read(dir.join("config.json")).map_err(|e| e.to_string())?,
-        special_tokens_map_file: fs::read(dir.join("special_tokens_map.json"))
-            .map_err(|e| e.to_string())?,
-        tokenizer_config_file: fs::read(dir.join("tokenizer_config.json"))
-            .map_err(|e| e.to_string())?,
-    };
-    let model = UserDefinedEmbeddingModel::new(
-        fs::read(dir.join("model.onnx")).map_err(|e| e.to_string())?,
-        tokenizer,
+    text_vector_controlled(
+        cache,
+        query,
+        &Control {
+            cancel: None,
+            report: &|_| {},
+        },
     )
-    .with_pooling(Pooling::Mean);
+    .map_err(|e| e.to_string())
+}
+
+fn text_vector_controlled(
+    cache: PathBuf,
+    query: String,
+    control: &Control<'_>,
+) -> ModelResult<Vec<f32>> {
+    let operation = model_operation(&cache)?;
+    let guard = model_guard(&operation, control)?;
+    let dir = install_trusted(&cache, TEXT_SPEC, control)?;
+    let tokenizer = TokenizerFiles {
+        tokenizer_file: download::read(
+            &dir.join("tokenizer.json"),
+            TEXT_SUPPORT[0].max_bytes,
+            control,
+        )?,
+        config_file: download::read(&dir.join("config.json"), TEXT_SUPPORT[1].max_bytes, control)?,
+        special_tokens_map_file: download::read(
+            &dir.join("special_tokens_map.json"),
+            TEXT_SUPPORT[2].max_bytes,
+            control,
+        )?,
+        tokenizer_config_file: download::read(
+            &dir.join("tokenizer_config.json"),
+            TEXT_SUPPORT[3].max_bytes,
+            control,
+        )?,
+    };
+    let onnx = download::read(&dir.join("model.onnx"), TEXT_SPEC.onnx_size, control)?;
+    drop(guard);
+    control.check()?;
     let mut model = TextEmbedding::try_new_from_user_defined(
-        model,
+        UserDefinedEmbeddingModel::new(onnx, tokenizer).with_pooling(Pooling::Mean),
         InitOptionsUserDefined::new()
             .with_max_length(77)
             .with_intra_threads(2),
     )
-    .map_err(|e| format!("可信文本模型加载失败：{e}"))?;
+    .map_err(|e| ModelError::Failed(format!("可信文本模型加载失败：{e}")))?;
     let mut rows = model
         .embed(vec![query], None)
-        .map_err(|e| format!("语义查询编码失败：{e}"))?;
-    let vector = rows.pop().ok_or("语义模型没有返回查询向量")?;
+        .map_err(|e| ModelError::Failed(format!("语义查询编码失败：{e}")))?;
+    let vector = rows
+        .pop()
+        .ok_or_else(|| ModelError::Failed("语义模型没有返回查询向量".into()))?;
     Ok(normalize(vector))
 }
 
@@ -366,7 +537,10 @@ fn emit(app: &AppHandle, progress: SemanticProgress) {
     let _ = app.emit("imagelore://semantic-progress", progress);
 }
 
-fn index_failure(app: &AppHandle, job_id: u64, total: usize, message: String) {
+fn index_failure(app: &AppHandle, job_id: u64, total: usize, error: ModelError) {
+    let cancelled = matches!(error, ModelError::Cancelled);
+    let state = app.state::<AppState>();
+    jobs::finish(state.inner(), job_id);
     emit(
         app,
         SemanticProgress {
@@ -375,10 +549,10 @@ fn index_failure(app: &AppHandle, job_id: u64, total: usize, message: String) {
             total,
             indexed: 0,
             skipped: 0,
-            failed: 1,
-            current_name: message,
+            failed: if cancelled { 0 } else { 1 },
+            current_name: error.to_string(),
             done: true,
-            cancelled: false,
+            cancelled,
         },
     );
 }
@@ -430,38 +604,107 @@ pub fn semantic_status(state: State<'_, AppState>) -> Result<SemanticStatus, Str
     })
 }
 
+type IndexRow = (i64, String, String, String);
+
+fn index_rows(state: &AppState, cancel: &AtomicBool) -> ModelResult<(Vec<IndexRow>, u64)> {
+    let control = Control {
+        cancel: Some(cancel),
+        report: &|_| {},
+    };
+    let conn = model_guard(&state.db, &control)?;
+    let generation = cache_generation(&conn).map_err(ModelError::Failed)?;
+    conn.execute("INSERT INTO semantic_settings(key,value) VALUES('enabled','1') ON CONFLICT(key) DO UPDATE SET value='1'",[]).map_err(|e|ModelError::Failed(e.to_string()))?;
+    control.check()?;
+    let mut statement=conn.prepare("SELECT a.id,a.path,a.name,a.fingerprint FROM assets a LEFT JOIN semantic_embeddings se ON se.asset_id=a.id WHERE a.missing=0 AND (se.asset_id IS NULL OR se.model_id<>?1 OR se.fingerprint<>a.fingerprint) ORDER BY a.id").map_err(|e|ModelError::Failed(e.to_string()))?;
+    let mapped = statement
+        .query_map(params![MODEL_ID], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
+        .map_err(|e| ModelError::Failed(e.to_string()))?;
+    let mut rows = Vec::new();
+    for row in mapped {
+        control.check()?;
+        rows.push(row.map_err(|e| ModelError::Failed(e.to_string()))?);
+    }
+    control.check()?;
+    Ok((rows, generation))
+}
+
+fn store_index_vector(
+    state: &AppState,
+    id: i64,
+    blob: &[u8],
+    fingerprint: &str,
+    control: &Control<'_>,
+) -> ModelResult<()> {
+    let conn = model_guard(&state.db, control)?;
+    control.check()?;
+    conn.execute(
+        "INSERT INTO semantic_embeddings(asset_id,model_id,dimensions,vector,fingerprint,indexed_at)
+         VALUES(?1,?2,?3,?4,?5,?6)
+         ON CONFLICT(asset_id) DO UPDATE SET
+           model_id=excluded.model_id,dimensions=excluded.dimensions,vector=excluded.vector,
+           fingerprint=excluded.fingerprint,indexed_at=excluded.indexed_at",
+        params![id, MODEL_ID, DIMENSIONS as i64, blob, fingerprint, db::now()],
+    )
+    .map_err(|e| ModelError::Failed(e.to_string()))?;
+    // A completed SQLite write counts as indexed even if cancellation arrives
+    // during it. The next boundary stops work; no terminal is emitted early.
+    Ok(())
+}
+
 #[tauri::command]
 pub fn start_semantic_index(app: AppHandle) -> Result<u64, String> {
     let state = app.state::<AppState>();
     let (job_id, cancel) = jobs::register(state.inner())?;
     let cache = cache_dir(state.inner());
 
-    let rows: Vec<(i64, String, String, String)> = {
-        let conn = state.db.lock().map_err(|e| e.to_string())?;
-        conn.execute(
-            "INSERT INTO semantic_settings(key,value) VALUES('enabled','1')
-             ON CONFLICT(key) DO UPDATE SET value='1'",
-            [],
-        )
-        .map_err(|e| e.to_string())?;
-        let mut st=conn.prepare(
-            "SELECT a.id,a.path,a.name,a.fingerprint
-             FROM assets a
-             LEFT JOIN semantic_embeddings se ON se.asset_id=a.id
-             WHERE a.missing=0 AND (se.asset_id IS NULL OR se.model_id<>?1 OR se.fingerprint<>a.fingerprint)
-             ORDER BY a.id"
-        ).map_err(|e|e.to_string())?;
-        let mapped = st
-            .query_map(params![MODEL_ID], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
-            })
-            .map_err(|e| e.to_string())?;
-        mapped.filter_map(Result::ok).collect()
-    };
-    let total = rows.len();
     let app_for_thread = app.clone();
 
     std::thread::spawn(move || {
+        emit(
+            &app_for_thread,
+            SemanticProgress {
+                job_id,
+                processed: 0,
+                total: 0,
+                indexed: 0,
+                skipped: 0,
+                failed: 0,
+                current_name: "正在准备语义索引：读取待编码资产…".into(),
+                done: false,
+                cancelled: false,
+            },
+        );
+        let (rows, generation) =
+            match index_rows(app_for_thread.state::<AppState>().inner(), &cancel) {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    index_failure(&app_for_thread, job_id, 0, error);
+                    return;
+                }
+            };
+        let total = rows.len();
+
+        if total == 0 {
+            let state = app_for_thread.state::<AppState>();
+            jobs::finish(state.inner(), job_id);
+            emit(
+                &app_for_thread,
+                SemanticProgress {
+                    job_id,
+                    processed: 0,
+                    total: 0,
+                    indexed: 0,
+                    skipped: 0,
+                    failed: 0,
+                    current_name: String::new(),
+                    done: true,
+                    cancelled: cancel.load(Ordering::Relaxed),
+                },
+            );
+            return;
+        }
         emit(
             &app_for_thread,
             SemanticProgress {
@@ -476,21 +719,57 @@ pub fn start_semantic_index(app: AppHandle) -> Result<u64, String> {
                 cancelled: false,
             },
         );
-        let mut model = match image_model(cache) {
+        let report = |message: &str| {
+            emit(
+                &app_for_thread,
+                SemanticProgress {
+                    job_id,
+                    processed: 0,
+                    total,
+                    indexed: 0,
+                    skipped: 0,
+                    failed: 0,
+                    current_name: message.into(),
+                    done: false,
+                    cancelled: false,
+                },
+            )
+        };
+        let control = Control {
+            cancel: Some(&cancel),
+            report: &report,
+        };
+        let mut model = match image_model(cache, &control) {
             Ok(model) => {
                 let state = app_for_thread.state::<AppState>();
-                if let Ok(conn) = state.db.lock() {
-                    let _ = set_setting(&conn, "vision_ready", "1");
+                match model_guard(&state.db, &control) {
+                    Ok(mut conn) => {
+                        let _ = publish_readiness(&mut conn, "vision_ready", generation, true);
+                    }
+                    Err(ModelError::Cancelled) => {
+                        drop(model);
+                        index_failure(&app_for_thread, job_id, total, ModelError::Cancelled);
+                        return;
+                    }
+                    Err(ModelError::Failed(_)) => {}
                 }
                 model
             }
             Err(error) => {
                 let state = app_for_thread.state::<AppState>();
-                if let Ok(conn) = state.db.lock() {
-                    let _ = set_setting(&conn, "vision_ready", "0");
+                if !matches!(error, ModelError::Cancelled) {
+                    match model_guard(&state.db, &control) {
+                        Ok(mut conn) => {
+                            let _ = publish_readiness(&mut conn, "vision_ready", generation, false);
+                        }
+                        Err(ModelError::Cancelled) => {
+                            index_failure(&app_for_thread, job_id, total, ModelError::Cancelled);
+                            return;
+                        }
+                        Err(ModelError::Failed(_)) => {}
+                    }
                 }
                 index_failure(&app_for_thread, job_id, total, error);
-                jobs::finish(state.inner(), job_id);
                 return;
             }
         };
@@ -524,29 +803,38 @@ pub fn start_semantic_index(app: AppHandle) -> Result<u64, String> {
                 );
                 continue;
             }
+            emit(
+                &app_for_thread,
+                SemanticProgress {
+                    job_id,
+                    processed,
+                    total,
+                    indexed,
+                    skipped,
+                    failed,
+                    current_name: format!(
+                        "{} · 正在编码当前图片，取消将在本张处理结束后生效",
+                        name
+                    ),
+                    done: false,
+                    cancelled: false,
+                },
+            );
             match model.embed(vec![image_path], None) {
                 Ok(mut vectors) if !vectors.is_empty() => {
+                    if cancel.load(Ordering::Relaxed) {
+                        break;
+                    }
                     let vector = normalize(vectors.remove(0));
                     if vector.len() != DIMENSIONS {
                         failed += 1;
                     } else {
                         let blob = to_blob(&vector);
                         let state = app_for_thread.state::<AppState>();
-                        let result=state.db.lock().map_err(|e|e.to_string()).and_then(|conn|{
-                            conn.execute(
-                                "INSERT INTO semantic_embeddings(asset_id,model_id,dimensions,vector,fingerprint,indexed_at)
-                                 VALUES(?1,?2,?3,?4,?5,?6)
-                                 ON CONFLICT(asset_id) DO UPDATE SET
-                                   model_id=excluded.model_id,dimensions=excluded.dimensions,vector=excluded.vector,
-                                   fingerprint=excluded.fingerprint,indexed_at=excluded.indexed_at",
-                                params![id,MODEL_ID,DIMENSIONS as i64,blob,fingerprint,db::now()]
-                            ).map_err(|e|e.to_string())?;
-                            Ok(())
-                        });
-                        if result.is_ok() {
-                            indexed += 1
-                        } else {
-                            failed += 1
+                        match store_index_vector(state.inner(), id, &blob, &fingerprint, &control) {
+                            Ok(()) => indexed += 1,
+                            Err(ModelError::Cancelled) => break,
+                            Err(ModelError::Failed(_)) => failed += 1,
                         }
                     }
                 }
@@ -570,15 +858,17 @@ pub fn start_semantic_index(app: AppHandle) -> Result<u64, String> {
             );
         }
 
-        let cancelled = cancel.load(Ordering::Relaxed);
+        drop(model);
         let state = app_for_thread.state::<AppState>();
-        if let Ok(conn) = state.db.lock() {
+        if let Ok(conn) = model_guard(&state.db, &control) {
             let _ = conn.execute(
                 "DELETE FROM semantic_embeddings
                  WHERE asset_id IN (SELECT id FROM assets WHERE missing<>0) OR model_id<>?1",
                 params![MODEL_ID],
             );
         }
+        jobs::finish(state.inner(), job_id);
+        let cancelled = cancel.load(Ordering::Relaxed);
         emit(
             &app_for_thread,
             SemanticProgress {
@@ -593,7 +883,6 @@ pub fn start_semantic_index(app: AppHandle) -> Result<u64, String> {
                 cancelled,
             },
         );
-        jobs::finish(state.inner(), job_id);
     });
 
     Ok(job_id)
@@ -614,7 +903,7 @@ pub(crate) fn ranked(
     filter.query.clear();
     let (candidates, rows) = {
         let conn = state.db.lock().map_err(|e| e.to_string())?;
-        let candidates = search::filtered_summaries(&conn, &filter, 100_000)?;
+        let candidates = search::filtered_summaries(&conn, &filter, i64::MAX)?;
         let mut st=conn.prepare(
             "SELECT se.asset_id,se.vector FROM semantic_embeddings se
              JOIN assets a ON a.id=se.asset_id
@@ -668,27 +957,37 @@ pub async fn semantic_search_text(
     if query.is_empty() {
         return Ok(Vec::new());
     }
-    let indexed: i64 = {
+    let (indexed, generation): (i64, u64) = {
         let conn = state.db.lock().map_err(|e| e.to_string())?;
-        conn.query_row(
-            "SELECT COUNT(*) FROM semantic_embeddings WHERE model_id=?1",
-            params![MODEL_ID],
-            |r| r.get(0),
-        )
-        .unwrap_or(0)
+        let indexed = conn
+            .query_row(
+                "SELECT COUNT(*) FROM semantic_embeddings WHERE model_id=?1",
+                params![MODEL_ID],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        (indexed, cache_generation(&conn)?)
     };
     if indexed == 0 {
         return Err("请先在资料库管理中建立语义索引".into());
     }
     let cache = cache_dir(state.inner());
-    let vector = tauri::async_runtime::spawn_blocking(move || text_vector(cache, query))
+    let encoded = tauri::async_runtime::spawn_blocking(move || text_vector(cache, query))
         .await
-        .map_err(|e| e.to_string())??;
-    {
-        let conn = state.db.lock().map_err(|e| e.to_string())?;
-        set_setting(&conn, "text_ready", "1")?;
-    }
+        .map_err(|e| e.to_string())
+        .and_then(|result| result);
+    let vector = complete_text_encoding(state.inner(), generation, encoded)?;
     ranked(state.inner(), &vector, filter, limit, None)
+}
+
+fn complete_text_encoding(
+    state: &AppState,
+    generation: u64,
+    encoded: Result<Vec<f32>, String>,
+) -> Result<Vec<f32>, String> {
+    let mut conn = state.db.lock().map_err(|e| e.to_string())?;
+    publish_readiness(&mut conn, "text_ready", generation, encoded.is_ok())?;
+    encoded
 }
 
 #[tauri::command]
@@ -736,13 +1035,25 @@ pub fn clear_semantic_index(state: State<'_, AppState>) -> Result<bool, String> 
 #[tauri::command]
 pub fn delete_semantic_models(state: State<'_, AppState>) -> Result<bool, String> {
     let path = cache_dir(state.inner());
+    let operation = model_operation(&path).map_err(|e| e.to_string())?;
+    let _guard = model_guard(
+        &operation,
+        &Control {
+            cancel: None,
+            report: &|_| {},
+        },
+    )
+    .map_err(|e| e.to_string())?;
+    {
+        let mut conn = state.db.lock().map_err(|e| e.to_string())?;
+        // Commit invalidation before deleting files. If filesystem deletion
+        // fails, an already-running query still cannot reassert readiness.
+        invalidate_model_readiness(&mut conn)?;
+    }
     if path.exists() {
         fs::remove_dir_all(&path).map_err(|e| e.to_string())?
     }
     fs::create_dir_all(&path).map_err(|e| e.to_string())?;
-    let conn = state.db.lock().map_err(|e| e.to_string())?;
-    set_setting(&conn, "vision_ready", "0")?;
-    set_setting(&conn, "text_ready", "0")?;
     Ok(true)
 }
 
@@ -808,6 +1119,36 @@ mod tests {
     }
 
     #[test]
+    fn ranked_includes_a_fresh_match_beyond_one_hundred_thousand_assets() {
+        let state = indexed_state();
+        {
+            let mut conn = state.db.lock().unwrap();
+            let tx = conn.transaction().unwrap();
+            tx.execute("DELETE FROM semantic_embeddings", []).unwrap();
+            tx.execute("DELETE FROM assets", []).unwrap();
+            tx.execute_batch("WITH RECURSIVE ids(id) AS (SELECT 1 UNION ALL SELECT id+1 FROM ids WHERE id<100001) INSERT INTO assets(id,path,name,fingerprint,created_at,updated_at) SELECT id,'/synthetic/'||id||'.png','asset '||id,'fresh',1,1 FROM ids;").unwrap();
+            tx.execute(
+                "INSERT INTO semantic_embeddings VALUES(100001,?1,512,?2,'fresh',1)",
+                params![MODEL_ID, to_blob(&normalize(vec![1.0; DIMENSIONS]))],
+            )
+            .unwrap();
+            tx.commit().unwrap();
+        }
+        let hits = ranked(
+            &state,
+            &normalize(vec![1.0; DIMENSIONS]),
+            LibraryFilter::default(),
+            10,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            hits.iter().map(|hit| hit.asset.id).collect::<Vec<_>>(),
+            vec![100001]
+        );
+    }
+
+    #[test]
     fn similar_reference_requires_current_nonmissing_embedding() {
         let state = indexed_state();
         let conn = state.db.lock().unwrap();
@@ -859,5 +1200,395 @@ mod tests {
         let decoded = from_blob(&to_blob(&source));
         assert_eq!(decoded.len(), source.len());
         assert!((score(&source, &decoded) - 1.0).abs() < 0.0001);
+    }
+
+    fn model_test_root() -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "imagelore-model-operation-{}-{}",
+            std::process::id(),
+            STAGE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&path).unwrap();
+        path
+    }
+
+    fn small_spec() -> TrustedModelSpec {
+        static SUPPORT: &[SupportFile] = &[SupportFile {
+            path: "config.json",
+            max_bytes: 64,
+        }];
+        TrustedModelSpec {
+            name: "test",
+            repo: "unused",
+            revision: "fixed",
+            onnx_sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+            onnx_size: 3,
+            support: SUPPORT,
+        }
+    }
+
+    #[test]
+    fn trusted_cache_is_network_free_and_installs_only_complete_verified_files() {
+        let root = model_test_root();
+        let spec = small_spec();
+        let control = Control {
+            cancel: None,
+            report: &|_| {},
+        };
+        let target = install_trusted_with(&root, spec, &control, |name, path, _, _| {
+            fs::write(
+                path,
+                if name == "model.onnx" {
+                    b"abc".as_slice()
+                } else {
+                    b"{}".as_slice()
+                },
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let manifest = fs::read(target.join("trusted-manifest.json")).unwrap();
+        assert_eq!(
+            install_trusted_with(&root, spec, &control, |_, _, _, _| panic!(
+                "valid private cache must not contact a downloader"
+            ))
+            .unwrap(),
+            target
+        );
+        assert_eq!(
+            fs::read(target.join("trusted-manifest.json")).unwrap(),
+            manifest
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_or_cancelled_download_keeps_old_cache_and_other_staging_files() {
+        for mode in ["cancel", "hash", "json", "network"] {
+            let root = model_test_root();
+            let spec = small_spec();
+            let target = trusted_dir(&root, spec);
+            fs::create_dir_all(&target).unwrap();
+            fs::write(target.join("model.onnx"), b"old").unwrap();
+            fs::write(target.join("config.json"), b"{}").unwrap();
+            let other = root.join(".trusted-other-owner");
+            fs::create_dir(&other).unwrap();
+            fs::write(other.join("keep"), b"keep").unwrap();
+            let flag = AtomicBool::new(false);
+            let result = install_trusted_with(
+                &root,
+                spec,
+                &Control {
+                    cancel: Some(&flag),
+                    report: &|_| {},
+                },
+                |name, path, _, _| {
+                    if mode == "network" {
+                        return Err(ModelError::Failed("HTTP 503".into()));
+                    }
+                    fs::write(
+                        path,
+                        if name == "model.onnx" {
+                            if mode == "hash" {
+                                b"abd".as_slice()
+                            } else {
+                                b"abc".as_slice()
+                            }
+                        } else if mode == "json" {
+                            b"not-json".as_slice()
+                        } else {
+                            b"{}".as_slice()
+                        },
+                    )?;
+                    if mode == "cancel" {
+                        flag.store(true, Ordering::Relaxed);
+                    }
+                    Ok(())
+                },
+            );
+            if mode == "cancel" {
+                assert!(matches!(result, Err(ModelError::Cancelled)));
+            } else {
+                assert!(matches!(result, Err(ModelError::Failed(_))));
+            }
+            assert_eq!(fs::read(target.join("model.onnx")).unwrap(), b"old");
+            assert_eq!(fs::read(other.join("keep")).unwrap(), b"keep");
+            assert_eq!(
+                fs::read_dir(&root).unwrap().count(),
+                2,
+                "only the old cache and another owner's stage may remain"
+            );
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn cancellation_during_cached_hash_is_not_reinterpreted_as_a_download_request() {
+        let root = model_test_root();
+        let spec = small_spec();
+        let target = trusted_dir(&root, spec);
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("model.onnx"), b"abc").unwrap();
+        fs::write(target.join("config.json"), b"{}").unwrap();
+        let flag = AtomicBool::new(false);
+        let report = |_: &str| flag.store(true, Ordering::Relaxed);
+        let result = install_trusted_with(
+            &root,
+            spec,
+            &Control {
+                cancel: Some(&flag),
+                report: &report,
+            },
+            |_, _, _, _| panic!("cancelled validation must not start downloading"),
+        );
+        assert!(matches!(result, Err(ModelError::Cancelled)));
+        assert_eq!(fs::read(target.join("model.onnx")).unwrap(), b"abc");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn an_external_cache_mutation_is_revalidated_and_never_loaded_when_download_is_offline() {
+        let root = model_test_root();
+        let spec = small_spec();
+        let target = trusted_dir(&root, spec);
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("model.onnx"), b"abc").unwrap();
+        fs::write(target.join("config.json"), b"{}").unwrap();
+        let control = Control {
+            cancel: None,
+            report: &|_| {},
+        };
+        assert_eq!(
+            install_trusted_with(&root, spec, &control, |_, _, _, _| panic!(
+                "verified cache is offline-ready"
+            ))
+            .unwrap(),
+            target
+        );
+        fs::write(target.join("model.onnx"), b"abd").unwrap();
+        let attempted = AtomicBool::new(false);
+        let result = install_trusted_with(&root, spec, &control, |_, _, _, _| {
+            attempted.store(true, Ordering::Relaxed);
+            Err(ModelError::Failed("offline".into()))
+        });
+        assert!(matches!(result, Err(ModelError::Failed(_))));
+        assert!(attempted.load(Ordering::Relaxed));
+        assert_eq!(fs::read(target.join("model.onnx")).unwrap(), b"abd");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn model_locks_are_scoped_by_cache_and_waiting_cancellation_does_not_take_ownership() {
+        let root = model_test_root();
+        let first = model_operation(&root).unwrap();
+        assert!(Arc::ptr_eq(&first, &model_operation(&root).unwrap()));
+        assert!(!Arc::ptr_eq(
+            &first,
+            &model_operation(&root.join("other")).unwrap()
+        ));
+        let guard = first.lock().unwrap();
+        let flag = Arc::new(AtomicBool::new(false));
+        let child_flag = flag.clone();
+        let worker_lock = first.clone();
+        let worker = std::thread::spawn(move || {
+            matches!(
+                model_guard(
+                    &worker_lock,
+                    &Control {
+                        cancel: Some(&child_flag),
+                        report: &|_| {}
+                    }
+                ),
+                Err(ModelError::Cancelled)
+            )
+        });
+        std::thread::sleep(Duration::from_millis(60));
+        flag.store(true, Ordering::Relaxed);
+        assert!(worker.join().unwrap());
+        drop(guard);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn text_encoding_failure_clears_previous_readiness_and_preserves_the_error() {
+        let state = indexed_state();
+        set_setting(&state.db.lock().unwrap(), "text_ready", "1").unwrap();
+        assert_eq!(
+            complete_text_encoding(&state, 0, Err("trusted model digest rejected".into()))
+                .unwrap_err(),
+            "trusted model digest rejected"
+        );
+        assert_eq!(setting(&state.db.lock().unwrap(), "text_ready"), "0");
+        assert_eq!(
+            complete_text_encoding(&state, 0, Ok(vec![1.0])).unwrap(),
+            vec![1.0]
+        );
+        assert_eq!(setting(&state.db.lock().unwrap(), "text_ready"), "1");
+    }
+
+    #[test]
+    fn stale_text_success_after_deletion_cannot_reassert_readiness() {
+        let state = indexed_state();
+        {
+            let mut conn = state.db.lock().unwrap();
+            set_setting(&conn, "text_ready", "1").unwrap();
+            invalidate_model_readiness(&mut conn).unwrap();
+        }
+        assert_eq!(
+            complete_text_encoding(&state, 0, Ok(vec![1.0])).unwrap(),
+            vec![1.0]
+        );
+        assert_eq!(setting(&state.db.lock().unwrap(), "text_ready"), "0");
+    }
+
+    #[test]
+    fn stale_text_failure_cannot_clear_a_new_generation_success() {
+        let state = indexed_state();
+        {
+            let mut conn = state.db.lock().unwrap();
+            invalidate_model_readiness(&mut conn).unwrap();
+        }
+        complete_text_encoding(&state, 1, Ok(vec![1.0])).unwrap();
+        assert_eq!(
+            complete_text_encoding(&state, 0, Err("old model failed".into())).unwrap_err(),
+            "old model failed"
+        );
+        assert_eq!(setting(&state.db.lock().unwrap(), "text_ready"), "1");
+    }
+
+    #[test]
+    fn current_text_generation_success_and_failure_publish_their_actual_status() {
+        let state = indexed_state();
+        {
+            let mut conn = state.db.lock().unwrap();
+            invalidate_model_readiness(&mut conn).unwrap();
+        }
+        complete_text_encoding(&state, 1, Ok(vec![1.0])).unwrap();
+        assert_eq!(setting(&state.db.lock().unwrap(), "text_ready"), "1");
+        assert_eq!(
+            complete_text_encoding(&state, 1, Err("current model failed".into())).unwrap_err(),
+            "current model failed"
+        );
+        assert_eq!(setting(&state.db.lock().unwrap(), "text_ready"), "0");
+    }
+
+    #[test]
+    fn readiness_invalidation_rolls_back_all_settings_on_an_interrupted_write() {
+        let state = indexed_state();
+        let mut conn = state.db.lock().unwrap();
+        set_setting(&conn, "vision_ready", "1").unwrap();
+        set_setting(&conn, "text_ready", "1").unwrap();
+        set_setting(&conn, "cache_generation", "0").unwrap();
+        conn.execute_batch("CREATE TRIGGER fail_generation BEFORE UPDATE ON semantic_settings WHEN NEW.key='cache_generation' BEGIN SELECT RAISE(ABORT,'synthetic generation write failure'); END;").unwrap();
+        assert!(invalidate_model_readiness(&mut conn).is_err());
+        assert_eq!(setting(&conn, "vision_ready"), "1");
+        assert_eq!(setting(&conn, "text_ready"), "1");
+        assert_eq!(cache_generation(&conn).unwrap(), 0);
+    }
+
+    #[test]
+    fn invalid_or_overflowing_generation_preserves_previous_settings() {
+        for generation in ["invalid", "18446744073709551615"] {
+            let state = indexed_state();
+            let mut conn = state.db.lock().unwrap();
+            set_setting(&conn, "vision_ready", "1").unwrap();
+            set_setting(&conn, "text_ready", "1").unwrap();
+            set_setting(&conn, "cache_generation", generation).unwrap();
+            assert!(invalidate_model_readiness(&mut conn).is_err());
+            assert_eq!(setting(&conn, "vision_ready"), "1");
+            assert_eq!(setting(&conn, "text_ready"), "1");
+            assert_eq!(setting(&conn, "cache_generation"), generation);
+        }
+    }
+
+    fn assert_db_wait_can_cancel(
+        state: Arc<AppState>,
+        operation: impl FnOnce(&AppState, &AtomicBool) -> ModelResult<()> + Send + 'static,
+    ) {
+        let guard = state.db.lock().unwrap();
+        let flag = Arc::new(AtomicBool::new(false));
+        let worker_state = state.clone();
+        let worker_flag = flag.clone();
+        let (send, receive) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let result = operation(&worker_state, &worker_flag);
+            send.send(matches!(result, Err(ModelError::Cancelled)))
+                .unwrap();
+        });
+        std::thread::sleep(Duration::from_millis(60));
+        flag.store(true, Ordering::Relaxed);
+        assert!(receive.recv_timeout(Duration::from_millis(700)).unwrap());
+        // Keep the DB locked until the cancelled worker has returned. A
+        // blocking DB lock or a post-cancel write fails this assertion.
+        drop(guard);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn index_preparation_db_wait_cancels_without_enabling_or_mutating_the_library() {
+        let state = Arc::new(indexed_state());
+        set_setting(&state.db.lock().unwrap(), "enabled", "0").unwrap();
+        assert_db_wait_can_cancel(state.clone(), |state, cancel| {
+            index_rows(state, cancel).map(|_| ())
+        });
+        assert_eq!(setting(&state.db.lock().unwrap(), "enabled"), "0");
+    }
+
+    #[test]
+    fn index_write_db_wait_cancels_without_overwriting_a_previous_embedding() {
+        let state = Arc::new(indexed_state());
+        assert_db_wait_can_cancel(state.clone(), |state, cancel| {
+            store_index_vector(
+                state,
+                1,
+                &to_blob(&normalize(vec![2.0; DIMENSIONS])),
+                "cancelled-new-fingerprint",
+                &Control {
+                    cancel: Some(cancel),
+                    report: &|_| {},
+                },
+            )
+        });
+        let conn = state.db.lock().unwrap();
+        let fingerprint: String = conn
+            .query_row(
+                "SELECT fingerprint FROM semantic_embeddings WHERE asset_id=1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(fingerprint, "fresh");
+    }
+
+    #[test]
+    fn index_preparation_reports_a_malformed_row_instead_of_silently_skipping_it() {
+        let state = indexed_state();
+        state
+            .db
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE assets SET path=x'ff',fingerprint='changed' WHERE id=1",
+                [],
+            )
+            .unwrap();
+        assert!(matches!(
+            index_rows(&state, &AtomicBool::new(false)),
+            Err(ModelError::Failed(_))
+        ));
+    }
+
+    #[test]
+    fn a_stage_cleanup_failure_preserves_the_cancelled_result_and_other_files() {
+        let root = model_test_root();
+        let invalid_stage = root.join("already-removed-stage");
+        let other = root.join("other-owner-file");
+        fs::write(&other, b"keep").unwrap();
+        assert!(matches!(
+            discard_stage(&invalid_stage, ModelError::Cancelled),
+            ModelError::Cancelled
+        ));
+        assert_eq!(fs::read(&other).unwrap(), b"keep");
+        fs::remove_dir_all(root).unwrap();
     }
 }

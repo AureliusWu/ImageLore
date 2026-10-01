@@ -26,6 +26,7 @@ export function useSemanticJob(
   const bufferedRef = useRef<SemanticProgress[]>([]);
   const startWaitersRef = useRef<Array<() => void>>([]);
   const doneWaitersRef = useRef<Array<() => void>>([]);
+  const listenerReadyRef = useRef<Promise<string | null> | null>(null);
   const onDoneRef = useRef(onDone);
   const statusRef = useRef(setStatus);
 
@@ -41,7 +42,7 @@ export function useSemanticJob(
       ...prev,
       ...next,
       total: next.total || prev.total,
-      processed: next.done ? prev.processed : next.processed,
+      processed: next.processed,
     }));
     if (next.done) {
       jobRef.current = 0;
@@ -51,7 +52,11 @@ export function useSemanticJob(
         next.cancelled
           ? "语义索引已取消"
           : next.failed
-            ? "语义索引完成：新增 " + next.indexed + "，失败 " + next.failed
+            ? "语义索引完成：新增 " +
+              next.indexed +
+              "，失败 " +
+              next.failed +
+              (next.current_name ? " · " + next.current_name : "")
             : "语义索引完成：新增 " + next.indexed,
       );
       void onDoneRef.current();
@@ -69,7 +74,7 @@ export function useSemanticJob(
     if (!isTauri) return;
     let disposed = false;
     let unlisten: (() => void) | undefined;
-    listen<SemanticProgress>("imagelore://semantic-progress", (event) => {
+    const ready = listen<SemanticProgress>("imagelore://semantic-progress", (event) => {
       const next = event.payload;
       if (jobRef.current === 0) {
         if (startingRef.current) bufferedRef.current.push(next);
@@ -78,12 +83,22 @@ export function useSemanticJob(
       if (next.job_id === jobRef.current) applyProgress(next);
     })
       .then((fn) => {
-        if (disposed) fn();
-        else unlisten = fn;
+        if (disposed) {
+          fn();
+          return "语义索引监听已关闭";
+        }
+        unlisten = fn;
+        return null;
       })
-      .catch((e) => statusRef.current("语义索引监听启动失败：" + String(e)));
+      .catch((e) => {
+        const reason = String(e);
+        statusRef.current("语义索引监听启动失败：" + reason);
+        return reason;
+      });
+    listenerReadyRef.current = ready;
     return () => {
       disposed = true;
+      if (listenerReadyRef.current === ready) listenerReadyRef.current = null;
       unlisten?.();
     };
   }, [applyProgress]);
@@ -99,6 +114,13 @@ export function useSemanticJob(
     setProgress(empty);
     statusRef.current("正在准备本地语义模型…");
     try {
+      if (isTauri) {
+        const ready = listenerReadyRef.current;
+        if (!ready) throw new Error("语义索引监听尚未启动");
+        const failure = await ready;
+        if (failure) throw new Error("语义索引监听启动失败：" + failure);
+        if (listenerReadyRef.current !== ready) throw new Error("语义索引监听已关闭");
+      }
       const id = await api.startSemanticIndex();
       jobRef.current = id;
       setProgress((p) => ({ ...p, job_id: id }));
@@ -126,7 +148,7 @@ export function useSemanticJob(
       await new Promise<void>((resolve) => startWaitersRef.current.push(resolve));
     const id = jobRef.current;
     if (!id) return;
-    statusRef.current("正在取消语义索引…");
+    statusRef.current("正在取消语义索引…模型初始化或当前图片编码结束后将完成取消");
     let resolveDone: () => void = () => {};
     const done = new Promise<void>((resolve) => {
       resolveDone = resolve;

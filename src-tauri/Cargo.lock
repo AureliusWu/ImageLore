@@ -2066,6 +2066,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
+ "tokio",
  "walkdir",
 ]
 
