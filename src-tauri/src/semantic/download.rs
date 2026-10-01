@@ -248,6 +248,9 @@ mod tests {
                     Err(error) => panic!("loopback accept failed: {error}"),
                 }
             };
+            // Do not depend on a platform inheriting (or clearing) the
+            // listener's nonblocking mode for an accepted socket.
+            socket.set_nonblocking(false).unwrap();
             socket
                 .set_read_timeout(Some(Duration::from_secs(2)))
                 .unwrap();
@@ -390,6 +393,15 @@ mod tests {
             b"".as_slice(),
             b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\n".as_slice(),
         ] {
+            // Client construction can initialize TLS/certificate state on a
+            // cold Windows runner. Finish it before starting the stub's
+            // bounded request wait; cancellation timing starts below.
+            let client = reqwest::Client::builder()
+                .no_proxy()
+                .read_timeout(Duration::from_secs(30))
+                .timeout(Duration::from_secs(900))
+                .build()
+                .unwrap();
             let (url, worker, received) = stub(response, true);
             let path = destination();
             let flag = Arc::new(AtomicBool::new(false));
@@ -399,12 +411,6 @@ mod tests {
                 thread::sleep(Duration::from_millis(30));
                 setter.store(true, Ordering::Relaxed);
             });
-            let client = reqwest::Client::builder()
-                .no_proxy()
-                .read_timeout(Duration::from_secs(30))
-                .timeout(Duration::from_secs(900))
-                .build()
-                .unwrap();
             let start = Instant::now();
             let result = tauri::async_runtime::block_on(file(
                 &client,
