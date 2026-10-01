@@ -54,6 +54,17 @@ pub fn cached_preview_path(
     } else {
         max_edge.clamp(160, 4800)
     };
+    // A fit request that keeps every source pixel shares the full preview URL.
+    // Read the source header rather than potentially stale library dimensions;
+    // if it cannot be read, retain the existing requested-cache behavior.
+    let max_edge = if !thumbnail
+        && max_edge > 0
+        && image::image_dimensions(path).is_ok_and(|(w, h)| w <= max_edge && h <= max_edge)
+    {
+        0
+    } else {
+        max_edge
+    };
     let output = cache_path(cache_root, cache_key, max_edge, thumbnail);
     if output.exists() {
         return Ok(output.to_string_lossy().to_string());
@@ -211,6 +222,127 @@ mod tests {
         let second = cached_preview_path(&source, &root, "fingerprint", 1, true).unwrap();
         assert_eq!(first, second);
 
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn small_fit_and_full_share_cache_without_replacing_original_or_legacy_cache() {
+        let root = temp_root("small-fit-full");
+        let source = root.join("source.png");
+        DynamicImage::new_rgb8(128, 96).save(&source).unwrap();
+        let original = fs::read(&source).unwrap();
+        let legacy = cache_path(&root, "small", 2200, false);
+        fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        fs::write(&legacy, b"previous derived cache").unwrap();
+
+        let fit = cached_preview_path(&source, &root, "small", 2200, false).unwrap();
+        let full = cached_preview_path(&source, &root, "small", 0, false).unwrap();
+
+        assert_eq!(fit, full);
+        assert!(Path::new(&fit).ends_with("small-full.webp"));
+        let rendered = image::open(&fit).unwrap();
+        assert_eq!((rendered.width(), rendered.height()), (128, 96));
+        assert_eq!(fs::read(&source).unwrap(), original);
+        assert_eq!(fs::read(&legacy).unwrap(), b"previous derived cache");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn preview_choice_uses_current_source_dimensions_after_replacement() {
+        let root = temp_root("current-dimensions");
+        let source = root.join("source.png");
+        DynamicImage::new_rgb8(400, 200).save(&source).unwrap();
+        // Source dimensions, rather than database dimensions from an earlier
+        // import, must decide whether the requested edge would resize pixels.
+        let small = cached_preview_path(&source, &root, "small-stamp", 2200, false).unwrap();
+        assert!(Path::new(&small).ends_with("small-stamp-full.webp"));
+
+        DynamicImage::new_rgb8(2400, 1200).save(&source).unwrap();
+        let original = fs::read(&source).unwrap();
+        // The command's cache key includes the current file stamp/size.
+        let fit = cached_preview_path(&source, &root, "large-stamp", 2200, false).unwrap();
+        let full = cached_preview_path(&source, &root, "large-stamp", 0, false).unwrap();
+        assert_ne!(fit, full);
+        assert!(Path::new(&fit).ends_with("large-stamp-2200.webp"));
+        let rendered = image::open(&fit).unwrap();
+        assert_eq!((rendered.width(), rendered.height()), (2200, 1100));
+        let rendered = image::open(&full).unwrap();
+        assert_eq!((rendered.width(), rendered.height()), (2400, 1200));
+        assert_eq!(fs::read(&source).unwrap(), original);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn small_thumbnail_keeps_its_requested_edge_and_separate_cache_directory() {
+        let root = temp_root("thumbnail-isolation");
+        let source = root.join("source.png");
+        DynamicImage::new_rgb8(64, 80).save(&source).unwrap();
+        let thumbnail = cached_preview_path(&source, &root, "small", 420, true).unwrap();
+        let fit = cached_preview_path(&source, &root, "small", 2200, false).unwrap();
+        let full = cached_preview_path(&source, &root, "small", 0, false).unwrap();
+        assert!(Path::new(&thumbnail).ends_with(Path::new("thumbnails").join("small-420.webp")));
+        assert_ne!(thumbnail, full);
+        assert_eq!(fit, full);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn unreadable_header_keeps_requested_cache_and_failure_preserves_source() {
+        let root = temp_root("header-fallback");
+        let source = root.join("source.png");
+        fs::write(&source, b"not a supported image").unwrap();
+        let requested = cache_path(&root, "cached", 2200, false);
+        fs::create_dir_all(requested.parent().unwrap()).unwrap();
+        fs::write(&requested, b"previous derived cache").unwrap();
+
+        let returned = cached_preview_path(&source, &root, "cached", 2200, false).unwrap();
+        assert_eq!(Path::new(&returned), requested);
+        assert_eq!(fs::read(&requested).unwrap(), b"previous derived cache");
+        assert!(cached_preview_path(&source, &root, "uncached", 2200, false).is_err());
+        assert_eq!(fs::read(&source).unwrap(), b"not a supported image");
+        assert!(!cache_path(&root, "uncached", 2200, false).exists());
+        assert!(!cache_path(&root, "uncached", 0, false).exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn concurrent_small_fit_and_full_requests_publish_one_complete_cache() {
+        let root = temp_root("concurrent-fit-full");
+        let source = root.join("source.png");
+        DynamicImage::new_rgb8(128, 96).save(&source).unwrap();
+        let original = fs::read(&source).unwrap();
+        let workers = (0..8)
+            .map(|index| {
+                let source = source.clone();
+                let root = root.clone();
+                std::thread::spawn(move || {
+                    cached_preview_path(
+                        &source,
+                        &root,
+                        "concurrent",
+                        if index % 2 == 0 { 2200 } else { 0 },
+                        false,
+                    )
+                    .unwrap()
+                })
+            })
+            .collect::<Vec<_>>();
+        let paths = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect::<Vec<_>>();
+        assert!(paths.iter().all(|path| path == &paths[0]));
+        let rendered = image::open(&paths[0]).unwrap();
+        assert_eq!((rendered.width(), rendered.height()), (128, 96));
+        let files = fs::read_dir(root.join("previews"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            files,
+            vec![std::ffi::OsString::from("concurrent-full.webp")]
+        );
+        assert_eq!(fs::read(&source).unwrap(), original);
         let _ = fs::remove_dir_all(root);
     }
 
