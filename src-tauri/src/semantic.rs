@@ -10,9 +10,9 @@ use fastembed::{
 };
 mod download;
 use download::{Control, ModelError, ModelResult};
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, types::ValueRef, OptionalExtension};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
     sync::{
@@ -26,6 +26,9 @@ use walkdir::WalkDir;
 
 pub const MODEL_ID: &str = "clip-vit-b32-qdrant-v1";
 const DIMENSIONS: usize = 512;
+// Allow float32 rounding while rejecting zero/nonfinite/unnormalized data.
+// Actual model output is checked independently during native acceptance.
+const VECTOR_NORM_TOLERANCE: f64 = 0.001;
 const TRUST_MANIFEST_VERSION: u32 = 1;
 static MODEL_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>> = OnceLock::new();
 static STAGE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -232,14 +235,49 @@ fn invalidate_model_readiness(conn: &mut rusqlite::Connection) -> Result<(), Str
     tx.commit().map_err(|e| e.to_string())
 }
 
-fn normalize(mut vector: Vec<f32>) -> Vec<f32> {
-    let norm = vector.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm > 0.0 {
-        for value in &mut vector {
-            *value /= norm
-        }
+fn validate_vector(vector: &[f32]) -> Result<(), String> {
+    if vector.len() != DIMENSIONS {
+        return Err("语义向量必须包含 512 个数值，请重新建立语义索引".into());
     }
-    vector
+    if vector.iter().any(|value| !value.is_finite()) {
+        return Err("语义向量包含非有限数值，请重新建立语义索引".into());
+    }
+    let norm = vector
+        .iter()
+        .map(|&value| {
+            let value = f64::from(value);
+            value * value
+        })
+        .sum::<f64>()
+        .sqrt();
+    if norm == 0.0 || !norm.is_finite() || (norm - 1.0).abs() >= VECTOR_NORM_TOLERANCE {
+        return Err("语义向量未正确归一化，请重新建立语义索引".into());
+    }
+    Ok(())
+}
+
+fn normalize(mut vector: Vec<f32>) -> Result<Vec<f32>, String> {
+    if vector.len() != DIMENSIONS || vector.iter().any(|value| !value.is_finite()) {
+        return Err("语义模型返回了无效向量".into());
+    }
+    // Cast before multiplication: large finite float32 outputs must not
+    // overflow a float32 sum and silently normalize into an all-zero vector.
+    let norm = vector
+        .iter()
+        .map(|&value| {
+            let value = f64::from(value);
+            value * value
+        })
+        .sum::<f64>()
+        .sqrt();
+    if norm == 0.0 || !norm.is_finite() {
+        return Err("语义模型返回了零向量或无效范数".into());
+    }
+    for value in &mut vector {
+        *value = (f64::from(*value) / norm) as f32;
+    }
+    validate_vector(&vector)?;
+    Ok(vector)
 }
 
 fn to_blob(vector: &[f32]) -> Vec<u8> {
@@ -250,12 +288,16 @@ fn to_blob(vector: &[f32]) -> Vec<u8> {
     out
 }
 
-fn from_blob(blob: &[u8]) -> Vec<f32> {
-    blob.as_chunks::<4>()
-        .0
-        .iter()
-        .map(|chunk| f32::from_le_bytes(*chunk))
-        .collect()
+fn from_blob(blob: &[u8]) -> Result<[f32; DIMENSIONS], String> {
+    if blob.len() != DIMENSIONS * 4 {
+        return Err("语义索引向量必须为 2048 字节，请重新建立语义索引".into());
+    }
+    let mut vector = [0.0; DIMENSIONS];
+    for (value, chunk) in vector.iter_mut().zip(blob.as_chunks::<4>().0) {
+        *value = f32::from_le_bytes(*chunk);
+    }
+    validate_vector(&vector)?;
+    Ok(vector)
 }
 
 fn score(a: &[f32], b: &[f32]) -> f32 {
@@ -530,7 +572,7 @@ fn text_vector_controlled(
     let vector = rows
         .pop()
         .ok_or_else(|| ModelError::Failed("语义模型没有返回查询向量".into()))?;
-    Ok(normalize(vector))
+    normalize(vector).map_err(ModelError::Failed)
 }
 
 fn emit(app: &AppHandle, progress: SemanticProgress) {
@@ -567,27 +609,22 @@ pub fn semantic_status(state: State<'_, AppState>) -> Result<SemanticStatus, Str
         .query_row("SELECT COUNT(*) FROM assets WHERE missing=0", [], |r| {
             r.get(0)
         })
-        .unwrap_or(0);
+        .map_err(|e| e.to_string())?;
     let indexed: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM semantic_embeddings WHERE model_id=?1",
             params![MODEL_ID],
             |r| r.get(0),
         )
-        .unwrap_or(0);
-    let stale:i64=conn.query_row(
-        "SELECT COUNT(*) FROM assets a
-         LEFT JOIN semantic_embeddings se ON se.asset_id=a.id
-         WHERE a.missing=0 AND (se.asset_id IS NULL OR se.model_id<>?1 OR se.fingerprint<>a.fingerprint)",
-        params![MODEL_ID],|r|r.get(0)
-    ).unwrap_or(total);
+        .map_err(|e| e.to_string())?;
+    let stale = stale_count(&conn)?;
     let index_bytes: i64 = conn
         .query_row(
             "SELECT COALESCE(SUM(LENGTH(vector)),0) FROM semantic_embeddings WHERE model_id=?1",
             params![MODEL_ID],
             |r| r.get(0),
         )
-        .unwrap_or(0);
+        .map_err(|e| e.to_string())?;
     drop(conn);
     let model_bytes = dir_size(&cache_dir(state.inner()));
     Ok(SemanticStatus {
@@ -606,6 +643,43 @@ pub fn semantic_status(state: State<'_, AppState>) -> Result<SemanticStatus, Str
 
 type IndexRow = (i64, String, String, String);
 
+fn current_embedding(
+    row: &rusqlite::Row<'_>,
+    fingerprint: &str,
+    first_column: usize,
+) -> rusqlite::Result<bool> {
+    if fingerprint.is_empty()
+        || !matches!(row.get_ref(first_column)?,ValueRef::Text(value) if value==MODEL_ID.as_bytes())
+        || !matches!(row.get_ref(first_column+1)?,ValueRef::Integer(value) if value==DIMENSIONS as i64)
+        || !matches!(row.get_ref(first_column+3)?,ValueRef::Text(value) if value==fingerprint.as_bytes())
+    {
+        return Ok(false);
+    }
+    Ok(matches!(row.get_ref(first_column+2)?,ValueRef::Blob(blob) if from_blob(blob).is_ok()))
+}
+
+fn stale_count(conn: &rusqlite::Connection) -> Result<i64, String> {
+    // Correct freshness requires reading every present vector, including
+    // finite/unit norm checks. Borrow each row's blob; do not copy the whole
+    // index or collect an unbounded list of invalid IDs.
+    let mut statement = conn
+        .prepare(
+            "SELECT a.fingerprint,se.model_id,se.dimensions,se.vector,se.fingerprint
+         FROM assets a LEFT JOIN semantic_embeddings se ON se.asset_id=a.id
+         WHERE a.missing=0",
+        )
+        .map_err(|e| e.to_string())?;
+    let mut rows = statement.query([]).map_err(|e| e.to_string())?;
+    let mut stale = 0;
+    while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+        let fingerprint: String = row.get(0).map_err(|e| e.to_string())?;
+        if !current_embedding(row, &fingerprint, 1).map_err(|e| e.to_string())? {
+            stale += 1;
+        }
+    }
+    Ok(stale)
+}
+
 fn index_rows(state: &AppState, cancel: &AtomicBool) -> ModelResult<(Vec<IndexRow>, u64)> {
     let control = Control {
         cancel: Some(cancel),
@@ -615,16 +689,31 @@ fn index_rows(state: &AppState, cancel: &AtomicBool) -> ModelResult<(Vec<IndexRo
     let generation = cache_generation(&conn).map_err(ModelError::Failed)?;
     conn.execute("INSERT INTO semantic_settings(key,value) VALUES('enabled','1') ON CONFLICT(key) DO UPDATE SET value='1'",[]).map_err(|e|ModelError::Failed(e.to_string()))?;
     control.check()?;
-    let mut statement=conn.prepare("SELECT a.id,a.path,a.name,a.fingerprint FROM assets a LEFT JOIN semantic_embeddings se ON se.asset_id=a.id WHERE a.missing=0 AND (se.asset_id IS NULL OR se.model_id<>?1 OR se.fingerprint<>a.fingerprint) ORDER BY a.id").map_err(|e|ModelError::Failed(e.to_string()))?;
-    let mapped = statement
-        .query_map(params![MODEL_ID], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
-        })
+    let mut statement=conn.prepare(
+        "SELECT a.id,a.path,a.name,a.fingerprint,se.model_id,se.dimensions,se.vector,se.fingerprint
+         FROM assets a LEFT JOIN semantic_embeddings se ON se.asset_id=a.id
+         WHERE a.missing=0 ORDER BY a.id"
+    ).map_err(|e|ModelError::Failed(e.to_string()))?;
+    let mut mapped = statement
+        .query([])
         .map_err(|e| ModelError::Failed(e.to_string()))?;
     let mut rows = Vec::new();
-    for row in mapped {
+    while let Some(row) = mapped
+        .next()
+        .map_err(|e| ModelError::Failed(e.to_string()))?
+    {
         control.check()?;
-        rows.push(row.map_err(|e| ModelError::Failed(e.to_string()))?);
+        let fingerprint: String = row.get(3).map_err(|e| ModelError::Failed(e.to_string()))?;
+        if !current_embedding(row, &fingerprint, 4)
+            .map_err(|e| ModelError::Failed(e.to_string()))?
+        {
+            rows.push((
+                row.get(0).map_err(|e| ModelError::Failed(e.to_string()))?,
+                row.get(1).map_err(|e| ModelError::Failed(e.to_string()))?,
+                row.get(2).map_err(|e| ModelError::Failed(e.to_string()))?,
+                fingerprint,
+            ));
+        }
     }
     control.check()?;
     Ok((rows, generation))
@@ -637,6 +726,11 @@ fn store_index_vector(
     fingerprint: &str,
     control: &Control<'_>,
 ) -> ModelResult<()> {
+    control.check()?;
+    from_blob(blob).map_err(ModelError::Failed)?;
+    if fingerprint.is_empty() {
+        return Err(ModelError::Failed("语义索引缺少当前图片指纹".into()));
+    }
     let conn = model_guard(&state.db, control)?;
     control.check()?;
     conn.execute(
@@ -825,10 +919,7 @@ pub fn start_semantic_index(app: AppHandle) -> Result<u64, String> {
                     if cancel.load(Ordering::Relaxed) {
                         break;
                     }
-                    let vector = normalize(vectors.remove(0));
-                    if vector.len() != DIMENSIONS {
-                        failed += 1;
-                    } else {
+                    if let Ok(vector) = normalize(vectors.remove(0)) {
                         let blob = to_blob(&vector);
                         let state = app_for_thread.state::<AppState>();
                         match store_index_vector(state.inner(), id, &blob, &fingerprint, &control) {
@@ -836,6 +927,8 @@ pub fn start_semantic_index(app: AppHandle) -> Result<u64, String> {
                             Err(ModelError::Cancelled) => break,
                             Err(ModelError::Failed(_)) => failed += 1,
                         }
+                    } else {
+                        failed += 1;
                     }
                 }
                 Ok(_) => failed += 1,
@@ -900,43 +993,53 @@ pub(crate) fn ranked(
     limit: i64,
     exclude: Option<i64>,
 ) -> Result<Vec<SemanticHit>, String> {
+    validate_vector(query)?;
     filter.query.clear();
-    let (candidates, rows) = {
+    let mut hits = {
         let conn = state.db.lock().map_err(|e| e.to_string())?;
         let candidates = search::filtered_summaries(&conn, &filter, i64::MAX)?;
+        let assets: HashMap<i64, _> = candidates
+            .into_iter()
+            .map(|asset| (asset.id, asset))
+            .collect();
         let mut st=conn.prepare(
-            "SELECT se.asset_id,se.vector FROM semantic_embeddings se
+            "SELECT se.asset_id,se.vector,se.dimensions FROM semantic_embeddings se
              JOIN assets a ON a.id=se.asset_id
-             WHERE se.model_id=?1 AND se.dimensions=?2 AND se.fingerprint=a.fingerprint AND a.missing=0"
+             WHERE se.model_id=?1 AND se.fingerprint=a.fingerprint AND a.fingerprint<>'' AND a.missing=0"
         ).map_err(|e|e.to_string())?;
-        let mapped = st
-            .query_map(params![MODEL_ID, DIMENSIONS as i64], |r| {
-                Ok((r.get(0)?, r.get(1)?))
-            })
-            .map_err(|e| e.to_string())?;
-        let rows: Vec<(i64, Vec<u8>)> = mapped.filter_map(Result::ok).collect();
-        (candidates, rows)
-    };
-    let allowed: HashSet<i64> = candidates.iter().map(|x| x.id).collect();
-    let assets: HashMap<i64, _> = candidates.into_iter().map(|x| (x.id, x)).collect();
-
-    let mut hits = Vec::new();
-    for (id, blob) in rows {
-        if exclude == Some(id) || !allowed.contains(&id) {
-            continue;
-        }
-        let vector = from_blob(&blob);
-        let similarity = score(query, &vector);
-        if !similarity.is_finite() {
-            continue;
-        }
-        if let Some(asset) = assets.get(&id) {
+        let mut rows = st.query(params![MODEL_ID]).map_err(|e| e.to_string())?;
+        let mut hits = Vec::new();
+        // Validate and score a borrowed row before advancing it. Keep only
+        // hits, not an additional full-index copy of 2048-byte blobs.
+        while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+            let id: i64 = row.get(0).map_err(|e| e.to_string())?;
+            if exclude == Some(id) {
+                continue;
+            }
+            let Some(asset) = assets.get(&id) else {
+                continue;
+            };
+            let dimensions: i64 = row.get(2).map_err(|e| e.to_string())?;
+            if dimensions != DIMENSIONS as i64 {
+                return Err(format!("图片 {id} 的语义索引维度无效，请重新建立语义索引"));
+            }
+            let ValueRef::Blob(blob) = row.get_ref(1).map_err(|e| e.to_string())? else {
+                return Err(format!(
+                    "图片 {id} 的语义索引存储类型无效，请重新建立语义索引"
+                ));
+            };
+            let vector = from_blob(blob).map_err(|error| format!("图片 {id}：{error}"))?;
+            let similarity = score(query, &vector);
+            if !similarity.is_finite() {
+                return Err(format!("图片 {id} 的语义匹配分数无效，请重新建立语义索引"));
+            }
             hits.push(SemanticHit {
                 asset: asset.clone(),
                 score: similarity,
             })
         }
-    }
+        hits
+    };
     hits.sort_by(|a, b| {
         b.score
             .total_cmp(&a.score)
@@ -965,7 +1068,7 @@ pub async fn semantic_search_text(
                 params![MODEL_ID],
                 |r| r.get(0),
             )
-            .unwrap_or(0);
+            .map_err(|e| e.to_string())?;
         (indexed, cache_generation(&conn)?)
     };
     if indexed == 0 {
@@ -985,6 +1088,10 @@ fn complete_text_encoding(
     generation: u64,
     encoded: Result<Vec<f32>, String>,
 ) -> Result<Vec<f32>, String> {
+    let encoded = encoded.and_then(|vector| {
+        validate_vector(&vector)?;
+        Ok(vector)
+    });
     let mut conn = state.db.lock().map_err(|e| e.to_string())?;
     publish_readiness(&mut conn, "text_ready", generation, encoded.is_ok())?;
     encoded
@@ -997,30 +1104,37 @@ pub fn semantic_search_similar(
     filter: LibraryFilter,
     limit: i64,
 ) -> Result<Vec<SemanticHit>, String> {
-    let blob: Option<Vec<u8>> = {
+    let vector = {
         let conn = state.db.lock().map_err(|e| e.to_string())?;
         reference_vector(&conn, asset_id)?
     };
-    let blob = blob.ok_or("当前图片尚未建立语义索引")?;
-    ranked(
-        state.inner(),
-        &from_blob(&blob),
-        filter,
-        limit,
-        Some(asset_id),
-    )
+    let vector = vector.ok_or("当前图片尚未建立语义索引")?;
+    ranked(state.inner(), &vector, filter, limit, Some(asset_id))
 }
 
-fn reference_vector(conn: &rusqlite::Connection, asset_id: i64) -> Result<Option<Vec<u8>>, String> {
-    conn.query_row(
-        "SELECT se.vector FROM semantic_embeddings se JOIN assets a ON a.id=se.asset_id
-         WHERE se.asset_id=?1 AND se.model_id=?2 AND se.dimensions=?3
-           AND se.fingerprint=a.fingerprint AND a.missing=0",
-        params![asset_id, MODEL_ID, DIMENSIONS as i64],
-        |r| r.get(0),
-    )
-    .optional()
-    .map_err(|e| e.to_string())
+fn reference_vector(
+    conn: &rusqlite::Connection,
+    asset_id: i64,
+) -> Result<Option<[f32; DIMENSIONS]>, String> {
+    let mut statement=conn.prepare(
+        "SELECT se.vector,se.dimensions FROM semantic_embeddings se JOIN assets a ON a.id=se.asset_id
+         WHERE se.asset_id=?1 AND se.model_id=?2
+           AND se.fingerprint=a.fingerprint AND a.fingerprint<>'' AND a.missing=0",
+    ).map_err(|e|e.to_string())?;
+    let mut rows = statement
+        .query(params![asset_id, MODEL_ID])
+        .map_err(|e| e.to_string())?;
+    let Some(row) = rows.next().map_err(|e| e.to_string())? else {
+        return Ok(None);
+    };
+    let dimensions: i64 = row.get(1).map_err(|e| e.to_string())?;
+    if dimensions != DIMENSIONS as i64 {
+        return Err("当前图片语义索引维度无效，请重新建立语义索引".into());
+    }
+    let ValueRef::Blob(blob) = row.get_ref(0).map_err(|e| e.to_string())? else {
+        return Err("当前图片语义索引存储类型无效，请重新建立语义索引".into());
+    };
+    from_blob(blob).map(Some)
 }
 
 #[tauri::command]
@@ -1064,7 +1178,7 @@ mod tests {
     fn indexed_state() -> AppState {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch(include_str!("../schema.sql")).unwrap();
-        let vector = to_blob(&normalize(vec![1.0; DIMENSIONS]));
+        let vector = to_blob(&normalize(vec![1.0; DIMENSIONS]).unwrap());
         for (id, missing) in [(1, 0), (2, 0), (3, 1)] {
             conn.execute(
                 "INSERT INTO assets(id,path,name,fingerprint,missing,created_at,updated_at) VALUES(?1,?2,?3,'fresh',?4,1,1)",
@@ -1097,7 +1211,7 @@ mod tests {
             conn.execute("UPDATE assets SET fingerprint='changed' WHERE id=2", [])
                 .unwrap();
         }
-        let query = normalize(vec![1.0; DIMENSIONS]);
+        let query = normalize(vec![1.0; DIMENSIONS]).unwrap();
         let hits = ranked(&state, &query, LibraryFilter::default(), 10, None).unwrap();
         assert_eq!(
             hits.iter().map(|hit| hit.asset.id).collect::<Vec<_>>(),
@@ -1129,14 +1243,17 @@ mod tests {
             tx.execute_batch("WITH RECURSIVE ids(id) AS (SELECT 1 UNION ALL SELECT id+1 FROM ids WHERE id<100001) INSERT INTO assets(id,path,name,fingerprint,created_at,updated_at) SELECT id,'/synthetic/'||id||'.png','asset '||id,'fresh',1,1 FROM ids;").unwrap();
             tx.execute(
                 "INSERT INTO semantic_embeddings VALUES(100001,?1,512,?2,'fresh',1)",
-                params![MODEL_ID, to_blob(&normalize(vec![1.0; DIMENSIONS]))],
+                params![
+                    MODEL_ID,
+                    to_blob(&normalize(vec![1.0; DIMENSIONS]).unwrap())
+                ],
             )
             .unwrap();
             tx.commit().unwrap();
         }
         let hits = ranked(
             &state,
-            &normalize(vec![1.0; DIMENSIONS]),
+            &normalize(vec![1.0; DIMENSIONS]).unwrap(),
             LibraryFilter::default(),
             10,
             None,
@@ -1157,6 +1274,233 @@ mod tests {
             .unwrap();
         assert!(reference_vector(&conn, 1).unwrap().is_none());
         assert!(reference_vector(&conn, 3).unwrap().is_none());
+    }
+
+    fn malformed_vectors() -> Vec<(&'static str, i64, rusqlite::types::Value)> {
+        use rusqlite::types::Value;
+        let mut unit = vec![0.0; DIMENSIONS];
+        unit[0] = 1.0;
+        let valid = to_blob(&unit);
+        let mut extra = valid.clone();
+        extra.push(0);
+        let mut nan = unit.clone();
+        nan[1] = f32::NAN;
+        let mut infinite = unit.clone();
+        infinite[1] = f32::INFINITY;
+        let mut nonunit = unit;
+        nonunit[0] = 2.0;
+        vec![
+            ("empty", 512, Value::Blob(Vec::new())),
+            ("short", 512, Value::Blob(valid[..2044].to_vec())),
+            ("extra-byte", 512, Value::Blob(extra)),
+            ("wrong-dimensions", 511, Value::Blob(valid)),
+            ("zero", 512, Value::Blob(vec![0; 2048])),
+            ("nan", 512, Value::Blob(to_blob(&nan))),
+            ("infinite", 512, Value::Blob(to_blob(&infinite))),
+            ("nonunit", 512, Value::Blob(to_blob(&nonunit))),
+            ("text-storage", 512, Value::Text("not a blob".into())),
+        ]
+    }
+
+    #[test]
+    fn malformed_index_rows_are_rejected_and_rebuilt_without_changing_valid_rows() {
+        let mut query = vec![0.0; DIMENSIONS];
+        query[0] = 1.0;
+        for (label, dimensions, vector) in malformed_vectors() {
+            let state = indexed_state();
+            let unchanged: Vec<u8> = {
+                let conn = state.db.lock().unwrap();
+                conn.execute(
+                    "UPDATE semantic_embeddings SET dimensions=?1,vector=?2 WHERE asset_id=1",
+                    params![dimensions, vector],
+                )
+                .unwrap();
+                assert_eq!(stale_count(&conn).unwrap(), 1, "{label}");
+                assert!(reference_vector(&conn, 1).is_err(), "{label}");
+                conn.query_row(
+                    "SELECT vector FROM semantic_embeddings WHERE asset_id=2",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap()
+            };
+            assert!(
+                ranked(&state, &query, LibraryFilter::default(), 10, None).is_err(),
+                "{label}"
+            );
+            let (pending, _) = index_rows(&state, &AtomicBool::new(false)).unwrap();
+            assert_eq!(
+                pending.iter().map(|row| row.0).collect::<Vec<_>>(),
+                vec![1],
+                "{label}"
+            );
+            store_index_vector(
+                &state,
+                1,
+                &to_blob(&query),
+                "fresh",
+                &Control {
+                    cancel: None,
+                    report: &|_| {},
+                },
+            )
+            .unwrap();
+            assert!(
+                index_rows(&state, &AtomicBool::new(false))
+                    .unwrap()
+                    .0
+                    .is_empty(),
+                "{label}"
+            );
+            let conn = state.db.lock().unwrap();
+            assert_eq!(stale_count(&conn).unwrap(), 0, "{label}");
+            assert!(reference_vector(&conn, 1).unwrap().is_some(), "{label}");
+            let retained: Vec<u8> = conn
+                .query_row(
+                    "SELECT vector FROM semantic_embeddings WHERE asset_id=2",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(retained, unchanged, "{label}");
+            drop(conn);
+            let hits = ranked(&state, &query, LibraryFilter::default(), 10, None).unwrap();
+            assert_eq!(
+                hits.iter().map(|hit| hit.asset.id).collect::<Vec<_>>(),
+                vec![1, 2],
+                "{label}"
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_query_vectors_cannot_match_valid_embeddings() {
+        let state = indexed_state();
+        for (label, _, value) in malformed_vectors() {
+            if let rusqlite::types::Value::Blob(blob) = value {
+                if label == "wrong-dimensions" {
+                    continue;
+                }
+                let query: Vec<f32> = blob
+                    .chunks_exact(4)
+                    .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap()))
+                    .collect();
+                if label == "extra-byte" {
+                    continue;
+                }
+                assert!(
+                    ranked(&state, &query, LibraryFilter::default(), 10, None).is_err(),
+                    "{label}"
+                );
+            }
+        }
+        assert!(ranked(
+            &state,
+            &vec![1.0; DIMENSIONS + 1],
+            LibraryFilter::default(),
+            10,
+            None
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn malformed_model_blobs_cannot_overwrite_a_valid_embedding() {
+        let state = indexed_state();
+        let previous: Vec<u8> = state
+            .db
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT vector FROM semantic_embeddings WHERE asset_id=1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        for (label, _, value) in malformed_vectors() {
+            if let rusqlite::types::Value::Blob(blob) = value {
+                if label == "wrong-dimensions" {
+                    continue;
+                }
+                assert!(
+                    store_index_vector(
+                        &state,
+                        1,
+                        &blob,
+                        "fresh",
+                        &Control {
+                            cancel: None,
+                            report: &|_| {}
+                        }
+                    )
+                    .is_err(),
+                    "{label}"
+                );
+                let retained: Vec<u8> = state
+                    .db
+                    .lock()
+                    .unwrap()
+                    .query_row(
+                        "SELECT vector FROM semantic_embeddings WHERE asset_id=1",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(retained, previous, "{label}");
+            }
+        }
+    }
+
+    #[test]
+    fn embedding_sql_errors_are_reported_instead_of_omitted() {
+        let state = indexed_state();
+        state
+            .db
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE semantic_embeddings SET dimensions=x'ff' WHERE asset_id=1",
+                [],
+            )
+            .unwrap();
+        let mut query = vec![0.0; DIMENSIONS];
+        query[0] = 1.0;
+        assert!(ranked(&state, &query, LibraryFilter::default(), 10, None).is_err());
+        let conn = state.db.lock().unwrap();
+        assert_eq!(stale_count(&conn).unwrap(), 1);
+        assert!(reference_vector(&conn, 1).is_err());
+        drop(conn);
+        assert_eq!(
+            index_rows(&state, &AtomicBool::new(false))
+                .unwrap()
+                .0
+                .iter()
+                .map(|row| row.0)
+                .collect::<Vec<_>>(),
+            vec![1]
+        );
+        let conn = state.db.lock().unwrap();
+        conn.execute("DROP TABLE semantic_embeddings", []).unwrap();
+        assert!(stale_count(&conn).is_err());
+        drop(conn);
+        assert!(ranked(&state, &query, LibraryFilter::default(), 10, None).is_err());
+        assert!(matches!(
+            index_rows(&state, &AtomicBool::new(false)),
+            Err(ModelError::Failed(_))
+        ));
+    }
+
+    #[test]
+    fn ranked_reports_a_candidate_summary_conversion_error() {
+        let state = indexed_state();
+        state
+            .db
+            .lock()
+            .unwrap()
+            .execute("UPDATE assets SET path=x'ff' WHERE id=1", [])
+            .unwrap();
+        let query = normalize(vec![1.0; DIMENSIONS]).unwrap();
+        assert!(ranked(&state, &query, LibraryFilter::default(), 10, None).is_err());
     }
 
     #[test]
@@ -1196,10 +1540,102 @@ mod tests {
 
     #[test]
     fn vector_blob_round_trip_and_cosine() {
-        let source = normalize(vec![1.0, 2.0, 3.0, 4.0]);
-        let decoded = from_blob(&to_blob(&source));
+        let mut raw = vec![0.0; DIMENSIONS];
+        raw[..4].copy_from_slice(&[1.0, 2.0, 3.0, 4.0]);
+        let source = normalize(raw).unwrap();
+        let decoded = from_blob(&to_blob(&source)).unwrap();
         assert_eq!(decoded.len(), source.len());
         assert!((score(&source, &decoded) - 1.0).abs() < 0.0001);
+    }
+
+    #[test]
+    fn model_normalization_rejects_invalid_outputs_and_handles_large_finite_values() {
+        for raw in [
+            Vec::new(),
+            vec![0.0; DIMENSIONS],
+            vec![f32::NAN; DIMENSIONS],
+            vec![f32::INFINITY; DIMENSIONS],
+            vec![1.0; DIMENSIONS - 1],
+        ] {
+            assert!(normalize(raw).is_err());
+        }
+        let normalized = normalize(vec![f32::MAX; DIMENSIONS]).unwrap();
+        assert!(normalized
+            .iter()
+            .all(|value| value.is_finite() && *value > 0.0));
+        validate_vector(&normalized).unwrap();
+        from_blob(&to_blob(&normalized)).unwrap();
+    }
+
+    #[test]
+    fn invalid_text_output_clears_readiness_without_returning_a_bad_query_vector() {
+        let state = indexed_state();
+        for raw in [
+            Vec::new(),
+            vec![0.0; DIMENSIONS],
+            vec![f32::NAN; DIMENSIONS],
+            vec![f32::INFINITY; DIMENSIONS],
+            vec![1.0; DIMENSIONS],
+        ] {
+            set_setting(&state.db.lock().unwrap(), "text_ready", "1").unwrap();
+            assert!(complete_text_encoding(&state, 0, Ok(raw)).is_err());
+            assert_eq!(setting(&state.db.lock().unwrap(), "text_ready"), "0");
+        }
+    }
+
+    #[test]
+    fn vector_norm_tolerance_accepts_rounding_and_rejects_scaled_vectors() {
+        let mut unit = vec![0.0; DIMENSIONS];
+        unit[0] = 1.0005;
+        validate_vector(&unit).unwrap();
+        from_blob(&to_blob(&unit)).unwrap();
+        unit[0] = 1.002;
+        assert!(validate_vector(&unit).is_err());
+        assert!(from_blob(&to_blob(&unit)).is_err());
+    }
+
+    #[test]
+    fn an_excluded_bad_index_does_not_block_other_valid_candidates() {
+        let state = indexed_state();
+        state
+            .db
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE semantic_embeddings SET vector=x'' WHERE asset_id=1",
+                [],
+            )
+            .unwrap();
+        let query = normalize(vec![1.0; DIMENSIONS]).unwrap();
+        let hits = ranked(&state, &query, LibraryFilter::default(), 10, Some(1)).unwrap();
+        assert_eq!(
+            hits.iter().map(|hit| hit.asset.id).collect::<Vec<_>>(),
+            vec![2]
+        );
+    }
+
+    #[test]
+    fn empty_fingerprints_are_stale_in_status_preparation_and_search() {
+        let state = indexed_state();
+        let conn = state.db.lock().unwrap();
+        conn.execute("UPDATE assets SET fingerprint='' WHERE id=1", [])
+            .unwrap();
+        conn.execute(
+            "UPDATE semantic_embeddings SET fingerprint='' WHERE asset_id=1",
+            [],
+        )
+        .unwrap();
+        assert_eq!(stale_count(&conn).unwrap(), 1);
+        assert!(reference_vector(&conn, 1).unwrap().is_none());
+        drop(conn);
+        let pending = index_rows(&state, &AtomicBool::new(false)).unwrap().0;
+        assert_eq!(pending.iter().map(|row| row.0).collect::<Vec<_>>(), vec![1]);
+        let query = normalize(vec![1.0; DIMENSIONS]).unwrap();
+        let hits = ranked(&state, &query, LibraryFilter::default(), 10, None).unwrap();
+        assert_eq!(
+            hits.iter().map(|hit| hit.asset.id).collect::<Vec<_>>(),
+            vec![2]
+        );
     }
 
     fn model_test_root() -> PathBuf {
@@ -1420,8 +1856,8 @@ mod tests {
         );
         assert_eq!(setting(&state.db.lock().unwrap(), "text_ready"), "0");
         assert_eq!(
-            complete_text_encoding(&state, 0, Ok(vec![1.0])).unwrap(),
-            vec![1.0]
+            complete_text_encoding(&state, 0, normalize(vec![1.0; DIMENSIONS])).unwrap(),
+            normalize(vec![1.0; DIMENSIONS]).unwrap()
         );
         assert_eq!(setting(&state.db.lock().unwrap(), "text_ready"), "1");
     }
@@ -1435,8 +1871,8 @@ mod tests {
             invalidate_model_readiness(&mut conn).unwrap();
         }
         assert_eq!(
-            complete_text_encoding(&state, 0, Ok(vec![1.0])).unwrap(),
-            vec![1.0]
+            complete_text_encoding(&state, 0, normalize(vec![1.0; DIMENSIONS])).unwrap(),
+            normalize(vec![1.0; DIMENSIONS]).unwrap()
         );
         assert_eq!(setting(&state.db.lock().unwrap(), "text_ready"), "0");
     }
@@ -1448,7 +1884,7 @@ mod tests {
             let mut conn = state.db.lock().unwrap();
             invalidate_model_readiness(&mut conn).unwrap();
         }
-        complete_text_encoding(&state, 1, Ok(vec![1.0])).unwrap();
+        complete_text_encoding(&state, 1, normalize(vec![1.0; DIMENSIONS])).unwrap();
         assert_eq!(
             complete_text_encoding(&state, 0, Err("old model failed".into())).unwrap_err(),
             "old model failed"
@@ -1463,7 +1899,7 @@ mod tests {
             let mut conn = state.db.lock().unwrap();
             invalidate_model_readiness(&mut conn).unwrap();
         }
-        complete_text_encoding(&state, 1, Ok(vec![1.0])).unwrap();
+        complete_text_encoding(&state, 1, normalize(vec![1.0; DIMENSIONS])).unwrap();
         assert_eq!(setting(&state.db.lock().unwrap(), "text_ready"), "1");
         assert_eq!(
             complete_text_encoding(&state, 1, Err("current model failed".into())).unwrap_err(),
@@ -1541,7 +1977,7 @@ mod tests {
             store_index_vector(
                 state,
                 1,
-                &to_blob(&normalize(vec![2.0; DIMENSIONS])),
+                &to_blob(&normalize(vec![2.0; DIMENSIONS]).unwrap()),
                 "cancelled-new-fingerprint",
                 &Control {
                     cancel: Some(cancel),

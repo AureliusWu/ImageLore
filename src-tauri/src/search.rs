@@ -166,7 +166,8 @@ pub(crate) fn filtered_summaries(
     let rows = st
         .query_map(params_from_iter(args), db::row_summary)
         .map_err(|e| e.to_string())?;
-    Ok(rows.filter_map(Result::ok).collect())
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
 }
 
 pub fn library_page(
