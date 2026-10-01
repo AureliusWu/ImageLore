@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import ts from "typescript";
+import { startBackupSchedule } from "../src/backupWorkflow.ts";
 
 function deferred() {
   let resolve, reject;
@@ -141,6 +142,371 @@ function appCallbackSource(name) {
 const appCallbackSources = Object.fromEntries(
   ["selectRecord", "refresh", "loadMore"].map((name) => [name, appCallbackSource(name)]),
 );
+
+function manualBackupHarness(
+  api,
+  flushEditor = async () => {},
+  refreshManager = async () => {},
+  schedule = null,
+) {
+  const manualBackupOperation = { current: null };
+  const closePending = { current: false };
+  const backupSchedule = { current: schedule };
+  const values = { status: "", confirmations: 0, confirm: true };
+  const context = vm.createContext({
+    api,
+    manualBackupOperation,
+    closePending,
+    backupSchedule,
+    flushEditor,
+    refreshManager,
+    setStatus: (value) => (values.status = value),
+    window: {
+      confirm: () => {
+        values.confirmations++;
+        return values.confirm;
+      },
+    },
+    module: { exports: {} },
+  });
+  for (const name of ["runManualBackupOperation", "beforeClose", "createBackup", "restoreBackup"]) {
+    vm.runInContext(appCallbackSource(name), context);
+    context[name] = context.module.exports;
+  }
+  let closeError;
+  function visit(node) {
+    if (ts.isCallExpression(node) && node.expression.getText(appSyntax) === "useCloseGuard")
+      closeError = node.arguments[2].getText(appSyntax);
+    ts.forEachChild(node, visit);
+  }
+  visit(appSyntax);
+  assert.ok(closeError, "Actual App close error callback was not found");
+  vm.runInContext(
+    ts.transpileModule(`module.exports = ${closeError};`, {
+      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+    }).outputText,
+    context,
+  );
+  return {
+    values,
+    manualBackupOperation,
+    closePending,
+    createBackup: context.createBackup,
+    restoreBackup: context.restoreBackup,
+    beforeClose: context.beforeClose,
+    onCloseError: context.module.exports,
+  };
+}
+
+for (const kind of ["backup", "restore"]) {
+  test(`actual App ${kind} prevents duplicate or competing requests and close waits before flushing latest edits`, async () => {
+    const native = deferred();
+    const events = [];
+    let latest = "before task";
+    let backupCalls = 0;
+    let restoreCalls = 0;
+    const app = manualBackupHarness(
+      {
+        createBackup: async () => {
+          backupCalls++;
+          await native.promise;
+          events.push("native terminal");
+        },
+        stageRestore: async () => {
+          restoreCalls++;
+          await native.promise;
+          events.push("native terminal");
+        },
+      },
+      async () => events.push(`flush ${latest}`),
+    );
+    const request = kind === "backup" ? app.createBackup : () => app.restoreBackup("safe.sqlite3");
+    const operation = request();
+    const duplicate = request();
+    const competing = kind === "backup" ? app.restoreBackup("other.sqlite3") : app.createBackup();
+    await new Promise(setImmediate);
+    assert.equal(backupCalls + restoreCalls, 1);
+    assert.equal(app.values.confirmations, kind === "restore" ? 1 : 0);
+    let onClose;
+    let destroyed = 0;
+    let prevented = 0;
+    const close = hookHarness("useCloseGuard", {}, () => ({
+      onCloseRequested: async (callback) => {
+        onClose = callback;
+        return () => {};
+      },
+      destroy: async () => {
+        destroyed++;
+        events.push("destroy");
+      },
+    }));
+    close.render(app.beforeClose, async () => events.push("cancel jobs"), app.onCloseError);
+    await new Promise(setImmediate);
+    const event = { preventDefault: () => prevented++ };
+    const closing = onClose(event);
+    await onClose(event);
+    await app.createBackup();
+    await app.restoreBackup("during-close.sqlite3");
+    assert.equal(backupCalls + restoreCalls, 1, "Closing rejects new manual work");
+    assert.equal(prevented, 2);
+    assert.equal(destroyed, 0);
+    latest = "typed while task and close were pending";
+    native.resolve();
+    await Promise.all([operation, duplicate, competing, closing]);
+    assert.equal(destroyed, 1);
+    assert.deepEqual(events.slice(-4), [
+      "native terminal",
+      `flush ${latest}`,
+      "cancel jobs",
+      "destroy",
+    ]);
+    assert.equal(app.manualBackupOperation.current, null);
+  });
+
+  test(`actual App ${kind} failure keeps a pending close open, reports failure and permits retry`, async () => {
+    const native = deferred();
+    let attempts = 0;
+    let flushes = 0;
+    const execute = async () => {
+      if (++attempts === 1) await native.promise;
+    };
+    const app = manualBackupHarness(
+      { createBackup: execute, stageRestore: execute },
+      async () => flushes++,
+    );
+    const request = kind === "backup" ? app.createBackup : () => app.restoreBackup("safe.sqlite3");
+    const operation = request();
+    await new Promise(setImmediate);
+    let onClose;
+    let destroyed = 0;
+    let cancelled = 0;
+    const close = hookHarness("useCloseGuard", {}, () => ({
+      onCloseRequested: async (callback) => {
+        onClose = callback;
+        return () => {};
+      },
+      destroy: async () => destroyed++,
+    }));
+    close.render(app.beforeClose, async () => cancelled++, app.onCloseError);
+    await new Promise(setImmediate);
+    const event = { preventDefault() {} };
+    const closing = onClose(event);
+    native.reject(new Error("synthetic native failure"));
+    await Promise.all([operation, closing]);
+    assert.equal(destroyed, 0);
+    assert.equal(cancelled, 0);
+    assert.equal(flushes, kind === "backup" ? 1 : 0, "Failure prevents the closing flush");
+    assert.match(app.values.status, /关闭前.*synthetic native failure/);
+    assert.equal(app.closePending.current, false);
+    assert.equal(app.manualBackupOperation.current, null);
+    await request();
+    assert.equal(attempts, 2);
+    assert.match(app.values.status, kind === "backup" ? /备份完成/ : /恢复已准备完成/);
+    await onClose(event);
+    assert.equal(cancelled, 1);
+    assert.equal(destroyed, 1);
+  });
+}
+
+test("actual App backup save failure never starts native work and releases the request for retry", async () => {
+  let fail = true;
+  let nativeCalls = 0;
+  const app = manualBackupHarness({ createBackup: async () => nativeCalls++ }, async () => {
+    if (fail) throw new Error("synthetic save failure");
+  });
+  await app.createBackup();
+  assert.equal(nativeCalls, 0);
+  assert.match(app.values.status, /资料库备份失败.*synthetic save failure/);
+  assert.equal(app.manualBackupOperation.current, null);
+  fail = false;
+  await app.createBackup();
+  assert.equal(nativeCalls, 1);
+});
+
+test("actual App cancelled restore confirmation releases the operation without invoking native staging", async () => {
+  let staged = 0;
+  const app = manualBackupHarness({ stageRestore: async () => staged++ });
+  app.values.confirm = false;
+  await app.restoreBackup("safe.sqlite3");
+  assert.equal(staged, 0);
+  assert.equal(app.manualBackupOperation.current, null);
+  app.values.confirm = true;
+  await app.restoreBackup("safe.sqlite3");
+  assert.equal(staged, 1);
+});
+
+function backupHostHarness() {
+  let timer;
+  let focus;
+  return {
+    host: {
+      setInterval(callback) {
+        timer = callback;
+        return 1;
+      },
+      clearInterval() {
+        timer = undefined;
+      },
+      addEventListener(_event, callback) {
+        focus = callback;
+      },
+      removeEventListener() {
+        focus = undefined;
+      },
+    },
+    focus: () => focus?.(),
+    tick: () => timer?.(),
+  };
+}
+
+test("actual App close pauses automatic triggers and waits for both manual and automatic terminal results", async () => {
+  const automatic = deferred();
+  const manual = deferred();
+  const host = backupHostHarness();
+  let automaticCalls = 0;
+  let manualCalls = 0;
+  const schedule = startBackupSchedule(
+    host.host,
+    async () => {
+      automaticCalls++;
+      await automatic.promise;
+    },
+    () => {},
+  );
+  const edits = [];
+  let latest = "initial";
+  const app = manualBackupHarness(
+    {
+      createBackup: async () => {
+        manualCalls++;
+        await manual.promise;
+      },
+    },
+    async () => edits.push(latest),
+    async () => {},
+    schedule,
+  );
+  const operation = app.createBackup();
+  await new Promise(setImmediate);
+  let onClose;
+  let destroyed = 0;
+  const close = hookHarness("useCloseGuard", {}, () => ({
+    onCloseRequested: async (callback) => {
+      onClose = callback;
+      return () => {};
+    },
+    destroy: async () => destroyed++,
+  }));
+  close.render(app.beforeClose, undefined, app.onCloseError);
+  await new Promise(setImmediate);
+  const closing = onClose({ preventDefault() {} });
+  manual.resolve();
+  await operation;
+  assert.equal(destroyed, 0, "Automatic backup is still running");
+  assert.deepEqual(edits, ["initial"]);
+  host.focus();
+  host.tick();
+  await app.createBackup();
+  assert.equal(automaticCalls, 1);
+  assert.equal(manualCalls, 1);
+  latest = "typed while waiting for automatic backup";
+  automatic.resolve();
+  await closing;
+  assert.deepEqual(edits, ["initial", latest]);
+  assert.equal(destroyed, 1);
+  schedule();
+});
+
+test("automatic failure during actual App close keeps the window open and resumes checks for retry", async () => {
+  const failure = deferred();
+  const host = backupHostHarness();
+  let attempts = 0;
+  let automaticError;
+  const schedule = startBackupSchedule(
+    host.host,
+    async () => {
+      if (++attempts === 1) await failure.promise;
+    },
+    (error) => (automaticError = error),
+  );
+  let flushes = 0;
+  const app = manualBackupHarness(
+    {},
+    async () => flushes++,
+    async () => {},
+    schedule,
+  );
+  let onClose;
+  let destroyed = 0;
+  const close = hookHarness("useCloseGuard", {}, () => ({
+    onCloseRequested: async (callback) => {
+      onClose = callback;
+      return () => {};
+    },
+    destroy: async () => destroyed++,
+  }));
+  close.render(app.beforeClose, undefined, app.onCloseError);
+  await new Promise(setImmediate);
+  const closing = onClose({ preventDefault() {} });
+  failure.reject(new Error("synthetic automatic failure"));
+  await closing;
+  assert.equal(destroyed, 0);
+  assert.equal(flushes, 0);
+  assert.equal(app.closePending.current, false);
+  assert.match(automaticError.message, /synthetic automatic failure/);
+  assert.match(app.values.status, /关闭前.*synthetic automatic failure/);
+  await new Promise(setImmediate);
+  host.focus();
+  await new Promise(setImmediate);
+  assert.equal(attempts, 2, "Failed close resumed the automatic scheduler");
+  await onClose({ preventDefault() {} });
+  assert.equal(flushes, 1);
+  assert.equal(destroyed, 1);
+  schedule();
+});
+
+test("a later cancellation failure also resumes actual App backup scheduling and permits a new close", async () => {
+  const host = backupHostHarness();
+  let checks = 0;
+  const schedule = startBackupSchedule(
+    host.host,
+    async () => checks++,
+    () => {},
+  );
+  const app = manualBackupHarness(
+    {},
+    async () => {},
+    async () => {},
+    schedule,
+  );
+  let onClose;
+  let destroyed = 0;
+  let cancellations = 0;
+  const close = hookHarness("useCloseGuard", {}, () => ({
+    onCloseRequested: async (callback) => {
+      onClose = callback;
+      return () => {};
+    },
+    destroy: async () => destroyed++,
+  }));
+  close.render(
+    app.beforeClose,
+    async () => {
+      if (++cancellations === 1) throw new Error("synthetic cancellation failure");
+    },
+    app.onCloseError,
+  );
+  await new Promise(setImmediate);
+  await onClose({ preventDefault() {} });
+  assert.equal(destroyed, 0);
+  assert.equal(app.closePending.current, false);
+  host.focus();
+  await new Promise(setImmediate);
+  assert.equal(checks, 2);
+  await onClose({ preventDefault() {} });
+  assert.equal(destroyed, 1);
+  schedule();
+});
 
 function appWorkflowHarness(api, initial = {}) {
   const values = {

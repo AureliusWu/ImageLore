@@ -925,8 +925,13 @@ pub fn recover_latest_valid_backup(
 }
 
 #[tauri::command]
-pub fn create_backup(state: State<'_, AppState>) -> Result<BackupRecord, String> {
-    create(state.inner(), "imagelore")
+pub async fn create_backup(app: tauri::AppHandle) -> Result<BackupRecord, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        create(state.inner(), "imagelore")
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -945,12 +950,21 @@ pub fn list_backups(state: State<'_, AppState>) -> Result<Vec<BackupRecord>, Str
 }
 
 #[tauri::command]
-pub fn stage_restore(state: State<'_, AppState>, name: String) -> Result<bool, String> {
+pub async fn stage_restore(app: tauri::AppHandle, name: String) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        stage_restore_at(state.inner(), &name)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn stage_restore_at(state: &AppState, name: &str) -> Result<bool, String> {
     // Protect candidates and pending files from creation/rotation. Staging
     // reads a backup, so it does not need the active library connection.
     let _operation = state.backup_operation.lock().map_err(|e| e.to_string())?;
     finish_pending_stage(&state.data_dir)?;
-    let file = PathBuf::from(&name);
+    let file = PathBuf::from(name);
     let base = file
         .file_name()
         .and_then(|x| x.to_str())
@@ -1180,6 +1194,97 @@ mod tests {
             next_job_id: std::sync::atomic::AtomicU64::new(1),
             vision_api_key: std::sync::Mutex::new(String::new()),
         }
+    }
+
+    #[test]
+    fn staging_rejects_invalid_candidates_without_consuming_pending_and_can_retry() {
+        let root = test_root("stage-retry");
+        let state = test_state(&root);
+        let original = root.join("backups/original.sqlite3");
+        drop(seed(&original, "first restore"));
+        stage_restore_at(&state, "original.sqlite3").unwrap();
+        let pending = root.join("restore.pending.sqlite3");
+        let staged_bytes = fs::read(&pending).unwrap();
+        for kind in ["empty", "foreign", "future", "orphan", "truncated"] {
+            let name = format!("{kind}.sqlite3");
+            let candidate = state.backups_dir.join(&name);
+            let conn = if kind == "empty" || kind == "foreign" {
+                Connection::open(&candidate).unwrap()
+            } else {
+                seed(&candidate, kind)
+            };
+            match kind {
+                "foreign" => conn
+                    .execute_batch("CREATE TABLE foreign_data(value TEXT)")
+                    .unwrap(),
+                "future" => {
+                    conn.execute(
+                        "UPDATE app_meta SET value='12' WHERE key='schema_version'",
+                        [],
+                    )
+                    .unwrap();
+                }
+                "orphan" => {
+                    conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
+                    conn.execute("INSERT INTO prompt_state(asset_id,prompt,updated_at) VALUES(999,'orphan',1)", []).unwrap();
+                }
+                _ => (),
+            }
+            drop(conn);
+            if kind == "truncated" {
+                let bytes = fs::read(&candidate).unwrap();
+                fs::write(&candidate, &bytes[..bytes.len() / 2]).unwrap();
+            }
+            let candidate_bytes = fs::read(&candidate).unwrap();
+            assert!(
+                stage_restore_at(&state, &name).is_err(),
+                "{kind} must be rejected"
+            );
+            assert_eq!(fs::read(&candidate).unwrap(), candidate_bytes);
+            assert_eq!(fs::read(&pending).unwrap(), staged_bytes);
+            assert_eq!(read_marker(&state.database_path), "current");
+        }
+        let retry = state.backups_dir.join("retry.sqlite3");
+        drop(seed(&retry, "retried restore"));
+        stage_restore_at(&state, "retry.sqlite3").unwrap();
+        assert_eq!(read_marker(&pending), "retried restore");
+        assert_eq!(read_marker(&original), "first restore");
+        assert_eq!(read_marker(&state.database_path), "current");
+        assert!(!root.join("restore.pending.previous.sqlite3").exists());
+        drop(state);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn staging_does_not_wait_for_the_active_library_connection() {
+        use std::sync::{mpsc, Arc};
+        let root = test_root("stage-independent");
+        let state = Arc::new(test_state(&root));
+        drop(seed(
+            &state.backups_dir.join("candidate.sqlite3"),
+            "candidate",
+        ));
+        let library_guard = state.db.lock().unwrap();
+        let worker_state = Arc::clone(&state);
+        let (sent, received) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            sent.send(stage_restore_at(&worker_state, "candidate.sqlite3"))
+                .unwrap();
+        });
+        let result = received.recv_timeout(std::time::Duration::from_secs(2));
+        drop(library_guard);
+        worker.join().unwrap();
+        assert!(
+            matches!(result, Ok(Ok(true))),
+            "Staging only needs the backup-operation lock: {result:?}"
+        );
+        assert_eq!(
+            read_marker(&root.join("restore.pending.sqlite3")),
+            "candidate"
+        );
+        assert_eq!(read_marker(&state.database_path), "current");
+        drop(state);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

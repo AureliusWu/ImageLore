@@ -13,25 +13,39 @@ export function startBackupSchedule(
   onError: (error: unknown) => void,
 ) {
   let disposed = false;
-  let pending = false;
+  let paused = false;
+  let pending: Promise<unknown> | null = null;
   const check = () => {
-    if (disposed || pending) return;
-    pending = true;
-    void Promise.resolve()
-      .then(ensureBackup)
+    if (disposed || paused || pending) return;
+    const task = Promise.resolve().then(ensureBackup);
+    pending = task;
+    void task
       .catch((error) => {
         if (!disposed) onError(error);
       })
       .finally(() => {
-        pending = false;
+        if (pending === task) pending = null;
       });
   };
   const timer = host.setInterval(check, BACKUP_CHECK_INTERVAL_MS);
   host.addEventListener("focus", check);
   check();
-  return () => {
-    disposed = true;
-    host.clearInterval(timer);
-    host.removeEventListener("focus", check);
-  };
+  return Object.assign(
+    () => {
+      disposed = true;
+      host.clearInterval(timer);
+      host.removeEventListener("focus", check);
+    },
+    {
+      async pauseAndWait() {
+        paused = true;
+        // Await the raw result so a failed automatic backup can keep the
+        // window open; its normal scheduler error handler still reports it.
+        await pending;
+      },
+      resume() {
+        paused = false;
+      },
+    },
+  );
 }

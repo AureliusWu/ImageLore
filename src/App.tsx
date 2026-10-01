@@ -159,6 +159,9 @@ export default function App() {
   const autoSyncStarted = useRef(false);
   const inboxFocusSyncAt = useRef(0);
   const previewAssetId = useRef<number | null>(null);
+  const manualBackupOperation = useRef<Promise<void> | null>(null);
+  const backupSchedule = useRef<ReturnType<typeof startBackupSchedule> | null>(null);
+  const closePending = useRef(false);
   const currentAssetId = useRef(current?.id);
   currentAssetId.current = current?.id;
   const { previewMode, setPreviewMode, leftWidth, rightWidth, drag } = useWorkspaceLayout();
@@ -377,9 +380,14 @@ export default function App() {
   }, [refreshSessions, refreshSavedFilters]);
   useEffect(() => {
     if (!isTauri) return;
-    return startBackupSchedule(window, api.ensureAutoBackup, (e) =>
+    const schedule = startBackupSchedule(window, api.ensureAutoBackup, (e) =>
       setStatus("自动备份失败：" + String(e)),
     );
+    backupSchedule.current = schedule;
+    return () => {
+      schedule();
+      if (backupSchedule.current === schedule) backupSchedule.current = null;
+    };
   }, []);
   useEffect(() => {
     if (!parentOpen) return;
@@ -562,10 +570,27 @@ export default function App() {
   const cancelSemanticFromUi = () => {
     void cancelSemanticIndex().catch(() => {});
   };
+  const beforeClose = useCallback(async () => {
+    closePending.current = true;
+    try {
+      await Promise.all([manualBackupOperation.current, backupSchedule.current?.pauseAndWait()]);
+      // Edits can continue while the blocking-pool task finishes. Flush again
+      // after its terminal result so closing preserves the latest input.
+      await flushEditor();
+    } catch (error) {
+      closePending.current = false;
+      backupSchedule.current?.resume();
+      throw error;
+    }
+  }, [flushEditor]);
   useCloseGuard(
-    flushEditor,
+    beforeClose,
     importActive || semanticActive ? cancelBackground : undefined,
-    (error) => setStatus("关闭前保存或取消失败：" + String(error)),
+    (error) => {
+      closePending.current = false;
+      backupSchedule.current?.resume();
+      setStatus("关闭前备份、保存或取消失败：" + String(error));
+    },
   );
   const importImmediate = useCallback(
     async (label: string, task: () => Promise<ImportSummary>) => {
@@ -905,17 +930,39 @@ export default function App() {
       setStatus("打开资料库管理失败：" + String(e));
     }
   };
-  const createBackup = async () => {
-    try {
-      await flushEditor();
-      setStatus("正在备份资料库…");
-      await api.createBackup();
-      await refreshManager();
-      setStatus("资料库备份完成");
-    } catch (e) {
-      setStatus("资料库备份失败：" + String(e));
-    }
-  };
+  const runManualBackupOperation = useCallback(
+    (operation: () => Promise<void>, failureLabel: string) => {
+      if (closePending.current) {
+        setStatus("正在准备关闭，请稍候");
+        return Promise.resolve();
+      }
+      if (manualBackupOperation.current) {
+        setStatus("已有备份或恢复准备任务正在进行");
+        return manualBackupOperation.current.catch(() => {});
+      }
+      // Publish the raw promise before running even the first flush or dialog.
+      // Close must see rejection; the UI caller separately handles its error.
+      const pending = Promise.resolve().then(operation);
+      manualBackupOperation.current = pending;
+      return pending
+        .catch((error) => setStatus(failureLabel + String(error)))
+        .finally(() => {
+          if (manualBackupOperation.current === pending) manualBackupOperation.current = null;
+        });
+    },
+    [],
+  );
+  const createBackup = useCallback(
+    () =>
+      runManualBackupOperation(async () => {
+        await flushEditor();
+        setStatus("正在备份资料库…");
+        await api.createBackup();
+        await refreshManager();
+        setStatus("资料库备份完成");
+      }, "资料库备份失败："),
+    [flushEditor, refreshManager, runManualBackupOperation],
+  );
   const openDataFolder = async () => {
     try {
       await api.openDataFolder();
@@ -932,16 +979,17 @@ export default function App() {
       setStatus("打开日志目录失败：" + String(e));
     }
   };
-  const restoreBackup = async (name: string) => {
-    if (!window.confirm("确定恢复到这份备份吗？当前资料库会在重启时先自动保留一份安全副本。"))
-      return;
-    try {
-      await api.stageRestore(name);
-      setStatus("恢复已准备完成，请重启 ImageLore 后生效");
-    } catch (e) {
-      setStatus("准备恢复失败：" + String(e));
-    }
-  };
+  const restoreBackup = useCallback(
+    (name: string) =>
+      runManualBackupOperation(async () => {
+        if (!window.confirm("确定恢复到这份备份吗？当前资料库会在重启时先自动保留一份安全副本。"))
+          return;
+        setStatus("正在准备恢复…");
+        await api.stageRestore(name);
+        setStatus("恢复已准备完成，请重启 ImageLore 后生效");
+      }, "准备恢复失败："),
+    [runManualBackupOperation],
+  );
   const renameTag = async (oldName: string, newName: string) => {
     try {
       await api.renameTag(oldName, newName);
