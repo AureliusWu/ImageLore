@@ -14,6 +14,35 @@ const AUTO_INTERVAL: i64 = 24 * 3600;
 // does not alter the live library's cache or any persistent database setting.
 const VALIDATION_CACHE_KIB: i64 = 32 * 1024;
 
+// Test-only timing around the unchanged expression: no closure, duplicate
+// evaluation, altered ?/return behavior, or production logging/clock access.
+macro_rules! storage_phase {
+    ($name:literal, $path:expr, $expression:expr, result) => {{
+        #[cfg(test)]
+        let mut storage_phase = tests::phase_profile::enter($name, $path);
+        let outcome = $expression;
+        #[cfg(test)]
+        storage_phase.observe_result(outcome.is_ok());
+        outcome
+    }};
+    ($name:literal, $path:expr, $expression:expr) => {{
+        #[cfg(test)]
+        let _storage_phase = tests::phase_profile::enter($name, $path);
+        $expression
+    }};
+}
+
+// Sibling DB initialization reuses the same opt-in, thread-local recorder.
+#[cfg(test)]
+pub(crate) type StorageProfileScope = tests::phase_profile::Scope;
+#[cfg(test)]
+pub(crate) fn storage_profile_span(
+    phase: &'static str,
+    path: Option<&Path>,
+) -> StorageProfileScope {
+    tests::phase_profile::enter(phase, path)
+}
+
 fn configure_validation(conn: &Connection) -> rusqlite::Result<()> {
     conn.busy_timeout(std::time::Duration::ZERO)?;
     conn.pragma_update(None, "cache_size", -VALIDATION_CACHE_KIB)
@@ -38,11 +67,15 @@ fn sql_path(path: &Path) -> String {
 }
 
 fn sync_file(path: &Path) -> Result<(), String> {
-    OpenOptions::new()
-        .write(true)
-        .open(path)
-        .and_then(|file| file.sync_all())
-        .map_err(|e| e.to_string())
+    storage_phase!(
+        "file.sync",
+        Some(path),
+        OpenOptions::new()
+            .write(true)
+            .open(path)
+            .and_then(|file| file.sync_all())
+            .map_err(|e| e.to_string())
+    )
 }
 
 fn unique_path(dir: &Path, prefix: &str) -> PathBuf {
@@ -62,6 +95,8 @@ fn unique_path(dir: &Path, prefix: &str) -> PathBuf {
 }
 
 fn validate(path: &Path) -> Result<(), String> {
+    #[cfg(test)]
+    let _validation = tests::phase_profile::enter("validation.total", Some(path));
     if companions(path)
         .iter()
         .skip(1)
@@ -76,12 +111,20 @@ fn validate(path: &Path) -> Result<(), String> {
 }
 
 fn validate_in_place(path: &Path) -> Result<(), String> {
-    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+    let conn = storage_phase!(
+        "validation.open",
+        None,
+        Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+    )
+    .map_err(|e| e.to_string())?;
+    storage_phase!("validation.configure", None, configure_validation(&conn))
         .map_err(|e| e.to_string())?;
-    configure_validation(&conn).map_err(|e| e.to_string())?;
-    let result: String = conn
-        .query_row("PRAGMA integrity_check", [], |r| r.get(0))
-        .map_err(|e| e.to_string())?;
+    let result: String = storage_phase!(
+        "validation.integrity_check",
+        None,
+        conn.query_row("PRAGMA integrity_check", [], |r| r.get(0))
+    )
+    .map_err(|e| e.to_string())?;
     if result != "ok" {
         return Err(format!("备份完整性检查失败：{}", result));
     }
@@ -222,7 +265,7 @@ fn validate_in_place(path: &Path) -> Result<(), String> {
             ("asset_sessions", "asset_id", "assets"),
             ("asset_sessions", "session_id", "generation_sessions"),
         ]);
-        let duplicate: i64 = conn.query_row("SELECT COUNT(*) FROM (SELECT portable_id FROM assets WHERE portable_id<>'' GROUP BY portable_id HAVING COUNT(*)>1)", [], |r| r.get(0)).map_err(|e| e.to_string())?;
+        let duplicate: i64 = storage_phase!("validation.portable_ids", None, conn.query_row("SELECT COUNT(*) FROM (SELECT portable_id FROM assets WHERE portable_id<>'' GROUP BY portable_id HAVING COUNT(*)>1)", [], |r| r.get(0))).map_err(|e| e.to_string())?;
         if duplicate != 0 {
             return Err("备份存在重复 portable ID".into());
         }
@@ -361,41 +404,50 @@ fn validate_in_place(path: &Path) -> Result<(), String> {
         tables.push(("asset_search", &["reference"]));
         relations.push(("reference_sources", "asset_id", "assets"));
     }
-    for (table, columns) in tables {
-        let mut st = conn
-            .prepare(&format!("PRAGMA table_info({})", table))
-            .map_err(|e| e.to_string())?;
-        let actual = st
-            .query_map([], |r| r.get::<_, String>(1))
-            .map_err(|e| e.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?;
-        if columns
-            .iter()
-            .any(|column| !actual.iter().any(|name| name == column))
-        {
-            return Err(format!("备份缺少 ImageLore {} 表的必要字段", table));
+    storage_phase!("validation.schema_tables", None, {
+        for (table, columns) in tables {
+            let mut st = conn
+                .prepare(&format!("PRAGMA table_info({})", table))
+                .map_err(|e| e.to_string())?;
+            let actual = st
+                .query_map([], |r| r.get::<_, String>(1))
+                .map_err(|e| e.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?;
+            if columns
+                .iter()
+                .any(|column| !actual.iter().any(|name| name == column))
+            {
+                return Err(format!("备份缺少 ImageLore {} 表的必要字段", table));
+            }
         }
-    }
-    let fk_error: bool = conn
-        .prepare("PRAGMA foreign_key_check")
-        .map_err(|e| e.to_string())?
-        .exists([])
-        .map_err(|e| e.to_string())?;
+    });
+    let fk_error: bool = storage_phase!(
+        "validation.foreign_keys",
+        None,
+        conn.prepare("PRAGMA foreign_key_check")
+            .map_err(|e| e.to_string())?
+            .exists([])
+    )
+    .map_err(|e| e.to_string())?;
     if fk_error {
         return Err("备份外键检查失败".into());
     }
     // Also reject orphan business records in files whose FK declarations were removed.
-    for (table, column, parent) in relations {
-        let orphan: bool = conn.query_row(&format!("SELECT EXISTS(SELECT 1 FROM {table} c LEFT JOIN {parent} p ON p.id=c.{column} WHERE p.id IS NULL)"), [], |r| r.get(0)).map_err(|e| e.to_string())?;
-        if orphan {
-            return Err(format!("备份业务关系检查失败：{}.{}", table, column));
+    storage_phase!("validation.business_relations", None, {
+        for (table, column, parent) in relations {
+            let orphan: bool = conn.query_row(&format!("SELECT EXISTS(SELECT 1 FROM {table} c LEFT JOIN {parent} p ON p.id=c.{column} WHERE p.id IS NULL)"), [], |r| r.get(0)).map_err(|e| e.to_string())?;
+            if orphan {
+                return Err(format!("备份业务关系检查失败：{}.{}", table, column));
+            }
         }
-    }
+    });
     Ok(())
 }
 
 fn records(dir: &Path) -> Result<Vec<BackupRecord>, String> {
+    #[cfg(test)]
+    let _records = tests::phase_profile::enter("records.enumerate", None);
     fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let mut out = Vec::new();
     for entry in fs::read_dir(dir)
@@ -433,26 +485,38 @@ fn records(dir: &Path) -> Result<Vec<BackupRecord>, String> {
 }
 
 fn rotate(dir: &Path) -> Result<(), String> {
+    #[cfg(test)]
+    let _rotation = tests::phase_profile::enter("rotation.total", None);
     let mut valid_count = 0;
     for item in records(dir)? {
-        if validate(Path::new(&item.path)).is_err() {
+        if storage_phase!(
+            "rotation.candidate",
+            Some(Path::new(&item.path)),
+            validate(Path::new(&item.path))
+        )
+        .is_err()
+        {
             // Invalid candidates remain available as evidence and cannot evict
             // usable recovery points or suppress the next automatic backup.
             let rejected = dir.join("rejected");
             fs::create_dir_all(&rejected).map_err(|e| e.to_string())?;
             let target = rejected.join(format!("{}-{}.raw", item.name, now_nanos()));
-            fs::rename(&item.path, target).map_err(|e| e.to_string())?;
+            storage_phase!("rotation.quarantine", None, fs::rename(&item.path, target))
+                .map_err(|e| e.to_string())?;
             continue;
         }
         valid_count += 1;
         if valid_count > MAX_BACKUPS {
-            fs::remove_file(item.path).map_err(|e| e.to_string())?;
+            storage_phase!("rotation.remove", None, fs::remove_file(item.path))
+                .map_err(|e| e.to_string())?;
         }
     }
     Ok(())
 }
 
 fn vacuum_snapshot(source: &Path, target: &Path) -> Result<(), String> {
+    #[cfg(test)]
+    let _snapshot = tests::phase_profile::enter("snapshot.total", Some(source));
     if companions(source)
         .iter()
         .skip(1)
@@ -473,15 +537,20 @@ fn vacuum_snapshot_in_place(source: &Path, target: &Path) -> Result<(), String> 
         .map_err(|e| e.to_string())?;
     // VACUUM INTO reads committed WAL pages directly; checkpointing a source can
     // mutate evidence and is unnecessary for a consistent standalone snapshot.
-    conn.execute_batch(&format!("VACUUM INTO '{}';", sql_path(target)))
-        .map_err(|e| e.to_string())?;
+    storage_phase!(
+        "snapshot.vacuum_into",
+        None,
+        conn.execute_batch(&format!("VACUUM INTO '{}';", sql_path(target)))
+    )
+    .map_err(|e| e.to_string())?;
     drop(conn);
     validate(target)?;
     sync_file(target)
 }
 
 fn create(state: &AppState, prefix: &str) -> Result<BackupRecord, String> {
-    let _operation = state.backup_operation.lock().map_err(|e| e.to_string())?;
+    let _operation = storage_phase!("backup.mutex_wait", None, state.backup_operation.lock())
+        .map_err(|e| e.to_string())?;
     create_locked(state, prefix)
 }
 
@@ -492,11 +561,16 @@ fn create_locked(state: &AppState, prefix: &str) -> Result<BackupRecord, String>
     let path = unique_path(&state.backups_dir, prefix);
     let result = (|| {
         {
-            let conn = state.db.lock().map_err(|e| e.to_string())?;
-            conn.execute_batch(&format!("VACUUM INTO '{}';", sql_path(&path)))
+            let conn = storage_phase!("backup.db_mutex_wait", None, state.db.lock())
                 .map_err(|e| e.to_string())?;
+            storage_phase!(
+                "backup.vacuum_into",
+                None,
+                conn.execute_batch(&format!("VACUUM INTO '{}';", sql_path(&path)))
+            )
+            .map_err(|e| e.to_string())?;
         }
-        validate(&path)?;
+        storage_phase!("backup.new_validation", Some(&path), validate(&path))?;
         sync_file(&path)?;
         Ok::<_, String>(())
     })();
@@ -516,10 +590,16 @@ fn ensure_auto_at(state: &AppState, timestamp: i64) -> Result<Option<BackupRecor
     // concurrent timer, focus and manual requests. Validate every candidate
     // again without blocking the live library; invalid files cannot defer a
     // real backup. All paths acquire backup_operation before db.
-    let _operation = state.backup_operation.lock().map_err(|e| e.to_string())?;
-    let latest = records(&state.backups_dir)?
-        .into_iter()
-        .find(|item| validate(Path::new(&item.path)).is_ok());
+    let _operation = storage_phase!("auto.mutex_wait", None, state.backup_operation.lock())
+        .map_err(|e| e.to_string())?;
+    let latest = records(&state.backups_dir)?.into_iter().find(|item| {
+        storage_phase!(
+            "auto.candidate",
+            Some(Path::new(&item.path)),
+            validate(Path::new(&item.path))
+        )
+        .is_ok()
+    });
     if latest
         .as_ref()
         .map(|x| timestamp.saturating_sub(x.created_at) < AUTO_INTERVAL)
@@ -548,6 +628,8 @@ fn companions(database: &Path) -> [PathBuf; 3] {
 }
 
 fn preserve_originals(database: &Path, dir: &Path, prefix: &str) -> Result<(), String> {
+    #[cfg(test)]
+    let _preserve = tests::phase_profile::enter("restore.preserve_originals", Some(database));
     fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let token = now_nanos();
     for (source, label) in companions(database).iter().zip(["sqlite3", "wal", "shm"]) {
@@ -560,8 +642,14 @@ fn preserve_originals(database: &Path, dir: &Path, prefix: &str) -> Result<(), S
                 .open(&target)
                 .map_err(|e| format!("保全原件 {} 失败：{}", source.display(), e))?;
             let mut input = File::open(source).map_err(|e| e.to_string())?;
-            std::io::copy(&mut input, &mut output).map_err(|e| e.to_string())?;
-            output.sync_all().map_err(|e| e.to_string())?;
+            storage_phase!(
+                "restore.preserve_copy",
+                Some(source),
+                std::io::copy(&mut input, &mut output)
+            )
+            .map_err(|e| e.to_string())?;
+            storage_phase!("restore.preserve_sync", None, output.sync_all())
+                .map_err(|e| e.to_string())?;
         }
     }
     Ok(())
@@ -573,6 +661,8 @@ fn rollback_dir(database: &Path) -> Result<PathBuf, String> {
 }
 
 fn finish_or_rollback(database: &Path, data_dir: &Path) -> Result<(), String> {
+    #[cfg(test)]
+    let _finish = tests::phase_profile::enter("restore.finish_or_rollback", None);
     let dir = rollback_dir(database)?;
     if !dir.exists() {
         return Ok(());
@@ -625,6 +715,8 @@ fn finish_or_rollback(database: &Path, data_dir: &Path) -> Result<(), String> {
 }
 
 fn copy_probe_files(database: &Path) -> std::io::Result<PathBuf> {
+    #[cfg(test)]
+    let _copy = tests::phase_profile::enter("probe.copy_db_wal", Some(database));
     let probe_dir = std::env::temp_dir().join(format!("imagelore-integrity-probe-{}", now_nanos()));
     let probe = probe_dir.join("library.sqlite3");
     let result = (|| {
@@ -647,19 +739,35 @@ fn copy_probe_files(database: &Path) -> std::io::Result<PathBuf> {
 }
 
 pub(crate) fn integrity_probe_copy(database: &Path) -> rusqlite::Result<String> {
+    #[cfg(test)]
+    let _probe = tests::phase_profile::enter("probe.integrity_total", Some(database));
     // READ_ONLY can rebuild SHM. Inspect disposable DB/WAL copies,
     // including committed WAL, without opening the original through SQLite.
     let probe_dir = copy_probe_files(database)
         .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
-    let result = Connection::open_with_flags(
-        probe_dir.join("library.sqlite3"),
-        OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .and_then(|conn| {
+    let opened = storage_phase!(
+        "probe.open",
+        None,
+        Connection::open_with_flags(
+            probe_dir.join("library.sqlite3"),
+            OpenFlags::SQLITE_OPEN_READ_ONLY,
+        ),
+        result
+    );
+    let result = opened.and_then(|conn| {
         configure_validation(&conn)?;
-        conn.query_row("PRAGMA integrity_check(1)", [], |r| r.get::<_, String>(0))
+        storage_phase!(
+            "probe.integrity_check",
+            None,
+            conn.query_row("PRAGMA integrity_check(1)", [], |r| r.get::<_, String>(0))
+        )
     });
-    let _ = fs::remove_dir_all(&probe_dir);
+    let _ = storage_phase!(
+        "probe.cleanup",
+        None,
+        fs::remove_dir_all(&probe_dir),
+        result
+    );
     result
 }
 
@@ -675,6 +783,8 @@ fn integrity_is_corrupt(database: &Path) -> bool {
 }
 
 fn reject_unsupported_readable_schema(database: &Path) -> Result<(), String> {
+    #[cfg(test)]
+    let _schema = tests::phase_profile::enter("restore.schema_probe", Some(database));
     // Integrity damage does not authorize a downgrade. Read the marker from a
     // disposable copy before deciding whether corrupt content can be replaced.
     let probe_dir = copy_probe_files(database).map_err(|e| e.to_string())?;
@@ -728,6 +838,8 @@ fn supported_marker(value: &str) -> bool {
 }
 
 fn check_restore_write_access(database: &Path, allow_corrupt: bool) -> Result<bool, String> {
+    #[cfg(test)]
+    let _access = tests::phase_profile::enter("restore.write_access", Some(database));
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt;
@@ -792,6 +904,8 @@ fn replace_library(
     is_pending: bool,
     hook: impl Fn(RestoreStep) -> Result<(), String>,
 ) -> Result<(), String> {
+    #[cfg(test)]
+    let _replace = tests::phase_profile::enter("restore.replace_total", None);
     finish_or_rollback(database, data_dir)?;
     validate(source)?;
     // Always stage on the destination filesystem. Snapshot includes any committed WAL.
@@ -805,7 +919,11 @@ fn replace_library(
         hook(RestoreStep::Preserved)?;
         if database.exists() {
             reject_unsupported_readable_schema(database)?;
-            let corrupt = integrity_is_corrupt(database);
+            let corrupt = storage_phase!(
+                "restore.active_health_probe",
+                None,
+                integrity_is_corrupt(database)
+            );
             if !is_pending && !corrupt {
                 return Err("自动恢复最终复核未确认损坏，已保留当前资料库与备份候选".into());
             }
@@ -825,14 +943,21 @@ fn replace_library(
         if !database.exists() {
             fs::write(reservation.join("NO_DATABASE"), b"").map_err(|e| e.to_string())?;
         }
-        for (original, label) in companions(database).iter().zip(["database", "wal", "shm"]) {
-            if original.exists() {
-                fs::rename(original, reservation.join(label)).map_err(|e| e.to_string())?;
+        storage_phase!("restore.reserve_originals", None, {
+            for (original, label) in companions(database).iter().zip(["database", "wal", "shm"]) {
+                if original.exists() {
+                    fs::rename(original, reservation.join(label)).map_err(|e| e.to_string())?;
+                }
             }
-        }
+        });
         hook(RestoreStep::Reserved)?;
         // No copy fallback over a live path: failed rename rolls the exact originals back.
-        fs::rename(&staged, database).map_err(|e| e.to_string())?;
+        storage_phase!(
+            "restore.install_rename",
+            None,
+            fs::rename(&staged, database)
+        )
+        .map_err(|e| e.to_string())?;
         hook(RestoreStep::Installed)?;
         validate(database)?;
         let commit = reservation.join("COMMITTED");
@@ -857,6 +982,8 @@ pub fn apply_pending_restore(
     data_dir: &Path,
     backups_dir: &Path,
 ) -> Result<(), String> {
+    #[cfg(test)]
+    let _apply = tests::phase_profile::enter("restore.apply_pending_total", None);
     finish_or_rollback(database_path, data_dir)?;
     finish_pending_stage(data_dir)?;
     let pending = data_dir.join("restore.pending.sqlite3");
@@ -962,7 +1089,8 @@ pub async fn stage_restore(app: tauri::AppHandle, name: String) -> Result<bool, 
 fn stage_restore_at(state: &AppState, name: &str) -> Result<bool, String> {
     // Protect candidates and pending files from creation/rotation. Staging
     // reads a backup, so it does not need the active library connection.
-    let _operation = state.backup_operation.lock().map_err(|e| e.to_string())?;
+    let _operation = storage_phase!("stage.mutex_wait", None, state.backup_operation.lock())
+        .map_err(|e| e.to_string())?;
     finish_pending_stage(&state.data_dir)?;
     let file = PathBuf::from(name);
     let base = file
@@ -982,7 +1110,7 @@ fn stage_restore_at(state: &AppState, name: &str) -> Result<bool, String> {
     if pending.exists() {
         fs::rename(&pending, &previous).map_err(|e| e.to_string())?;
     }
-    if let Err(error) = fs::rename(&temp, &pending) {
+    if let Err(error) = storage_phase!("stage.install_pending", None, fs::rename(&temp, &pending)) {
         if previous.exists() {
             fs::rename(&previous, &pending)
                 .map_err(|e| format!("{}；暂存回退失败：{}", error, e))?;
@@ -998,6 +1126,720 @@ fn stage_restore_at(state: &AppState, name: &str) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The production spans are inert unless this one thread explicitly captures
+    // an ignored profile operation. No global environment switch enables them.
+    pub(super) mod phase_profile {
+        use serde_json::{json, Value};
+        use std::{
+            cell::RefCell,
+            collections::BTreeMap,
+            path::{Path, PathBuf},
+            time::Instant,
+        };
+
+        struct Session {
+            origin: Instant,
+            next_id: u64,
+            stack: Vec<u64>,
+            files: BTreeMap<PathBuf, u64>,
+            events: Vec<Value>,
+        }
+        thread_local! { static CURRENT: RefCell<Option<Session>> = const { RefCell::new(None) }; }
+        struct ActiveScope {
+            id: u64,
+            parent: Option<u64>,
+            phase: &'static str,
+            started: Instant,
+            started_ms: f64,
+            ordinal: Option<u64>,
+            bytes: Option<u64>,
+            result_ok: Option<bool>,
+        }
+        pub(crate) struct Scope(Option<ActiveScope>);
+        impl Scope {
+            pub(crate) fn observe_result(&mut self, success: bool) {
+                if let Some(active) = self.0.as_mut() {
+                    active.result_ok = Some(success);
+                }
+            }
+        }
+        pub(crate) fn enter(phase: &'static str, path: Option<&Path>) -> Scope {
+            CURRENT.with(|slot| {
+                let Ok(mut current) = slot.try_borrow_mut() else {
+                    return Scope(None);
+                };
+                let Some(session) = current.as_mut() else {
+                    return Scope(None);
+                };
+                let ordinal = path.map(|path| {
+                    let next = session.files.len() as u64 + 1;
+                    *session.files.entry(path.to_path_buf()).or_insert(next)
+                });
+                let bytes = path
+                    .and_then(|path| std::fs::metadata(path).ok())
+                    .map(|m| m.len());
+                session.next_id += 1;
+                let id = session.next_id;
+                let parent = session.stack.last().copied();
+                session.stack.push(id);
+                Scope(Some(ActiveScope {
+                    id,
+                    parent,
+                    phase,
+                    started: Instant::now(),
+                    started_ms: session.origin.elapsed().as_secs_f64() * 1000.0,
+                    ordinal,
+                    bytes,
+                    result_ok: None,
+                }))
+            })
+        }
+        impl Drop for Scope {
+            fn drop(&mut self) {
+                let Some(ActiveScope {
+                    id,
+                    parent,
+                    phase,
+                    started,
+                    started_ms,
+                    ordinal,
+                    bytes,
+                    result_ok,
+                }) = self.0.take()
+                else {
+                    return;
+                };
+                let duration_ms = started.elapsed().as_secs_f64() * 1000.0;
+                CURRENT.with(|slot| {
+                    let Ok(mut current) = slot.try_borrow_mut() else { return; };
+                    let Some(session) = current.as_mut() else { return; };
+                    if session.stack.last() == Some(&id) { session.stack.pop(); }
+                    session.events.push(json!({"id":id,"parentId":parent,"phase":phase,"thread":format!("{:?}",std::thread::current().id()),"startedMs":started_ms,"endedMs":started_ms+duration_ms,"durationMs":duration_ms,"fileOrdinal":ordinal,"bytes":bytes,"resultOk":result_ok,"panicking":std::thread::panicking(),"endReason":"scope_drop_not_a_success_assertion"}));
+                });
+            }
+        }
+        pub(super) fn capture<T>(
+            operation: &'static str,
+            action: impl FnOnce() -> Result<T, String>,
+        ) -> (Result<T, String>, Vec<Value>) {
+            CURRENT.with(|slot| {
+                let mut current = slot.borrow_mut();
+                assert!(current.is_none(), "Nested capture is unsupported");
+                *current = Some(Session {
+                    origin: Instant::now(),
+                    next_id: 0,
+                    stack: Vec::new(),
+                    files: BTreeMap::new(),
+                    events: Vec::new(),
+                });
+            });
+            let mut total = enter(operation, None);
+            let result = action();
+            total.observe_result(result.is_ok());
+            drop(total);
+            let mut events = CURRENT.with(|slot| slot.borrow_mut().take().unwrap().events);
+            let child_sums: BTreeMap<u64, f64> = events
+                .iter()
+                .filter_map(|event| {
+                    event["parentId"]
+                        .as_u64()
+                        .map(|id| (id, event["durationMs"].as_f64().unwrap()))
+                })
+                .fold(BTreeMap::new(), |mut sums, (id, ms)| {
+                    *sums.entry(id).or_default() += ms;
+                    sums
+                });
+            for event in &mut events {
+                let inclusive = event["durationMs"].as_f64().unwrap();
+                let children = child_sums
+                    .get(&event["id"].as_u64().unwrap())
+                    .copied()
+                    .unwrap_or(0.0);
+                event["inclusiveMs"] = json!(inclusive);
+                event["exclusiveMs"] = json!((inclusive - children).max(0.0));
+            }
+            (result, events)
+        }
+    }
+
+    fn profile_plain_path(path: &Path) {
+        let metadata = fs::symlink_metadata(path).unwrap();
+        assert!(
+            !metadata.file_type().is_symlink(),
+            "Profile fixture symlinks are forbidden"
+        );
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            assert_eq!(
+                metadata.file_attributes() & 0x400,
+                0,
+                "Profile fixture reparse points are forbidden"
+            );
+        }
+    }
+
+    // Type and length encoding plus sorted row hashes bind all logical rows,
+    // including vector BLOBs and virtual FTS rows, while excluding only SQLite
+    // internals and physical shadow tables. VACUUM may change file bytes.
+    fn profile_business(path: &Path) -> std::collections::BTreeMap<String, (usize, String)> {
+        use rusqlite::types::ValueRef;
+        use sha2::{Digest, Sha256};
+        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        let mut table_list = conn.prepare("PRAGMA table_list").unwrap();
+        let tables = table_list
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let mut business = std::collections::BTreeMap::new();
+        for (schema, table, kind) in tables {
+            if schema != "main" || table.starts_with("sqlite_") || kind == "shadow" {
+                continue;
+            }
+            let escaped = table.replace('"', "\"\"");
+            let mut statement = conn
+                .prepare(&format!("SELECT * FROM \"{}\"", escaped))
+                .unwrap();
+            let columns = statement.column_count();
+            let mut rows = statement.query([]).unwrap();
+            let mut row_hashes = Vec::<[u8; 32]>::new();
+            while let Some(row) = rows.next().unwrap() {
+                let mut hash = Sha256::new();
+                hash.update((columns as u64).to_le_bytes());
+                for column in 0..columns {
+                    match row.get_ref(column).unwrap() {
+                        ValueRef::Null => hash.update([0]),
+                        ValueRef::Integer(value) => {
+                            hash.update([1]);
+                            hash.update(value.to_le_bytes());
+                        }
+                        ValueRef::Real(value) => {
+                            hash.update([2]);
+                            hash.update(value.to_bits().to_le_bytes());
+                        }
+                        ValueRef::Text(value) => {
+                            hash.update([3]);
+                            hash.update((value.len() as u64).to_le_bytes());
+                            hash.update(value);
+                        }
+                        ValueRef::Blob(value) => {
+                            hash.update([4]);
+                            hash.update((value.len() as u64).to_le_bytes());
+                            hash.update(value);
+                        }
+                    }
+                }
+                row_hashes.push(hash.finalize().into());
+            }
+            row_hashes.sort_unstable();
+            let mut hash = Sha256::new();
+            for row in &row_hashes {
+                hash.update(row);
+            }
+            business.insert(table, (row_hashes.len(), format!("{:x}", hash.finalize())));
+        }
+        business
+    }
+
+    fn profile_operation<T>(
+        root: &Path,
+        operation: &'static str,
+        action: impl FnOnce() -> Result<T, String>,
+    ) -> T {
+        use std::io::Write;
+        let (result, events) = phase_profile::capture(operation, action);
+        let validations = events
+            .iter()
+            .filter(|event| event["phase"] == "validation.total")
+            .count();
+        let rotation_candidates = events
+            .iter()
+            .filter(|event| event["phase"] == "rotation.candidate")
+            .count();
+        let report = serde_json::json!({"operation":operation,"ok":result.is_ok(),"fullValidationCalls":validations,"rotationCandidates":rotation_candidates,"cacheKiB":VALIDATION_CACHE_KIB,"timing":"inclusive nested spans; do not sum parents and children","events":events});
+        let mut output = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(root.join(format!("{}.json", operation)))
+            .unwrap();
+        serde_json::to_writer_pretty(&mut output, &report).unwrap();
+        output.flush().unwrap();
+        println!(
+            "{}",
+            serde_json::json!({"operation":operation,"ok":result.is_ok(),"fullValidationCalls":validations,"rotationCandidates":rotation_candidates})
+        );
+        result.unwrap_or_else(|error| panic!("Profile operation {} failed: {}", operation, error))
+    }
+
+    fn profile_file_sha256(path: &Path) -> String {
+        use sha2::{Digest, Sha256};
+        use std::io::Read;
+        let mut input = File::open(path).unwrap();
+        let mut hash = Sha256::new();
+        let mut buffer = vec![0_u8; 64 * 1024];
+        loop {
+            let count = input.read(&mut buffer).unwrap();
+            if count == 0 {
+                break;
+            }
+            hash.update(&buffer[..count]);
+        }
+        format!("{:x}", hash.finalize()).to_ascii_uppercase()
+    }
+
+    // Manifest v2 preserves a closed source's raw DB/WAL/SHM bytes separately
+    // from its clone-only checkpoint. This guard never opens the source DB.
+    fn profile_v2_bundle_guard(root: &Path, manifest: &serde_json::Value) {
+        use sha2::{Digest, Sha256};
+        assert_eq!(manifest["sourceBeforeAfterHashesPreserved"], true);
+        assert_eq!(manifest["cloneSidecarsAbsent"], true);
+        profile_plain_path(&root.join("raw-source-bundle"));
+        profile_plain_path(&root.join("raw-source-bundle/backups"));
+        profile_plain_path(&root.join(".clone-checkpoint-started"));
+        let mut originals = std::collections::BTreeMap::new();
+        for file in manifest["sourceBundle"].as_array().unwrap() {
+            let name = file["relativePath"].as_str().unwrap();
+            let relative = Path::new(name);
+            assert!(name.is_ascii() && !relative.is_absolute());
+            assert!(relative
+                .components()
+                .all(|part| matches!(part, std::path::Component::Normal(_))));
+            assert!(
+                matches!(
+                    name,
+                    "library.sqlite3" | "library.sqlite3-wal" | "library.sqlite3-shm"
+                ) || (relative.parent() == Some(Path::new("backups"))
+                    && relative
+                        .extension()
+                        .and_then(|extension| extension.to_str())
+                        == Some("sqlite3"))
+            );
+            assert_eq!(file["rawRelativePath"], format!("raw-source-bundle/{name}"));
+            let before = file["sourceSha256Before"].as_str().unwrap();
+            assert_eq!(before.len(), 64);
+            assert!(before.bytes().all(|byte| byte.is_ascii_hexdigit()));
+            assert_eq!(before, before.to_ascii_uppercase());
+            assert_eq!(file["sourceSha256After"], before);
+            assert_eq!(file["rawSha256"], before);
+            let modified = file["sourceModifiedUtcBefore"].as_str().unwrap();
+            assert!(!modified.is_empty());
+            assert_eq!(file["sourceModifiedUtcAfter"], modified);
+            assert_eq!(file["copiedFromRetainedReadHandle"], true);
+            let raw = root.join("raw-source-bundle").join(relative);
+            profile_plain_path(&raw);
+            assert_eq!(
+                fs::metadata(&raw).unwrap().len(),
+                file["bytes"].as_u64().unwrap()
+            );
+            assert_eq!(profile_file_sha256(&raw), before);
+            assert!(originals.insert(name.to_string(), file).is_none());
+        }
+        assert!((2..=13).contains(&originals.len()));
+        assert!(originals.contains_key("library.sqlite3"));
+        let source_sidecars_absent = !originals.contains_key("library.sqlite3-wal")
+            && !originals.contains_key("library.sqlite3-shm");
+        assert_eq!(
+            manifest["sourceSidecarsAbsent"].as_bool().unwrap(),
+            source_sidecars_absent
+        );
+        let mut bundle = Sha256::new();
+        for (name, file) in &originals {
+            bundle.update((name.len() as u64).to_le_bytes());
+            bundle.update(name.as_bytes());
+            bundle.update(file["bytes"].as_u64().unwrap().to_le_bytes());
+            bundle.update(file["sourceSha256Before"].as_str().unwrap().as_bytes());
+        }
+        assert_eq!(
+            manifest["sourceBundleSha256"],
+            format!("{:x}", bundle.finalize()).to_ascii_uppercase()
+        );
+        let mut clones = std::collections::BTreeSet::new();
+        for file in manifest["cloneFiles"].as_array().unwrap() {
+            let name = file["relativePath"].as_str().unwrap();
+            assert!(clones.insert(name));
+            let original = originals.get(name).unwrap();
+            assert_eq!(file["checkpointApplied"], name == "library.sqlite3");
+            if name != "library.sqlite3" {
+                assert_eq!(file["cloneSha256"], original["sourceSha256Before"]);
+                assert_eq!(file["bytes"], original["bytes"]);
+            }
+            assert!(!root.join(format!("{name}-journal")).exists());
+        }
+        let expected: std::collections::BTreeSet<_> = originals
+            .keys()
+            .filter(|name| !matches!(name.as_str(), "library.sqlite3-wal" | "library.sqlite3-shm"))
+            .map(String::as_str)
+            .collect();
+        assert_eq!(clones, expected);
+        let checkpoint = &manifest["cloneCheckpoint"];
+        assert_eq!(
+            checkpoint["reportRelativePath"],
+            "clone-checkpoint-result.json"
+        );
+        let report_path = root.join("clone-checkpoint-result.json");
+        profile_plain_path(&report_path);
+        assert_eq!(
+            profile_file_sha256(&report_path),
+            checkpoint["reportSha256"].as_str().unwrap()
+        );
+        let report: serde_json::Value =
+            serde_json::from_slice(&fs::read(report_path).unwrap()).unwrap();
+        assert_eq!(report["state"], "PASS_CLONE_ONLY_CHECKPOINT_VALIDATED");
+        assert_eq!(report["sourceSQLiteOpened"], false);
+        assert_eq!(report["rawLibraryUnchanged"], true);
+        assert_eq!(report["cloneSidecarsAbsent"], true);
+        assert_eq!(report["checkpointResult"], serde_json::json!([0, 0, 0]));
+        assert_eq!(report["before"], report["after"]);
+        assert_eq!(report["before"]["schemaVersion"], 11);
+        assert_eq!(report["before"]["integrity"], serde_json::json!(["ok"]));
+        assert_eq!(report["before"]["foreignKeyErrors"], 0);
+        assert_eq!(report["before"]["journalMode"], "wal");
+        assert!(report["before"]["business"].as_object().is_some());
+        let library = manifest["cloneFiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|file| file["relativePath"] == "library.sqlite3")
+            .unwrap();
+        assert_eq!(report["checkpointedCloneSha256"], library["cloneSha256"]);
+        assert_eq!(report["checkpointedCloneBytes"], library["bytes"]);
+        assert_eq!(
+            checkpoint["checkpointedCloneSha256"],
+            library["cloneSha256"]
+        );
+        assert_eq!(checkpoint["schemaVersion"], 11);
+    }
+
+    #[test]
+    #[ignore = "heavy I/O; requires a newly prepared storage-phase-profile fixture; never run with formal memory acceptance"]
+    fn profile_file_backed_backup_phases() {
+        use sha2::{Digest, Sha256};
+        use std::io::{Read, Write};
+        let supplied = PathBuf::from(
+            std::env::var_os("IMAGELORE_BACKUP_PHASE_PROFILE_DIR")
+                .expect("Explicit fresh profile fixture is required"),
+        );
+        assert!(supplied.is_absolute());
+        profile_plain_path(&supplied);
+        let root = fs::canonicalize(&supplied).unwrap();
+        let project = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let evidence = fs::canonicalize(project.join("<private-evidence>")).unwrap();
+        assert_eq!(root.parent(), Some(evidence.as_path()));
+        assert!(root
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("storage-phase-profile-"));
+        assert!(
+            !root.join(".imagelore-acceptance-root").exists(),
+            "A profile fixture must not be a GUI acceptance data root"
+        );
+        let marker = root.join(".imagelore-storage-phase-profile");
+        profile_plain_path(&marker);
+        let manifest_path = root.join("fixture-manifest.json");
+        profile_plain_path(&manifest_path);
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        let fixture_version = manifest["fixtureVersion"].as_u64().unwrap();
+        assert!(
+            matches!(fixture_version, 1 | 2),
+            "Future fixture versions are unsupported"
+        );
+        assert_eq!(
+            fs::read_to_string(&marker).unwrap().trim(),
+            format!("ImageLore storage phase profile fixture v{fixture_version}")
+        );
+        let profile_source_sha256 =
+            format!("{:x}", Sha256::digest(include_bytes!("backup.rs"))).to_ascii_uppercase();
+        assert_eq!(
+            manifest["profileSourceSha256"].as_str().unwrap(),
+            profile_source_sha256,
+            "Fixture must bind the exact compiled backup.rs source"
+        );
+        let profile_db_source_sha256 =
+            format!("{:x}", Sha256::digest(include_bytes!("db.rs"))).to_ascii_uppercase();
+        assert_eq!(
+            manifest["profileDbSourceSha256"].as_str().unwrap(),
+            profile_db_source_sha256,
+            "Fixture must bind the exact compiled db.rs source"
+        );
+        assert_eq!(manifest["fixtureType"], "storage-phase-profile");
+        assert_eq!(manifest["sourceSQLiteOpened"], false);
+        assert_eq!(manifest["exclusiveReadHandles"], true);
+        if fixture_version == 1 {
+            assert_eq!(manifest["sourceSidecarsAbsent"], true);
+        }
+        assert_eq!(manifest["singleUse"], true);
+        assert!(
+            !root.join(".profile-run-reserved").exists(),
+            "This fixture has already been used; refuse before hash preflight"
+        );
+        assert_eq!(
+            fs::canonicalize(Path::new(manifest["sourceRoot"].as_str().unwrap())).unwrap(),
+            fs::canonicalize(evidence.join("native-gui/data")).unwrap()
+        );
+        assert_eq!(
+            fs::canonicalize(Path::new(manifest["destination"].as_str().unwrap())).unwrap(),
+            root
+        );
+        if fixture_version == 2 {
+            profile_v2_bundle_guard(&root, &manifest);
+        }
+        let files = manifest[if fixture_version == 1 {
+            "files"
+        } else {
+            "cloneFiles"
+        }]
+        .as_array()
+        .unwrap();
+        let hash_field = if fixture_version == 1 {
+            "sourceSha256"
+        } else {
+            "cloneSha256"
+        };
+        assert!((2..=11).contains(&files.len()));
+        let initial_backups = files
+            .iter()
+            .filter(|file| {
+                file["relativePath"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("backups/")
+            })
+            .count();
+        assert!((1..=MAX_BACKUPS).contains(&initial_backups));
+        assert_eq!(
+            manifest["initialBackupCount"].as_u64().unwrap(),
+            initial_backups as u64
+        );
+        let mut unique_files = std::collections::BTreeSet::new();
+        for file in files {
+            let relative = Path::new(file["relativePath"].as_str().unwrap());
+            assert!(
+                !relative.is_absolute()
+                    && relative
+                        .components()
+                        .all(|part| matches!(part, std::path::Component::Normal(_)))
+            );
+            assert_eq!(file[hash_field].as_str().unwrap().len(), 64);
+            assert!(file[hash_field]
+                .as_str()
+                .unwrap()
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit()));
+            assert_eq!(file["copiedFromRetainedReadHandle"], true);
+            assert!(unique_files.insert(relative.to_path_buf()));
+            assert!(
+                relative == Path::new("library.sqlite3")
+                    || (relative.parent() == Some(Path::new("backups"))
+                        && relative
+                            .extension()
+                            .and_then(|extension| extension.to_str())
+                            == Some("sqlite3"))
+            );
+            let copy = root.join(relative);
+            profile_plain_path(&copy);
+            assert_eq!(
+                fs::metadata(&copy).unwrap().len(),
+                file["bytes"].as_u64().unwrap()
+            );
+            // Verify prepared bytes before init_db can change WAL/layout. This
+            // streaming preflight warms every clone and is outside all timings.
+            let mut input = File::open(&copy).unwrap();
+            let mut hash = Sha256::new();
+            let mut buffer = vec![0_u8; 64 * 1024];
+            loop {
+                let count = input.read(&mut buffer).unwrap();
+                if count == 0 {
+                    break;
+                }
+                hash.update(&buffer[..count]);
+            }
+            assert_eq!(
+                format!("{:x}", hash.finalize()).to_ascii_uppercase(),
+                file[hash_field].as_str().unwrap()
+            );
+            assert!(!companions(&copy)
+                .iter()
+                .skip(1)
+                .any(|sidecar| sidecar.exists()));
+        }
+        assert!(unique_files.contains(Path::new("library.sqlite3")));
+        profile_plain_path(&root.join("backups"));
+        let mut reservation = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(root.join(".profile-run-reserved"))
+            .expect("This fixture has already been used; prepare a fresh one");
+        reservation
+            .write_all(b"single use: profile run started\n")
+            .unwrap();
+        drop(reservation);
+        let database = root.join("library.sqlite3");
+        profile_plain_path(&database);
+        let startup_backups = records(&root.join("backups")).unwrap();
+        let conn = profile_operation(&root, "startup_normal", || {
+            crate::open_library_connection(&database, &root, &root.join("backups"))
+        });
+        assert!(
+            !root.join("recovery").exists()
+                && !crate::diagnostics::recovery_notice_path(&root).exists(),
+            "A normal-startup sample must not recover or replace the library"
+        );
+        assert_eq!(
+            records(&root.join("backups"))
+                .unwrap()
+                .iter()
+                .map(|record| &record.name)
+                .collect::<Vec<_>>(),
+            startup_backups
+                .iter()
+                .map(|record| &record.name)
+                .collect::<Vec<_>>()
+        );
+        let sqlite_version: String = conn
+            .query_row("SELECT sqlite_version()", [], |row| row.get(0))
+            .unwrap();
+        let asset_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM assets", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(
+            asset_count, 50_000,
+            "The explicit scale fixture must contain 50k assets"
+        );
+        let mutation_id: i64 = conn
+            .query_row(
+                "SELECT asset_id FROM prompt_state ORDER BY asset_id LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let state = AppState {
+            db: std::sync::Mutex::new(conn),
+            backup_operation: std::sync::Mutex::new(()),
+            data_dir: root.clone(),
+            database_path: database.clone(),
+            cache_dir: root.join("cache"),
+            backups_dir: root.join("backups"),
+            models_dir: root.join("models"),
+            jobs: std::sync::Mutex::new(std::collections::HashMap::new()),
+            next_job_id: std::sync::atomic::AtomicU64::new(1),
+            vision_api_key: std::sync::Mutex::new(String::new()),
+        };
+        let baseline = profile_business(&database);
+        validate(&database).unwrap();
+        let before_auto = records(&state.backups_dir).unwrap();
+        assert_eq!(before_auto.len(), initial_backups);
+        let recent_time = before_auto[0].created_at + 1;
+        assert!(
+            profile_operation(&root, "auto_recent", || ensure_auto_at(&state, recent_time))
+                .is_none()
+        );
+        assert_eq!(
+            records(&state.backups_dir)
+                .unwrap()
+                .iter()
+                .map(|record| &record.name)
+                .collect::<Vec<_>>(),
+            before_auto
+                .iter()
+                .map(|record| &record.name)
+                .collect::<Vec<_>>()
+        );
+        let created = profile_operation(&root, "manual_create", || create(&state, "imagelore"));
+        validate(Path::new(&created.path)).unwrap();
+        assert_eq!(profile_business(Path::new(&created.path)), baseline);
+        assert_eq!(profile_business(&database), baseline);
+        let due_time = records(&state.backups_dir).unwrap()[0].created_at + AUTO_INTERVAL;
+        let automatic = profile_operation(&root, "auto_due_create", || {
+            ensure_auto_at(&state, due_time)
+        })
+        .expect("Due automatic operation must create a backup");
+        validate(Path::new(&automatic.path)).unwrap();
+        assert_eq!(profile_business(Path::new(&automatic.path)), baseline);
+        assert!(profile_operation(&root, "stage_restore", || {
+            stage_restore_at(&state, &created.name)
+        }));
+        let pending = root.join("restore.pending.sqlite3");
+        validate(&pending).unwrap();
+        assert_eq!(profile_business(&pending), baseline);
+        assert_eq!(
+            profile_business(&database),
+            baseline,
+            "Staging cannot change the active library"
+        );
+        state
+            .db
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE prompt_state SET prompt=?1 WHERE asset_id=?2",
+                rusqlite::params!["Synthetic storage phase profile mutation", mutation_id],
+            )
+            .unwrap();
+        drop(state); // The real replacement guard requires a closed active DB.
+        let mutated = profile_business(&database);
+        assert_ne!(mutated, baseline);
+        profile_operation(&root, "apply_pending_restore", || {
+            apply_pending_restore(&database, &root, &root.join("backups"))
+        });
+        let reopened = crate::db::init_db(&database).unwrap();
+        drop(reopened);
+        validate(&database).unwrap();
+        assert_eq!(profile_business(&database), baseline);
+        assert!(!pending.exists() && !root.join("restore.rollback").exists());
+        let preserved: Vec<_> = fs::read_dir(root.join("backups"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("pre-restore-")
+                    && path
+                        .file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .ends_with(".sqlite3.raw")
+            })
+            .collect();
+        assert!(
+            !preserved.is_empty(),
+            "Original forensic copies must survive restore"
+        );
+        for path in &preserved {
+            profile_plain_path(path);
+            validate(path).unwrap();
+        }
+        assert!(preserved
+            .iter()
+            .any(|path| profile_business(path) == mutated));
+        let final_backups = records(&root.join("backups")).unwrap();
+        assert!(final_backups.len() <= MAX_BACKUPS);
+        for backup in &final_backups {
+            validate(Path::new(&backup.path)).unwrap();
+        }
+        let summary = serde_json::json!({"state":"PASS_PROFILE_WORKFLOW_ASSERTIONS","packageVersion":env!("CARGO_PKG_VERSION"),"profileSourceSha256":profile_source_sha256,"profileDbSourceSha256":profile_db_source_sha256,"sqliteVersion":sqlite_version,"assetCount":asset_count,"initialBackups":initial_backups,"finalBackups":final_backups.len(),"business":baseline,"preservedRawCount":preserved.len(),"cacheBoundary":"OS cache uncontrolled: fixture copying/hash, streaming hash preflight of every clone, startup and untimed business/integrity assertions warm pages; fixed operation order; not a cold-cache claim","order":["startup_normal","auto_recent","manual_create","auto_due_create","stage_restore","apply_pending_restore"],"validationCacheKiB":VALIDATION_CACHE_KIB,"scope":"open_library_connection backend-only and synchronous production backup helpers; excludes global prepare_state (data_root/dirs/apply_pending_restore/cache-prune/diagnostics), Tauri/WebView/FCP/library-ready/blocking-pool queue/UI; uncontended mutex waits; inclusive and exclusive span durations","sourceLibraryOpenedByTest":false});
+        let mut output = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(root.join("profile-summary.json"))
+            .unwrap();
+        serde_json::to_writer_pretty(&mut output, &summary).unwrap();
+        output.flush().unwrap();
+        println!(
+            "{}",
+            serde_json::json!({"state":"PASS_PROFILE_WORKFLOW_ASSERTIONS","assetCount":asset_count,"initialBackups":initial_backups,"finalBackups":final_backups.len(),"coldCacheProven":false})
+        );
+    }
 
     #[test]
     #[ignore = "requires an explicitly marked, isolated file-backed acceptance library"]

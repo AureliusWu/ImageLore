@@ -149,14 +149,41 @@ pub fn error_log_root() -> PathBuf {
 }
 
 pub fn init_db(path: &Path) -> Result<Connection, String> {
-    let conn = Connection::open(path).map_err(|e| e.to_string())?;
-    conn.pragma_update(None, "foreign_keys", "ON")
-        .map_err(|e| e.to_string())?;
-    conn.pragma_update(None, "journal_mode", "WAL")
-        .map_err(|e| e.to_string())?;
-    conn.pragma_update(None, "synchronous", "NORMAL")
-        .map_err(|e| e.to_string())?;
-    crate::migrations::apply(&conn)?;
+    #[cfg(test)]
+    let mut open_phase = crate::backup::storage_profile_span("db.open", Some(path));
+    let opened = Connection::open(path);
+    #[cfg(test)]
+    {
+        open_phase.observe_result(opened.is_ok());
+        drop(open_phase);
+    }
+    let conn = opened.map_err(|e| e.to_string())?;
+    #[cfg(test)]
+    let mut configure_phase = crate::backup::storage_profile_span("db.configure", None);
+    let foreign_keys = conn.pragma_update(None, "foreign_keys", "ON");
+    #[cfg(test)]
+    configure_phase.observe_result(foreign_keys.is_ok());
+    foreign_keys.map_err(|e| e.to_string())?;
+    let journal_mode = conn.pragma_update(None, "journal_mode", "WAL");
+    #[cfg(test)]
+    configure_phase.observe_result(journal_mode.is_ok());
+    journal_mode.map_err(|e| e.to_string())?;
+    let synchronous = conn.pragma_update(None, "synchronous", "NORMAL");
+    #[cfg(test)]
+    {
+        configure_phase.observe_result(synchronous.is_ok());
+        drop(configure_phase);
+    }
+    synchronous.map_err(|e| e.to_string())?;
+    #[cfg(test)]
+    let mut migration_phase = crate::backup::storage_profile_span("db.migration", None);
+    let migrated = crate::migrations::apply(&conn);
+    #[cfg(test)]
+    {
+        migration_phase.observe_result(migrated.is_ok());
+        drop(migration_phase);
+    }
+    migrated?;
     Ok(conn)
 }
 
