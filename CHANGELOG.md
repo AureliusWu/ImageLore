@@ -11,6 +11,7 @@
 - Invalidated preview caches on subsecond source replacement with nanosecond file timestamps and an explicit cache-key namespace.
 - Initialized public CLIP downloads from the library's isolated cache without reading or sending user Hugging Face credentials, retaining fixed revisions and model hash checks.
 - Bounded temporary full-database validation caches, kept manual backup/restore preparation off the window thread, and waited for manual and automatic safety work before close.
+- Preserved pre-existing integrity-probe directories on allocation failure, cleaned up only owned copies, and added process/sequence names with bounded collision retries.
 - Made model downloads and preparation waits cancellable with finite network timeouts, registered terminal listeners before starting index jobs, and prevented stale model queries from overwriting readiness after cache deletion.
 - Removed silent semantic candidate truncation above 100,000 assets, with a deterministic regression; performance at that scale remains unbenchmarked.
 - Rejected malformed, non-finite, zero and non-unit 512-dimensional semantic vectors, rebuilt corrupt current-fingerprint rows, normalized finite model output through float64, and propagated candidate conversion failures instead of silently dropping results.

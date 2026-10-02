@@ -3,6 +3,7 @@ use rusqlite::{Connection, OpenFlags};
 use std::{
     fs::{self, File, OpenOptions},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 use tauri::{Manager, State};
@@ -717,10 +718,32 @@ fn finish_or_rollback(database: &Path, data_dir: &Path) -> Result<(), String> {
 fn copy_probe_files(database: &Path) -> std::io::Result<PathBuf> {
     #[cfg(test)]
     let _copy = tests::phase_profile::enter("probe.copy_db_wal", Some(database));
-    let probe_dir = std::env::temp_dir().join(format!("imagelore-integrity-probe-{}", now_nanos()));
+    static NEXT_PROBE: AtomicU64 = AtomicU64::new(0);
+    for _ in 0..8 {
+        let sequence = NEXT_PROBE.fetch_add(1, Ordering::Relaxed);
+        let probe_dir = std::env::temp_dir().join(format!(
+            "imagelore-integrity-probe-{}-{}-{}",
+            std::process::id(),
+            now_nanos(),
+            sequence
+        ));
+        match copy_probe_files_into(database, probe_dir) {
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            result => return result,
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "无法创建独立的完整性检查临时目录",
+    ))
+}
+
+fn copy_probe_files_into(database: &Path, probe_dir: PathBuf) -> std::io::Result<PathBuf> {
     let probe = probe_dir.join("library.sqlite3");
+    // Only a successful atomic create gives this call ownership. If another
+    // probe already occupies the path, return without cleaning up its files.
+    fs::create_dir(&probe_dir)?;
     let result = (|| {
-        fs::create_dir(&probe_dir)?;
         // SHM is a derived WAL index and may contain active Windows byte-range
         // locks. Rebuild it in the disposable copy instead of copying a locked
         // index; DB + committed WAL carry all durable content.
@@ -1997,6 +2020,43 @@ mod tests {
         let root = std::env::temp_dir().join(format!("imagelore-{}-{}", label, now_nanos()));
         fs::create_dir_all(root.join("backups")).unwrap();
         root
+    }
+
+    #[test]
+    fn probe_collision_keeps_preexisting_directory() {
+        let root = test_root("probe-collision");
+        let probe = root.join("occupied-probe");
+        fs::create_dir(&probe).unwrap();
+        let marker = probe.join("another-owner.bin");
+        let original = b"another operation owns this directory\0\xff";
+        fs::write(&marker, original).unwrap();
+
+        let result = copy_probe_files_into(&root.join("library.sqlite3"), probe.clone());
+        assert_eq!(
+            result.unwrap_err().kind(),
+            std::io::ErrorKind::AlreadyExists
+        );
+        assert_eq!(fs::read(&marker).unwrap(), original);
+        assert_eq!(fs::read_dir(&probe).unwrap().count(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn probe_cleanup_after_owned_copy_failure_preserves_source() {
+        let root = test_root("probe-copy-failure");
+        // A directory cannot be copied as database bytes. The cleanup may only
+        // remove the new probe, never the source or its contents.
+        let source = root.join("library.sqlite3");
+        fs::create_dir(&source).unwrap();
+        let marker = source.join("retained-source.bin");
+        let original = b"source must survive failed probe copy\0\xff";
+        fs::write(&marker, original).unwrap();
+        let probe = root.join("owned-probe");
+
+        assert!(copy_probe_files_into(&source, probe.clone()).is_err());
+        assert!(!probe.exists());
+        assert_eq!(fs::read(&marker).unwrap(), original);
+        fs::remove_dir_all(root).unwrap();
     }
 
     fn seed(path: &Path, value: &str) -> Connection {
