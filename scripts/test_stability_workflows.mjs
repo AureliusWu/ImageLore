@@ -4,6 +4,10 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import ts from "typescript";
 import { startBackupSchedule } from "../src/backupWorkflow.ts";
+import {
+  trackImportOperation,
+  waitForImportCloseOperations,
+} from "../src/pendingImportOperations.ts";
 
 function deferred() {
   let resolve, reject;
@@ -128,10 +132,13 @@ function appCallbackSource(name) {
       ts.isVariableDeclaration(node) &&
       node.name.getText(appSyntax) === name &&
       node.initializer &&
-      ts.isCallExpression(node.initializer) &&
-      node.initializer.expression.getText(appSyntax) === "useCallback"
+      (ts.isArrowFunction(node.initializer) ||
+        (ts.isCallExpression(node.initializer) &&
+          node.initializer.expression.getText(appSyntax) === "useCallback"))
     ) {
-      callback = node.initializer.arguments[0].getText(appSyntax);
+      callback = (
+        ts.isArrowFunction(node.initializer) ? node.initializer : node.initializer.arguments[0]
+      ).getText(appSyntax);
     }
     ts.forEachChild(node, visit);
   }
@@ -150,6 +157,7 @@ function manualBackupHarness(
   flushEditor = async () => {},
   refreshManager = async () => {},
   schedule = null,
+  extra = {},
 ) {
   const manualBackupOperation = { current: null };
   const closePending = { current: false };
@@ -160,6 +168,10 @@ function manualBackupHarness(
     manualBackupOperation,
     closePending,
     backupSchedule,
+    pendingImports: { current: new Set() },
+    getEditEpoch: () => 0,
+    trackImportOperation,
+    waitForImportCloseOperations,
     flushEditor,
     refreshManager,
     setStatus: (value) => (values.status = value),
@@ -170,7 +182,14 @@ function manualBackupHarness(
       },
     },
     module: { exports: {} },
+    ...extra,
   });
+  for (const name of ["flushClosingEditor"]) {
+    if (appSource.includes(`const ${name} =`)) {
+      vm.runInContext(appCallbackSource(name), context);
+      context[name] = context.module.exports;
+    }
+  }
   for (const name of ["runManualBackupOperation", "beforeClose", "createBackup", "restoreBackup"]) {
     vm.runInContext(appCallbackSource(name), context);
     context[name] = context.module.exports;
@@ -197,6 +216,7 @@ function manualBackupHarness(
     restoreBackup: context.restoreBackup,
     beforeClose: context.beforeClose,
     onCloseError: context.module.exports,
+    context,
   };
 }
 
@@ -1279,4 +1299,367 @@ test("closing with a real import cancellation failure keeps the window open", as
   await onClose({ preventDefault() {} });
   assert.equal(destroyed, 0);
   assert.match(closeError.message, /synthetic cancellation failure/);
+});
+
+async function immediateImportCloseHarness(api = {}, options = {}) {
+  const events = [];
+  let onClose;
+  let destroyed = 0;
+  const app = manualBackupHarness(
+    { semanticStatus: async () => ({ enabled: false, stale: 0 }), ...api },
+    options.flushEditor ?? (async () => events.push("flush")),
+    async () => {},
+    null,
+    {
+      isTauri: true,
+      current: asset(1),
+      assetSession: { session_id: 7 },
+      open: options.open ?? (async () => "synthetic.png"),
+      persistRemix: options.persistRemix ?? (async () => ({ id: 8 })),
+      refreshSessions: options.refreshSessions ?? (async () => {}),
+      refresh: options.refresh ?? (async () => {}),
+      refreshFacets: async () => {},
+      refreshSources: async () => {},
+      setTab: () => {},
+      setSemanticStatus: () => {},
+      importActive: false,
+      semanticActive: false,
+      startImportJob: options.startImportJob ?? (async (_label, starter) => starter()),
+      startImportJobUnchecked: options.startImportJob ?? (async (_label, starter) => starter()),
+      startSemanticIndex: options.startSemanticIndex ?? (async () => {}),
+      startSemanticIndexUnchecked: options.startSemanticIndex ?? (async () => {}),
+      cancelImportJob: options.cancelImportJob ?? (async () => {}),
+      cancelSemanticIndex: options.cancelSemanticIndex ?? (async () => {}),
+      getEditEpoch: options.getEditEpoch ?? (() => 0),
+    },
+  );
+  for (const name of [
+    "startImportJob",
+    "startSemanticIndex",
+    "runImmediateImportOperation",
+    "importDone",
+    "cancelBackground",
+    "importImmediate",
+    "startBackgroundImport",
+    "importDerivative",
+    "importRemixResult",
+    "syncSourceFolders",
+  ]) {
+    if (!appSource.includes(`const ${name} =`)) continue;
+    vm.runInContext(appCallbackSource(name), app.context);
+    app.context[name] = app.context.module.exports;
+  }
+  let cancelSource;
+  function visit(node) {
+    if (ts.isCallExpression(node) && node.expression.getText(appSyntax) === "useCloseGuard")
+      cancelSource = node.arguments[1].getText(appSyntax);
+    ts.forEachChild(node, visit);
+  }
+  visit(appSyntax);
+  vm.runInContext(
+    ts.transpileModule(`module.exports = ${cancelSource};`, {
+      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+    }).outputText,
+    app.context,
+  );
+  const close = hookHarness("useCloseGuard", {}, () => ({
+    onCloseRequested: async (callback) => {
+      onClose = callback;
+      return () => {};
+    },
+    destroy: async () => {
+      destroyed++;
+      events.push("destroy");
+    },
+  }));
+  close.render(app.beforeClose, app.context.module.exports, app.onCloseError);
+  await new Promise(setImmediate);
+  return {
+    ...app,
+    events,
+    destroyed: () => destroyed,
+    close: () => onClose({ preventDefault() {} }),
+  };
+}
+
+test("actual App immediate import is owned before its first microtask and close waits", async () => {
+  const native = deferred();
+  const app = await immediateImportCloseHarness();
+  const operation = app.context.importImmediate("importing", () => native.promise);
+  const closing = app.close();
+  try {
+    await new Promise(setImmediate);
+    assert.equal(app.destroyed(), 0);
+    assert.equal(app.context.pendingImports.current.size, 1);
+  } finally {
+    native.resolve({ added: 1, skipped: 0, duplicates: 0, failed: 0, last_id: 2 });
+    await Promise.allSettled([operation, closing]);
+  }
+  assert.equal(app.destroyed(), 1);
+  assert.equal(app.context.pendingImports.current.size, 0);
+});
+
+for (const kind of ["importDerivative", "importRemixResult"]) {
+  test(`actual App ${kind} picker returning after close cannot begin a native import`, async () => {
+    const picker = deferred();
+    let calls = 0;
+    const app = await immediateImportCloseHarness(
+      {
+        importPaths: async () => {
+          calls++;
+          return { last_id: null };
+        },
+      },
+      { open: () => picker.promise },
+    );
+    const operation = app.context[kind]();
+    await new Promise(setImmediate);
+    const closing = app.close();
+    picker.resolve("synthetic.png");
+    await Promise.allSettled([operation, closing]);
+    assert.equal(calls, 0);
+    assert.equal(app.destroyed(), 1);
+  });
+
+  test(`actual App ${kind} close waits for lineage, session and final refresh`, async () => {
+    const lineage = deferred();
+    const session = deferred();
+    const refreshed = deferred();
+    let lineageStarted = false;
+    let sessionStarted = false;
+    let refreshStarted = false;
+    const app = await immediateImportCloseHarness(
+      {
+        importPaths: async () => ({ last_id: 2, duplicates: 0 }),
+        addRelation: async () => {
+          lineageStarted = true;
+          await lineage.promise;
+        },
+        applyRemixLineage: async () => {
+          lineageStarted = true;
+          await lineage.promise;
+        },
+        setAssetSession: async () => {
+          sessionStarted = true;
+          await session.promise;
+        },
+      },
+      {
+        refresh: async () => {
+          refreshStarted = true;
+          await refreshed.promise;
+        },
+      },
+    );
+    const operation = app.context[kind]();
+    await new Promise(setImmediate);
+    assert.equal(lineageStarted, true);
+    const closing = app.close();
+    try {
+      await new Promise(setImmediate);
+      assert.equal(app.destroyed(), 0);
+      lineage.resolve();
+      await new Promise(setImmediate);
+      if (kind === "importDerivative") {
+        assert.equal(sessionStarted, true);
+        assert.equal(app.destroyed(), 0);
+      }
+      session.resolve();
+      await new Promise(setImmediate);
+      assert.equal(refreshStarted, true);
+      assert.equal(app.destroyed(), 0);
+    } finally {
+      lineage.resolve();
+      session.resolve();
+      refreshed.resolve();
+      await Promise.allSettled([operation, closing]);
+    }
+    assert.equal(app.destroyed(), 1);
+  });
+}
+
+test("actual App close waits for every owned import before reporting one raw rejection, then permits retry", async () => {
+  const failed = deferred();
+  const unfinished = deferred();
+  const failure = new Error("synthetic immediate import failure");
+  let secondSettled = false;
+  const app = await immediateImportCloseHarness();
+  const one = app.context.importImmediate("one", () => failed.promise);
+  const two = app.context.importImmediate("two", async () => {
+    await unfinished.promise;
+    secondSettled = true;
+    return { added: 1, skipped: 0, duplicates: 0, failed: 0, last_id: 2 };
+  });
+  await new Promise(setImmediate);
+  const closing = app.close();
+  failed.reject(failure);
+  try {
+    await new Promise(setImmediate);
+    assert.equal(app.destroyed(), 0);
+    assert.equal(secondSettled, false);
+    assert.equal(
+      app.closePending.current,
+      true,
+      "Close cannot resume while another owned write is pending",
+    );
+  } finally {
+    unfinished.resolve();
+    await Promise.allSettled([one, two, closing]);
+  }
+  assert.equal(app.destroyed(), 0);
+  assert.equal(app.closePending.current, false);
+  assert.match(app.values.status, /关闭前.*synthetic immediate import failure/);
+  await app.context.importImmediate("retry", async () => ({
+    added: 1,
+    skipped: 0,
+    duplicates: 0,
+    failed: 0,
+    last_id: 2,
+  }));
+  await app.close();
+  assert.equal(app.destroyed(), 1);
+});
+
+test("actual App closing refuses a new import and delayed importDone cannot start semantic work", async () => {
+  let picked = 0;
+  let started = 0;
+  const app = await immediateImportCloseHarness(
+    { semanticStatus: async () => ({ enabled: true, stale: 1 }) },
+    {
+      open: async () => {
+        picked++;
+        return null;
+      },
+      startSemanticIndex: async () => started++,
+    },
+  );
+  app.closePending.current = true;
+  await app.context.importDerivative();
+  await app.context.importRemixResult();
+  await app.context.importDone({ last_id: 2 });
+  assert.equal(picked, 0);
+  assert.equal(started, 0);
+});
+
+test("actual App Inbox focus and late pre-import saves cannot start jobs while closing", async () => {
+  let started = 0;
+  let focus;
+  const saved = deferred();
+  const app = await immediateImportCloseHarness(
+    {},
+    {
+      flushEditor: () => saved.promise,
+      startImportJob: async () => started++,
+    },
+  );
+  const preparing = app.context.startBackgroundImport(
+    "preparing",
+    async () => 7,
+    async () => ({}),
+  );
+  let effect;
+  function visit(node) {
+    if (ts.isCallExpression(node) && node.expression.getText(appSyntax) === "useEffect") {
+      const source = node.arguments[0].getText(appSyntax);
+      if (source.includes('window.addEventListener("focus", focus)')) effect = source;
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(appSyntax);
+  assert.ok(effect, "Actual App Inbox focus effect was not found");
+  Object.assign(app.context, {
+    sourceFolders: [{ id: 9, name: "ImageLore Inbox" }],
+    inboxFocusSyncAt: { current: 0 },
+    window: {
+      addEventListener: (_event, callback) => {
+        focus = callback;
+      },
+    },
+  });
+  vm.runInContext(
+    ts.transpileModule(`module.exports = ${effect};`, {
+      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+    }).outputText,
+    app.context,
+  );
+  app.context.module.exports();
+  app.closePending.current = true;
+  focus();
+  saved.resolve();
+  await preparing;
+  await app.context.syncSourceFolders([9]);
+  assert.equal(started, 0);
+});
+
+test("actual App close catches a start from the same turn before active state rendered", async () => {
+  const ack = deferred();
+  const job = hookHarness("useImportJob", { cancelImport: async () => true });
+  const controls = job.render(
+    async () => {},
+    () => {},
+  );
+  const app = await immediateImportCloseHarness(
+    {},
+    {
+      startImportJob: controls.start,
+      cancelImportJob: controls.cancel,
+    },
+  );
+  const starting = app.context.startImportJob("starting", () => ack.promise);
+  const closing = app.close();
+  try {
+    await new Promise(setImmediate);
+    assert.equal(app.destroyed(), 0);
+    ack.resolve(7);
+    await starting;
+    await new Promise(setImmediate);
+    assert.equal(app.destroyed(), 0, "Cancellation acknowledgement is not terminal completion");
+  } finally {
+    ack.resolve(7);
+    await starting;
+    job.emitProgress({
+      job_id: 7,
+      done: true,
+      cancelled: true,
+      added: 0,
+      skipped: 0,
+      duplicates: 0,
+      failed: 0,
+    });
+    await closing;
+  }
+  assert.equal(app.destroyed(), 1);
+});
+
+test("actual App close saves an edit typed while the final save is pending before destroying", async () => {
+  const firstSave = deferred();
+  const writes = [];
+  const editorHook = hookHarness("useEditorDraft", {
+    updatePrompt: async (id, patch) => {
+      writes.push(patch.prompt);
+      if (writes.length === 1) await firstSave.promise;
+      return { ...asset(id), ...patch };
+    },
+  });
+  const editor = editorHook.render(
+    asset(1),
+    () => {},
+    () => {},
+    () => {},
+  );
+  editor.setPrompt("before close");
+  const app = await immediateImportCloseHarness(
+    {},
+    {
+      flushEditor: editor.flush,
+      getEditEpoch: editor.getEditEpoch,
+    },
+  );
+  const closing = app.close();
+  await new Promise(setImmediate);
+  editor.setPrompt("typed during final save");
+  firstSave.resolve();
+  await closing;
+  assert.deepEqual(writes, ["before close", "typed during final save"]);
+  assert.equal(app.destroyed(), 1);
 });

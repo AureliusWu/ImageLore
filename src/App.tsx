@@ -42,6 +42,7 @@ import { useVisionWorkflow } from "./hooks/useVisionWorkflow";
 import { nextAssetIndex, saveExtension } from "./previewWorkflow";
 import { buildRemixPrompt, nonEmptyDnaFields } from "./remixWorkflow";
 import { startBackupSchedule } from "./backupWorkflow";
+import { trackImportOperation, waitForImportCloseOperations } from "./pendingImportOperations";
 
 const PAGE_SIZE = 240;
 const emptyFacets: LibraryFacets = {
@@ -160,6 +161,7 @@ export default function App() {
   const inboxFocusSyncAt = useRef(0);
   const previewAssetId = useRef<number | null>(null);
   const manualBackupOperation = useRef<Promise<void> | null>(null);
+  const pendingImports = useRef(new Set<Promise<void>>());
   const backupSchedule = useRef<ReturnType<typeof startBackupSchedule> | null>(null);
   const closePending = useRef(false);
   const currentAssetId = useRef(current?.id);
@@ -227,6 +229,13 @@ export default function App() {
     loadIfUnchanged,
     rebaseIfCurrent,
   } = editor;
+  const flushClosingEditor = useCallback(async () => {
+    let epoch: number;
+    do {
+      epoch = getEditEpoch();
+      await flushEditor();
+    } while (getEditEpoch() !== epoch);
+  }, [flushEditor, getEditEpoch]);
 
   const {
     visionSettings,
@@ -510,11 +519,18 @@ export default function App() {
     if (searchMode === "semantic") await refresh(current?.id);
   }, setStatus);
   const {
-    start: startSemanticIndex,
+    start: startSemanticIndexUnchecked,
     cancel: cancelSemanticIndex,
     active: semanticActive,
     progress: semanticProgress,
   } = semanticJob;
+  const startSemanticIndex = useCallback(() => {
+    if (closePending.current) {
+      setStatus("正在准备关闭，请稍候");
+      return Promise.resolve(false);
+    }
+    return startSemanticIndexUnchecked();
+  }, [startSemanticIndexUnchecked]);
 
   const importDone = useCallback(
     async (result: ImportSummary) => {
@@ -530,11 +546,21 @@ export default function App() {
   );
   const importJob = useImportJob(importDone, setStatus);
   const {
-    start: startImportJob,
+    start: startImportJobUnchecked,
     cancel: cancelImportJob,
     active: importActive,
     progress: importProgress,
   } = importJob;
+  const startImportJob = useCallback(
+    (label: string, starter: () => Promise<number>) => {
+      if (closePending.current) {
+        setStatus("正在准备关闭，请稍候");
+        return Promise.resolve(false);
+      }
+      return startImportJobUnchecked(label, starter);
+    },
+    [startImportJobUnchecked],
+  );
   useEffect(() => {
     if (!isTauri || autoSyncStarted.current) return;
     autoSyncStarted.current = true;
@@ -551,7 +577,7 @@ export default function App() {
     if (!isTauri) return;
     const focus = () => {
       const inbox = sourceFolders.find((x) => x.name === "ImageLore Inbox");
-      if (!inbox || importActive) return;
+      if (!inbox || importActive || closePending.current) return;
       const now = Date.now();
       if (now - inboxFocusSyncAt.current < 3000) return;
       inboxFocusSyncAt.current = now;
@@ -561,9 +587,10 @@ export default function App() {
     return () => window.removeEventListener("focus", focus);
   }, [sourceFolders, importActive, startImportJob]);
   const cancelBackground = useCallback(async () => {
-    if (importActive) await cancelImportJob();
-    if (semanticActive) await cancelSemanticIndex();
-  }, [importActive, semanticActive, cancelImportJob, cancelSemanticIndex]);
+    // The hooks also own starts whose acknowledgement has not rendered active yet.
+    await waitForImportCloseOperations([cancelImportJob(), cancelSemanticIndex()]);
+    await flushClosingEditor();
+  }, [cancelImportJob, cancelSemanticIndex, flushClosingEditor]);
   const cancelImportFromUi = () => {
     void cancelImportJob().catch(() => {});
   };
@@ -573,28 +600,40 @@ export default function App() {
   const beforeClose = useCallback(async () => {
     closePending.current = true;
     try {
-      await Promise.all([manualBackupOperation.current, backupSchedule.current?.pauseAndWait()]);
+      await waitForImportCloseOperations([
+        manualBackupOperation.current,
+        backupSchedule.current?.pauseAndWait(),
+        ...pendingImports.current,
+      ]);
       // Edits can continue while the blocking-pool task finishes. Flush again
       // after its terminal result so closing preserves the latest input.
-      await flushEditor();
+      await flushClosingEditor();
     } catch (error) {
       closePending.current = false;
       backupSchedule.current?.resume();
       throw error;
     }
-  }, [flushEditor]);
-  useCloseGuard(
-    beforeClose,
-    importActive || semanticActive ? cancelBackground : undefined,
-    (error) => {
-      closePending.current = false;
-      backupSchedule.current?.resume();
-      setStatus("关闭前备份、保存或取消失败：" + String(error));
+  }, [flushClosingEditor]);
+  useCloseGuard(beforeClose, cancelBackground, (error) => {
+    closePending.current = false;
+    backupSchedule.current?.resume();
+    setStatus("关闭前备份、保存或取消失败：" + String(error));
+  });
+  const runImmediateImportOperation = useCallback(
+    (operation: () => Promise<void>, failureLabel: string) => {
+      if (closePending.current) {
+        setStatus("正在准备关闭，请稍候");
+        return Promise.resolve();
+      }
+      return trackImportOperation(pendingImports.current, operation).catch((error) =>
+        setStatus(failureLabel + String(error)),
+      );
     },
+    [],
   );
   const importImmediate = useCallback(
-    async (label: string, task: () => Promise<ImportSummary>) => {
-      try {
+    (label: string, task: () => Promise<ImportSummary>) =>
+      runImmediateImportOperation(async () => {
         await flushEditor();
         setStatus(label);
         const result = await task();
@@ -609,11 +648,8 @@ export default function App() {
             result.failed,
         );
         await importDone(result);
-      } catch (e) {
-        setStatus("导入失败：" + String(e));
-      }
-    },
-    [flushEditor, importDone],
+      }, "导入失败："),
+    [flushEditor, importDone, runImmediateImportOperation],
   );
   const startBackgroundImport = useCallback(
     async (
@@ -621,8 +657,13 @@ export default function App() {
       starter: () => Promise<number>,
       fallback: () => Promise<ImportSummary>,
     ) => {
+      if (closePending.current) {
+        setStatus("正在准备关闭，请稍候");
+        return;
+      }
       try {
         await flushEditor();
+        if (closePending.current) return;
         if (isTauri) {
           await startImportJob(label, starter);
         } else {
@@ -636,6 +677,10 @@ export default function App() {
   );
 
   const chooseImages = async () => {
+    if (closePending.current) {
+      setStatus("正在准备关闭，请稍候");
+      return;
+    }
     if (!isTauri) {
       setStatus("文件选择器仅在桌面版中可用");
       return;
@@ -653,6 +698,10 @@ export default function App() {
     );
   };
   const chooseFolder = async () => {
+    if (closePending.current) {
+      setStatus("正在准备关闭，请稍候");
+      return;
+    }
     if (!isTauri) {
       setStatus("文件夹选择器仅在桌面版中可用");
       return;
@@ -676,19 +725,20 @@ export default function App() {
   );
   const drop = useNativeDrop(handleDrop, setStatus);
 
-  const importDerivative = async () => {
-    if (!current) return;
-    if (!isTauri) {
-      setStatus("此功能仅在桌面版中可用");
-      return;
-    }
-    const picked = await open({
-      multiple: false,
-      filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp", "bmp", "gif"] }],
-    });
-    if (!picked || Array.isArray(picked)) return;
-    try {
+  const importDerivative = () =>
+    runImmediateImportOperation(async () => {
+      if (!current) return;
+      if (!isTauri) {
+        setStatus("此功能仅在桌面版中可用");
+        return;
+      }
+      const picked = await open({
+        multiple: false,
+        filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp", "bmp", "gif"] }],
+      });
+      if (!picked || Array.isArray(picked) || closePending.current) return;
       await flushEditor();
+      if (closePending.current) return;
       const result = await api.importPaths([picked]);
       if (result.duplicates) {
         setStatus("该派生图与资料库中的现有图片内容完全相同，未建立重复谱系");
@@ -707,10 +757,7 @@ export default function App() {
         setStatus("派生图已关联");
         return;
       }
-    } catch (e) {
-      setStatus("导入派生图失败：" + String(e));
-    }
-  };
+    }, "导入派生图失败：");
 
   const onAsset = async (asset: AssetSummary, e: React.MouseEvent) => {
     let next = new Set([asset.id]);
@@ -1415,28 +1462,23 @@ export default function App() {
     setRemixPrompt(prompt);
     setStatus("Remix 草稿已重置");
   };
-  const importRemixResult = async () => {
-    if (!current) {
-      return;
-    }
-    if (!isTauri) {
-      setStatus("导入 Remix 结果仅在桌面版中可用");
-      return;
-    }
-    let saved: RemixDraft;
-    try {
-      saved = await persistRemix();
-    } catch (e) {
-      setStatus("请先保存有效 Remix 草稿：" + String(e));
-      return;
-    }
-    const picked = await open({
-      multiple: false,
-      filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp", "bmp", "gif"] }],
-    });
-    if (!picked || Array.isArray(picked)) return;
-    try {
+  const importRemixResult = () =>
+    runImmediateImportOperation(async () => {
+      if (!current) {
+        return;
+      }
+      if (!isTauri) {
+        setStatus("导入 Remix 结果仅在桌面版中可用");
+        return;
+      }
+      const saved = await persistRemix();
+      const picked = await open({
+        multiple: false,
+        filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp", "bmp", "gif"] }],
+      });
+      if (!picked || Array.isArray(picked) || closePending.current) return;
       await flushEditor();
+      if (closePending.current) return;
       const result = await api.importPaths([picked]);
       if (result.duplicates) {
         setStatus("所选 Remix 结果与资料库现有图片完全相同，未建立重复谱系");
@@ -1451,10 +1493,7 @@ export default function App() {
       await refresh(result.last_id);
       setTab("lineage");
       setStatus("Remix 结果已导入，并记录全部参考来源与 DNA 字段");
-    } catch (e) {
-      setStatus("导入 Remix 结果失败：" + String(e));
-    }
-  };
+    }, "导入 Remix 结果失败：");
 
   const confirmModal = async () => {
     if (!modal) return;

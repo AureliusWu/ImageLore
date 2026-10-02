@@ -438,24 +438,36 @@ fn immediate(
 }
 
 #[tauri::command]
-pub fn import_paths(
-    state: State<'_, AppState>,
-    paths: Vec<String>,
-) -> Result<ImportSummary, String> {
-    immediate(state.inner(), paths, false)
+pub async fn import_paths(app: AppHandle, paths: Vec<String>) -> Result<ImportSummary, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        immediate(state.inner(), paths, false)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub fn import_folder(state: State<'_, AppState>, path: String) -> Result<ImportSummary, String> {
-    immediate(state.inner(), vec![path], true)
+pub async fn import_folder(app: AppHandle, path: String) -> Result<ImportSummary, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        immediate(state.inner(), vec![path], true)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub fn import_dropped_paths(
-    state: State<'_, AppState>,
+pub async fn import_dropped_paths(
+    app: AppHandle,
     paths: Vec<String>,
 ) -> Result<ImportSummary, String> {
-    immediate(state.inner(), paths, true)
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        immediate(state.inner(), paths, true)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[cfg(test)]
