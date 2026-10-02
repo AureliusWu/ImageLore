@@ -13,6 +13,7 @@
 - Bounded temporary full-database validation caches, kept manual backup/restore preparation off the window thread, and waited for manual and automatic safety work before close.
 - Made model downloads and preparation waits cancellable with finite network timeouts, registered terminal listeners before starting index jobs, and prevented stale model queries from overwriting readiness after cache deletion.
 - Removed silent semantic candidate truncation above 100,000 assets, with a deterministic regression; performance at that scale remains unbenchmarked.
+- Rejected malformed, non-finite, zero and non-unit 512-dimensional semantic vectors, rebuilt corrupt current-fingerprint rows, normalized finite model output through float64, and propagated candidate conversion failures instead of silently dropping results.
 - Passed an isolated v0.19.0-to-v0.26.0 NSIS upgrade with two normal closes and full data readbacks after six same-source gates; the candidate remains unsigned and has no updater publication.
 - Fixed editor dirty detection, failed-save propagation, close protection and late Vision updates across asset changes.
 - Kept in-flight gallery pagination valid during rapid image selection, while filter refreshes still reject old pages and newer selections or edits survive delayed refreshes.
