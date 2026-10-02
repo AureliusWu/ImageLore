@@ -1,23 +1,103 @@
 # v0.26.0 真实模型验收矩阵
 
-本报告记录 2026-10-02 的300张合成图片真实编码与故障恢复、32张COCO自然图片编码与检索质量，以及同产物的已缓存模型取消闭环。各项只有终态、正常关闭与独立持久化核验齐全才记为通过。桌面current于10:36更新为下表同源产物，旧程序保留，见[桌面更新回执](V0_26_DESKTOP_ACCEPTANCE.md)；这不表示v0.26或v1.0.0的全部退出条件已满足。
+本报告按实际 source/SHA 分开记录 2026-10-02 的模型验收。最新 `2276de1` 产物完成300图功能流程、编码期间关窗与恢复、编码取消与恢复、失败代理环境下的缓存分支，以及观察到实际下载后的取消。旧 `34baa87` 的自然32图、哈希取消和初始化取消保留原身份，不转记到新产物。各项只有终态、正常关闭与独立持久化核验齐全才记为通过；功能通过不等于性能、质量或全部版本门槛通过。
 
-自然图的功能终态通过；质量报告没有数值通过门槛。冻结 32 图中的英文宏平均 P@1=100%、R@10=95%，中文分别为 12.5%、37.5%。300 图导入记录了三次窗口消息超时，不能把编码和检索期间的响应证据扩大为全流程无冻结。
+桌面current于北京时间11:06:29更新为 `2276de1` / EXE `077027CD…32B82B`，旧 `34baa87` 保留，见[桌面更新回执](V0_26_DESKTOP_ACCEPTANCE.md)。这不表示v0.26或v1.0.0的全部退出条件已满足。
+
+旧 `34baa87` 自然图的功能终态通过；质量报告没有数值通过门槛。冻结32图中的英文宏平均 P@1=100%、R@10=95%，中文分别为12.5%、37.5%。旧产物300图导入记录了三次窗口消息超时；新 `2276de1` 功能流程的导入观察上下文19个WM_NULL样本全部响应、max=0.5179ms。该采样不等同渲染或输入体验。新产物编码期间关窗的完整观察到终态为2821ms，超过2秒，保持单列。
 
 ## 已完成与待补矩阵
 
 | 用例 | 本报告状态 | 已取得的证据与边界 |
 | --- | --- | --- |
-| 300 图真实模型功能流程 | `PASS_REAL_MODEL_ENCODING_AND_DURABLE_RESTART` | PNG/JPEG/WebP 各 100 张，含 6 张大图；实际编码，两个故意失败恢复至 300/300；text/similar 各 20 次 warm；备份、关闭、重启核验通过 |
-| 32 图自然图片流程 | `PASS_NATURAL_COCO32_ENCODING_RECALL_REPORT_AND_DURABLE_RESTART` | 32/32 实际编码；16 条冻结查询各返回完整 32 图排名；生成质量报告；备份、关闭、重启核验通过。该 PASS 不包含相关性数值门槛 |
-| 已缓存模型哈希阶段取消 | `PASS_REAL_MODEL_ENCODING_AND_DURABLE_RESTART` | 观察到hash阶段后实际UI取消，114ms观察到同job终态；0向量部分库重启、重新编码300项、备份和完整重启均通过 |
-| 已缓存模型初始化阶段取消 | `PASS_REAL_MODEL_ENCODING_AND_DURABLE_RESTART` | 观察到init阶段后实际UI取消，856ms观察到同job终态；部分库重启、补齐300项及完整持久闭环通过；单次ONNX init仍不可抢占 |
-| 下载、单图编码阶段取消与恢复 | 未执行本矩阵的新验收 | 不以取消确认的 IPC 时间替代实际任务终止时间；不复用旧版本结果关闭新来源的门槛 |
-| 工作任务期间关闭窗口与恢复 | 未执行本矩阵的新验收 | 已完成的四次 WM_CLOSE 都发生在相应验收工作结束后 |
-| 5k / 50k 真实模型规模流程 | 未执行本矩阵的新验收 | 小库计时、已有种子向量大库结果均不代替大库真实图片编码和真实文本推理 |
-| 冷模型下载、断网、损坏模型重新下载 | 未执行本矩阵的新验收 | 两次已完成流程使用隔离目录中的可信已缓存模型，不形成冷下载体验结论 |
+| 300 图真实模型功能流程 / 新2276de1 | `PASS_REAL_MODEL_ENCODING_AND_DURABLE_RESTART` | 两个故意图片失败恢复至300/300；text/similar各20次warm p95=964.0/4.8ms，预算通过；三阶段持久核验通过 |
+| 300 图真实模型功能流程 / 旧34baa87 | `PASS_REAL_MODEL_ENCODING_AND_DURABLE_RESTART` | PNG/JPEG/WebP各100张，含6张大图；实际编码、故障恢复、各20warm及持久核验；保留旧导入timeout事实 |
+| 32 图自然图片流程 / 旧34baa87 | `PASS_NATURAL_COCO32_ENCODING_RECALL_REPORT_AND_DURABLE_RESTART` | 32/32实际编码，16条冻结查询完整排名和质量报告；该PASS不包含相关性数值门槛，新产物未重测自然图 |
+| 已缓存模型哈希阶段取消 / 旧34baa87 | `PASS_REAL_MODEL_ENCODING_AND_DURABLE_RESTART` | 114ms观察到同job终态；0向量部分库重启、重新编码300项、备份和完整重启均通过 |
+| 已缓存模型初始化阶段取消 / 旧34baa87 | `PASS_REAL_MODEL_ENCODING_AND_DURABLE_RESTART` | 856ms观察到同job终态；部分库重启、补齐300项及完整持久闭环；单次ONNX init仍不可抢占 |
+| 编码阶段UI取消与恢复 / 新2276de1 | `PASS_REAL_MODEL_ENCODING_AND_DURABLE_RESTART` | 113ms观察到终态；10项已提交索引保持，恢复290项至300/300；仅3warm smoke |
+| 编码期间WM_CLOSE与恢复 / 新2276de1 | `PASS_REAL_MODEL_ENCODING_AND_DURABLE_RESTART`，时间WARN | 完整观察2821ms；47项部分库重启保持，恢复253项；全部关闭exit0，仅3warm smoke，不掩盖>2秒观测 |
+| 失败代理环境下缓存分支 / 新2276de1 | `PASS_REAL_MODEL_ENCODING_AND_DURABLE_RESTART` | 已可信缓存编码300/300，备份及重启核验；仅3warm smoke，不表示物理断网 |
+| 实际下载阶段UI取消 / 新2276de1 | `PASS_OBSERVED_DOWNLOAD_CANCEL_AND_DURABLE_CLOSE` | 观察暂存92,828,085字节后取消，112ms观察到终态；0向量部分库重启，未发布组件且无未发布stage；未执行重新下载或编码恢复 |
+| 5k真实模型规模流程 / 新2276de1 | `PASS_REAL_MODEL_ENCODING_AND_DURABLE_RESTART` | 5000/5000真实编码、各20warm及备份/关闭/重启核验通过；详见下节 |
+| 50k真实模型规模流程 | 待验收 | 不能由5k外推为50k通过；尚未完成本矩阵50k真实模型验收 |
+| 下载取消后重新下载并恢复 / 新2276de1 | `PASS_REAL_MODEL_ENCODING_AND_DURABLE_RESTART` | 独立空缓存中实际取消、部分库重启，再真实下载可信组件及编码300项，五阶段核验和四次正常关闭通过；仅3warm smoke |
+| 物理断网、损坏模型重新下载 | 未完成本矩阵验收 | 已完成下载重试不代替损坏模型重试；失败代理缓存分支不等于物理断网 |
+| derivative / Remix 导入中物理关窗 | 受控选择输入的原生UI闭环通过 | 真实关系/Session/谱系和最新编辑完成后正常退出，fresh-profile读回一致；fixture picker bypass及其它边界见[导入记录](V0_26_IMPORT_CLOSE.md) |
 
-## 固定程序与模型身份
+## 最新2276de1产物的独立终态
+
+实际来源 `2276de179da95cf29a889a0a6e7d9a01d940ad8a`，EXE SHA256 `077027CDCE55A9FFCA55D18E00B84D50290FF876F9C708B721BC31BAE532B82B`，ProductVersion仍为0.26.0。实际候选路径为 `<private-evidence>/import-candidate-2276de1-20261002T025343-32ea0c6b/ImageLore.exe`。下列五项均有对应最终`finishedAt`、`errors=[]`、独立隔离目录和实际启动身份；未使用种子向量。
+
+| 模式 | 终态结束（UTC） | 持久核验及正常关闭 |
+| --- | --- | --- |
+| functional | `02:59:06.957Z` | snapshot/full-closed/full-restarted均valid，300索引；两次WM_CLOSE确切exit0 |
+| close-encoding | `03:01:04.442Z` | partial-closed/partial-restarted为47索引，恢复253项后完整三阶段为300；四次WM_CLOSE确切exit0 |
+| encoding-cancel | `03:04:50.944Z` | 两个部分核验为10索引，恢复290项后完整三阶段为300；四次WM_CLOSE确切exit0 |
+| offline-cached | `03:07:42.588Z` | worker24386ms，完整三阶段为300；两次WM_CLOSE确切exit0 |
+| download-cancel | `03:11:28.096Z` | 两个部分核验为300资产、0索引、0向量字节；两次WM_CLOSE确切exit0；未执行完整编码流程 |
+
+前四项最终stale=0、vector bytes=614400；每项自己的snapshot→完整关闭→完整重启asset/metadata/vector aggregate SHA相等，11项比较匹配、无差异。两个带恢复的控制用例先分别校验47或10项的部分关闭/重启SHA一致，再实际编码剩余项，不把部分索引写成全量完成。各verify均integrity=ok、外键错误=0；源DB/WAL/SHM保留，SQLite只在fresh副本中核验。下载取消的两份部分报告也均valid，11项比较匹配；它没有snapshot/full-closed/full-restarted，不补造这些证据。
+
+functional三阶段SHA固定为asset `30f5ead6a827a6da7004a066ac689b4c643f67a17a2a820d7cabb6c674be6b43`、metadata `757a2fd893fd215ff35e43abeef7dd72e7fbd4a4add98193d9afbc1d653a4501`、vector `1c86925d11131d3e054ea8c097f85818f9b4c711c5212413de63bcf406bfdea9`；300向量最大norm偏差为`2.998709114354625e-08`。
+
+| 模式 | 每命令warm数 | text / similar原生IPC统计 | 门槛解释 |
+| --- | ---: | --- | --- |
+| functional | 20 | median897.0/4.25ms，p95 964.0/4.8ms，max1009.2/5.4ms | 两项20样本p95均通过3000ms预算 |
+| close-encoding | 3 | max858.1/4.7ms | 仅功能smoke，`sufficientWarmSamples=false`、`projectWarmGatePassed=false` |
+| encoding-cancel | 3 | max1034.0/5.3ms | 同上，不关闭performance门槛 |
+| offline-cached | 3 | max928.5/5.3ms | 同上，不关闭performance门槛 |
+| download-cancel | 0 | 未执行文本/相似检索warm | 不具有编码或检索性能结果 |
+
+functional的导入IPC为1936.6ms。初始863、完整重启6个WM_NULL样本均无timeout，其中导入observer上下文19个样本均响应、max0.5179ms，实际发送范围北京时间10:57:16.326–10:57:18.317。它们在可证明的observer外包区间10:57:16.250–10:57:18.318内；后界来自下一`library_page`观察起点，导入的精确观察完成时刻没有单独落盘。标签在等待轮询和删除操作时仍保留，不能将19个样本全部硬归入原生1936.6ms的执行区间，也不等同render/input体验。详见[直接导入与关闭保护](V0_26_IMPORT_CLOSE.md)。
+
+close-encoding在观察到encoding且processed=10时选择关窗。完整观察请求为`1790909990342`，helper排队为`1790909990456`，实际OS WM_CLOSE为`1790909993025`，终态事件receivedAt=`1790909993137`、观察终态=`1790909993163`。因此完整观察到终态2821ms，helper queued→WM_CLOSE为2569ms，实际WM_CLOSE→收到事件112ms、→观察终态138ms。**保留2821ms超过2秒的结果**；后两项只能说明实际OS请求后的事件/观察边界，不能把它们冒充完整用户等待，也不能删除helper排队时间。期间继续提交到47项后唯一取消终态，正常退出后部分库读回47项；单图ONNX和部分文件/SQLite操作仍不可抢占，不提供无条件2秒保证。
+
+encoding-cancel为实际UI取消，观察请求到终态113ms，clickSentAt→观察终态102ms；processed/indexed保持10、failed=0，部分库关闭重启后保持，再编码290项。close-encoding与encoding-cancel的用途和起点分别记录，不互换数值。
+
+offline-cached仅在验收子进程环境设置失败的回环HTTP/HTTPS/ALL_PROXY，`NO_PROXY=''`，启动记录`offlineProxyGuard=true`。已有可信组件可继续生产编码和检索，关闭与重启均通过；未关闭物理网络、未改变全局proxy，也不证明任意客户端都遵循这些环境变量或没有网络包。该结果只关闭本次缓存分支，不关闭完整离线矩阵。
+
+download-cancel在无已发布vision/text组件的fresh目录中实际进入download阶段，观察暂存文件共92828085字节后点击取消；观察请求到唯一终态112ms，processed/indexed/failed均0、cancelled=true。关闭后的`cacheAfterCancelledClose`两个组件均`published=false`、`unpublishedStages=[]`。部分库重启保持0向量；这个PASS限定下载取消与持久关闭，没有重新下载成功、模型初始化、编码恢复或冷下载性能结果。
+
+五项本地目录均在 `<private-evidence>/native-model-v1/runs/`：
+
+- `2026-10-02T02-57-03-885Z-300-functional-f3640808-be4e-4cec-907b-eda611ea9bda/`
+- `2026-10-02T02-59-30-969Z-300-close-encoding-a61f2a7c-0d35-4fbf-82e9-d5b496cb58b1/`
+- `2026-10-02T03-03-00-973Z-300-encoding-cancel-2aa68e41-8c85-42a8-9c6a-c1ffa53ab29a/`
+- `2026-10-02T03-06-30-340Z-300-offline-cached-a5c9a740-1c8c-4278-87c5-574ee42ee0e8/`
+- `2026-10-02T03-10-54-699Z-300-download-cancel-1b68885a-acc9-4f66-bf3a-ed50159976a8/`
+
+各目录的`result.json`、实际launch身份、`progress.jsonl`、`window-responsiveness.jsonl`与相应`verify-*.json`保留原始观测；不以本报告改写原始终态。
+
+## 下载取消后的重新下载恢复
+
+独立run为`<private-evidence>/native-model-v1/runs/2026-10-02T03-23-26-334Z-300-download-cancel-retry-9e376e9f-d564-4ef1-aa1c-bd8dde5b5638/`，来源仍为2276de1与同SHA EXE。2026-10-02T03:25:23.119Z完整终态`PASS_REAL_MODEL_ENCODING_AND_DURABLE_RESTART`、errors为空。开始时未复制缓存，实际下载暂存72602865字节后UI取消，121ms观察到唯一取消终态，indexed=0。部分库正常关闭和独立profile重启均校验300资产、0向量。
+
+随后另一个fresh profile在相同隔离数据目录启动，真实重新下载并校验vision/text ONNX，分别351686194/254102519字节，完整SHA与固定production pin一致；support JSON仍只具有已有revision及大小/结构校验边界，不扩大为独立认证的support hash。恢复worker32447ms包含下载、哈希、初始化和实际编码，300/300 indexed、failed=0。snapshot/full-closed/full-restarted全部valid、integrity=ok、FK=0，向量与资产/元数据摘要各自保持；四次正常WM_CLOSE确切exit0、端口释放、未强杀，最终stale=0且无残留未发布stage。每命令3次warm只作功能smoke；单次完整下载恢复不构成三次可比冷测或下载性能承诺。
+
+## 5k真实模型规模流程
+
+2026-10-02T03:20:24.571Z终态为`PASS_REAL_MODEL_ENCODING_AND_DURABLE_RESTART`，`errors=[]`。来源仍为上节`2276de1`与同SHA EXE。独立目录为`<private-evidence>/native-model-v1/runs/2026-10-02T03-11-50-390Z-5000-functional-aad6ac57-bced-45fa-8471-c5c48e84fbff/`。5000张受控PNG/JPEG/WebP（含6张大图）全部实际编码，没有种子向量；本场景不衡量自然图片召回质量。
+
+| 项目 | 实际结果 |
+| --- | --- |
+| UI调度至worker终态 | 367059ms；5000 processed/indexed，failed/skipped=0 |
+| 整个worker吞吐 | 13.6218图/秒，包含模型准备、哈希和初始化；非独立推理吞吐，不外推50k耗时 |
+| 文本检索20warm IPC | median886.95 / p95 989.2 / max1096.4ms；3000ms门槛通过 |
+| 相似图检索20warm IPC | median49.4 / p95 56.2 / max58.7ms；3000ms门槛通过 |
+| 首次文本/相似查询 | 913.2 / 46.1ms；单次首次调用不是三次可比冷测 |
+| 原生备份IPC | 290.8ms；只适用于本5k库，不替代50k多备份轮换结果 |
+| 窗口WM_NULL | 初始4299、重启6次，无timeout；不代替render/input和长期稳态内存门槛 |
+| 两次正常WM_CLOSE | retained-handle确切exit0，端口释放，未强杀；OS请求至观察退出463/547ms，为采样上界 |
+| 完整索引 | 5000项、10240000向量字节、512维有限单位向量、当前fingerprint，stale=0 |
+
+snapshot/full-closed/full-restarted均`valid=true`、integrity=ok、外键错误=0，三阶段asset/metadata/vector aggregate分别保持`942b6a5a1ab8449393f7aa635be8c480f77e936e3d4b201a171a2036eeaf9b1e`、`6231fe9d5264900d3ae0a9665d8149762d89a6fd62c1e88625e2e5342fe4ffe5`、`0607ea090ce038a47bfe42c679805fccaba33344fc52781b8388a14c5e79798e`。关闭副本核验保留原DB/WAL/SHM，源SQLite未打开。
+
+编码期间记录236份进程采样，观测Private Bytes峰值826478592字节；sample81中的PID1696在采样时退出或不可访问，保留一次collection failure，未补零或删除记录。这是带已知采样缺口的观测峰值，不声明完整进程树的真实最大值，也不计为10分钟内存预算通过。模型功能、索引及持久闭环的PASS不覆盖该内存缺口。
+
+## 旧34baa87的固定程序与模型身份
+
+下文300功能、32自然图、哈希和初始化取消证据仍绑定旧 `34baa87`；以下两组详细计时和质量结果不属于最新2276de1。
 
 | 项目 | 两次实际验收共同身份 |
 | --- | --- |
@@ -135,7 +215,7 @@ snapshot→关闭后→完整重启后三阶段的 11 项比较均 `matched=true
 | 13 | 10:30:40.774→10:30:41.265 | 490.9150 ms | 延迟后响应 |
 | 14 | 10:30:41.375→10:30:41.375 | 0.1669 ms | 响应 |
 
-这些采样证明 300 图导入期间存在窗口消息响应受阻。采样间隙、observer 上下文和整数毫秒壁钟不能确定连续冻结的精确起止，不能把三次 timeout 相加后称为全部冻结时长，也不能据此声称整个 2,422.3 ms 都完全不响应。该限制尚需产品修复或后续验收关闭。
+这些采样证明旧34baa87的300图导入期间存在窗口消息响应受阻。采样间隙、observer上下文和整数毫秒壁钟不能确定连续冻结的精确起止，不能把三次timeout相加后称为全部冻结时长，也不能据此声称整个2422.3ms都完全不响应。新2276de1的后续修复与WM_NULL复核见上节；新样本不抹去旧产物的历史事实，也不形成完整渲染或输入体验结论。
 
 300 图编码上下文 218 个样本均响应、max=0.6821 ms；warm text 188 个样本均响应、max=0.9049 ms；warm similar 49 个样本均响应、max=0.2673 ms。32 图导入的一个样本响应耗时 128.535 ms，编码 25 个样本 max=0.3288 ms；warm text 223 个样本 max=3.3669 ms，warm similar 50 个样本 max=1.4077 ms，均无 timeout。它们是相应窗口消息的采样证据，不代替鼠标交互、页面渲染或长时稳定性验收。
 
@@ -230,4 +310,4 @@ adapter 的自然 PASS 标签表示真实编码、结构有效的完整排名、
 
 初始化取消另在 `<private-evidence>/native-model-v1/runs/2026-10-02T02-46-05-046Z-300-cached-init-cancel-48e6ae94-c7f2-473d-8383-16b2db05cbc8/` 完成，仍为同源EXE。观察到`init`阶段后UI取消，从观察请求到唯一终态856ms，processed/indexed/failed均为0；单次ONNX init不能被抢占，本次结果不是无条件2秒保证。四次正常WM_CLOSE均exit0，部分关闭/重启两次核验为300资产、0向量，恢复worker23878ms补齐300项、failed=0。后续备份、完整关闭与完整重启核验全valid=true，最终errors=[]；text/similar各20次warm IPC P95为971.0/4.9ms。以上两种阶段取消不代替下载或编码阶段取消。
 
-其余取消阶段与真实模型规模矩阵在取得新终态证据后补充。本报告不将尚在运行的用例、小样本质量、离散内存采样或窗口消息采样提升为尚未取得的版本发布门槛。
+最新2276de1的下载取消/重试、编码取消、关窗恢复和5k真实模型闭环见前节；旧34baa87的哈希、初始化和自然图证据仍仅属于旧来源。受控选择输入的原生UI导入关闭闭环见[导入记录](V0_26_IMPORT_CLOSE.md)。50k真实模型在2026-10-02T03:25:53Z开始执行，run为`2026-10-02T03-25-53-021Z-50000-functional-ddfcbc16-302f-4ee9-be09-b180b7bd778c`，尚无终态；不推断规模耗时，不将小样本质量、离散内存或窗口消息采样提升为完整版本发布门槛。

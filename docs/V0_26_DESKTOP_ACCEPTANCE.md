@@ -2,7 +2,22 @@
 
 日期：2026-09-30；本记录主体固定2026-10-01（Asia/Shanghai）的 `f61f59bf86505dadacd15f75da3b75f0ed68fdf3` 程序，版本 `0.26.0`，schema `11`。历史连续使用和恢复复验属于 `99b2699`，真实模型小样本属于 `035a37e`；各轮按实际 source/SHA 保留身份，不混用。
 
-2026-10-02桌面稳定路径已替换为 `34baa871dfee85794e30ae2b3e9e112761cd06c7` / EXE SHA256 `3D38BAC9E12AAC61396EF9574C893F224087A23255CFDA01C8F0069ACAAB7B4C`，仍为 `0.26.0`。同源两条CI成功，300图与自然32图的新产物证据见[模型矩阵](V0_26_MODEL_MATRIX.md)；原current保留在 `desktop-runtime/previous-20261002-023612-af4e65cf993146319588539fa37ca904`。快捷方式仍指向current中的EXE；测试前后六个默认DB/WAL/SHM路径状态相同，未启动默认用户库。发布回执为 `<private-evidence>/desktop-publish-34baa87-20261002.json`。下表及后续历史指标不转记为这份新产物的性能结果。
+2026-10-02最新桌面稳定路径已替换为 `2276de179da95cf29a889a0a6e7d9a01d940ad8a` / EXE SHA256 `077027CDCE55A9FFCA55D18E00B84D50290FF876F9C708B721BC31BAE532B82B`，仍为 `0.26.0`。实际发布时刻为`2026-10-02T03:06:29.1460572Z`（北京时间11:06:29），快捷方式仍为`%USERPROFILE%\Desktop\ImageLore v0.26.0.lnk`，指向`desktop-runtime/current/ImageLore.exe`。
+
+同源两条CI：[run 36957688387](https://github.com/AureliusWu/ImageLore/actions/runs/36957688387)与[run 36957688415](https://github.com/AureliusWu/ImageLore/actions/runs/36957688415)均completed/success。新产物已完成300图functional（text/similar各20warm p95=964.0/4.8ms，预算通过）、编码取消与恢复、编码期间正常关窗与恢复、失败proxy环境下缓存分支，以及随后实际下载阶段取消；证据见[模型矩阵](V0_26_MODEL_MATRIX.md)和[直接导入关闭保护](V0_26_IMPORT_CLOSE.md)。三个缓存控制用例各3warm仅smoke，不关闭performance；失败proxy分支不等于物理断网。
+
+2026-10-02新增的derivative和Remix受控picker直接UI导入闭环均实际PASS，source/EXE绑定上面的完整2276de1身份。每个case均正常WM_CLOSE、最新编辑与关系/Session/谱系闭库持久回读、独立fresh-profile重启及第二次正常关闭；共四次retained-handle exit0/portReleased，无force kill或恢复重试。
+
+| 直接UI case | 实际覆盖 | 初次 / fresh-profile重启 PID | 结果 |
+| --- | --- | --- | --- |
+| derivative | 持有真实import Response期间关闭，后续derived_from/Session及最新parent Prompt保全 | 21900 / 23240 | PASS，完整闭库typed business/schema SHA两轮一致 |
+| Remix | 持有真实apply_lineage Response期间关闭，base source谱系/Session、child draft Prompt fallback及最新编辑保全 | 2300 / 23460 | PASS，完整闭库typed business/schema SHA两轮一致 |
+
+薄传输仅包装可写fetch，业务全部原fetch→真实原Response延迟→原Tauri回调；唯一synthetic为精确single fixture picker path，`physicalPickerExercised=false`，真实物理选择框仍pending。没有SQLite打开源库，原DB/WAL/SHM bytes/size/mtime before==after；只在独立验证clone读取WAL/checkpoint并比较typed hash。相对本地run目录为`<private-evidence>/native-model-v1/runs/2026-10-02T03-21-04-091Z-direct-derivative-e9f92077-fc2c-41c6-8aab-7826af82a39f`及`2026-10-02T03-22-05-912Z-direct-remix-a3cdd80a-7e01-4cc5-94b9-bb29159717f3`（同一runs父目录）。完整source/EXE SHA、闭库typed SHA与OS发送/renderer事件/Response释放/owned exit/端口确认分开的时刻见[直接导入关闭保护](V0_26_IMPORT_CLOSE.md)。helper排队不当作产品latency；这两case不补充模型warm样本，也不覆盖Remix多参考DNA、任意IPC或直接destroy。
+
+旧`34baa87` current实际保留在`desktop-runtime/previous-20261002-030628-7cbe07beab44440380ad007809f7bf45`，发布回执为`<private-evidence>/desktop-publish-2276de1-20261002.json`。回执保留六个默认DB/WAL/SHM路径检查，均不存在；该范围只涉及列出的六个文件，不扩大为扫描全部用户目录。发布记录`formalV1Release=false`。新2276de1的导入observer上下文19个WM_NULL样本全部响应、max0.5179ms；采样不等于render/input。编码期间关窗完整观察到终态2821ms仍超过2秒，详见上述矩阵。
+
+此前10:36发布的`34baa871dfee85794e30ae2b3e9e112761cd06c7` / EXE `3D38BAC9E12AAC61396EF9574C893F224087A23255CFDA01C8F0069ACAAB7B4C`、其自然32图质量以及哈希/初始化取消均保留原身份。它替换的更早current保留在`desktop-runtime/previous-20261002-023612-af4e65cf993146319588539fa37ca904`，原回执`<private-evidence>/desktop-publish-34baa87-20261002.json`保持。下表与后续历史性能、内存及自然质量指标不转记为2276de1的结果；新来源已补齐上述两项受控选择输入导入关窗闭环，真实物理选择框和其它模型规模门槛保持各自验收状态。
 
 已完成实际桌面快捷方式和原生构建；保存/关闭/重启、备份恢复及分页修复均有真实程序证据。真实 CLIP 已通过三图小样本集成验收；启动、内存和全规模模型等退出标准尚未关闭，不将本轮开发更新标为阶段 A 全部通过或 v1.0.0 正式发布。
 
@@ -113,4 +128,4 @@ API 计时在 Native WebView 内以 `performance.now()` 包围 `__TAURI_INTERNAL
 
 ## 阶段结论与后续门槛
 
-本轮已同步源码、交付可运行 `0.26.0` 桌面程序和随实际 EXE 版本维护的快捷方式，完成存储/迁移安全回归、原生分页修复及实际保存/关闭/重启/恢复验证。**阶段 A 保持进行中**：正常启动、恢复启动与 WebView 内存增长保留 WARN；仍需复杂图片和更长期稳态、全规模真实模型、导入/索引取消及离线矩阵。阶段 B 的证书/签名服务、公开可访问发行渠道和 updater 密钥管理尚未配置，后续按 A→B→RC→1.0 顺序推进。
+本轮已同步源码、交付可运行 `0.26.0` 桌面程序和随实际 EXE 版本维护的快捷方式，完成存储/迁移安全回归、原生分页修复及实际保存/关闭/重启/恢复验证。derivative/Remix受控picker UI导入关闭、关联/Session/谱系与最新编辑持久化、fresh-profile重启已各自实际PASS；真实物理选择框仍pending。**阶段 A 保持进行中**：正常启动、恢复启动与WebView内存增长保留历史WARN；新产物编码关窗完整观察2821ms仍超过2秒。最新300功能、编码取消/关窗恢复、下载取消以及5k真实编码/20warm/备份关闭重启已取得各自终态，旧来源自然图和哈希/初始化取消不转嫁。5k text/similar IPC p95为989.2/56.2ms，均通过3秒预算；内存观测保留一次采样缺口，不推算50k耗时。50k真实模型、真实物理选择框交互、Remix多参考DNA、下载取消后的重新下载恢复、物理离线及复杂图片长期稳态仍待验收。阶段B的证书/签名服务、公开可访问发行渠道和updater密钥管理尚未配置，后续按A→B→RC→1.0顺序推进。
