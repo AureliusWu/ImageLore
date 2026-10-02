@@ -51,8 +51,15 @@ export function AppHeader({
             id="search"
             value={query}
             onChange={(e) => onQuery(e.target.value)}
+            title={
+              mode === "semantic"
+                ? "建议用英文描述画面；中文语义检索可能遗漏结果。关键词搜索可继续使用中文。"
+                : undefined
+            }
             placeholder={
-              mode === "semantic" ? "描述你记得的画面…" : "搜索提示词、文件名、标签或模型"
+              mode === "semantic"
+                ? "用英文描述画面，例如 a red car"
+                : "搜索提示词、文件名、标签或模型"
             }
           />
           <kbd>Ctrl F</kbd>

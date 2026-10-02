@@ -162,7 +162,8 @@
 ## v0.26.0 — Stability Acceptance
 
 执行中；全库验证、手动备份关闭等待及正式内存窗口的进度见[性能跟进](docs/V0_26_PERFORMANCE_FOLLOWUP.md)，阶段退出条件通过后再推进下一版本。
-- 五组10分钟[内存隔离窗口](docs/V0_26_MEMORY_ISOLATION.md)已完成；连续换图与缩略图滚动仍超过20%预算，保留WARN。坏语义向量的[严格读取与增量重建](docs/V0_26_VECTOR_INTEGRITY.md)已修复，源码CI通过；新候选真实模型及规模验收继续执行。
+- 五组10分钟[内存隔离窗口](docs/V0_26_MEMORY_ISOLATION.md)已完成；连续换图与缩略图滚动仍超过20%预算，保留WARN。坏语义向量的[严格读取与增量重建](docs/V0_26_VECTOR_INTEGRITY.md)已修复，源码CI通过。
+- 新候选的[真实模型矩阵](docs/V0_26_MODEL_MATRIX.md)已完成300图故障恢复、32张冻结自然图和关闭重启读回；热查询各20次通过3秒预算。自然图中文召回有明确局限，取消矩阵及5k/50k继续执行，不计为全规模通过。
 - 50k独立副本的[启动、备份及恢复分阶段测量](docs/V0_26_BACKUP_PHASES.md)已通过，原DB/WAL/SHM保持；备份轮换的逐份完整校验是已测热点，后续优化保留全部校验。
 - 当前开发版本已推进到 `0.26.0`；按本阶段任务实施。验收记录：[存储/恢复](docs/V0_26_STORAGE_ACCEPTANCE.md)、[关键工作流](docs/V0_26_WORKFLOW_ACCEPTANCE.md)、[原生规模](docs/V0_26_NATIVE_SCALE.md)、[桌面程序](docs/V0_26_DESKTOP_ACCEPTANCE.md)、[真实模型](docs/V0_26_MODEL_ACCEPTANCE.md)。实际快捷方式、桌面保存重启和恢复已有验证；CLIP 三图集成已通过，启动/内存、全规模模型和完整退出标准仍需关闭。
 - [版本化桌面快捷方式](docs/DESKTOP_SHORTCUT.md)：本地原生运行目录与实际 EXE 版本联动，保护手工链接、拒绝自动降级、失败回退。

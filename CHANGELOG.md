@@ -22,7 +22,9 @@
 - Made Sidecar writes atomic and surfaced malformed Sidecars, source discovery/import failures and failed scan timestamp commits.
 - Excluded stale or missing semantic embeddings, removed unnecessary search joins and retained CJK substring verification.
 - Added file-backed 50k/75k native benchmarks with 512-dimensional synthetic vectors and known-answer checks; acceptance records separate these from real-model and desktop evidence.
-- Verified a three-image native CLIP download/index/text/similar flow with trusted file hashes and independently checked backup vectors; large-scale quality, startup, memory and cold cancellation remain acceptance work.
+- Verified real native CLIP encoding, image-failure recovery and durable restart on 300 mixed-format fixtures, plus complete rankings on 32 frozen natural images; small-corpus quality and warm timings remain distinct from large-scale acceptance.
+- Verified cached model hash/init cancellation through partial restart and complete re-encoding, while retaining separate download/encoding cancellation and offline gates.
+- Recommended English semantic descriptions after measured weak Chinese recall on the frozen small corpus, while preserving Chinese keyword search.
 
 
 ## 0.25.1 — Codebase Hygiene

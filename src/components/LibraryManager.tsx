@@ -641,6 +641,9 @@ export function LibraryManager({
                         视觉编码器 + 文本编码器共享 512
                         维空间；首次使用会下载本地模型，之后可离线运行。
                       </small>
+                      <small>
+                        语义搜索建议用英文描述画面，中文可能遗漏结果。中文提示词、文件名和标签可用关键词搜索。
+                      </small>
                     </div>
                     <div className="semantic-model-flags">
                       <span className={semanticStatus.vision_ready ? "ready" : ""}>
