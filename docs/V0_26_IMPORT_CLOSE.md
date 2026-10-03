@@ -64,6 +64,6 @@ derivative扣留真实`import_paths`成功Response（added1、duplicates0、fail
 | derivative | `1c1af3a036d1ba21f7260b2253f42231d3f11c159e63e77a2b62cc6f86c37966` | `PASS_REAL_UI_DIRECT_IMPORT_CLOSE_AND_FRESH_PROFILE_RESTART` |
 | Remix | `cd53bd50e88b44d31436443648c9991f20e1d75addb9870f9131d04115e4cc0c` | 同上 |
 
-相对仓库根的本地证据目录分别为`<private-evidence>/native-model-v1/runs/2026-10-02T03-21-04-091Z-direct-derivative-e9f92077-fc2c-41c6-8aab-7826af82a39f`和`<private-evidence>/native-model-v1/runs/2026-10-02T03-22-05-912Z-direct-remix-a3cdd80a-7e01-4cc5-94b9-bb29159717f3`。各目录保留`orchestration.json`、`result.json`、两个独立`launch-*.json`、`setup-ui-steps.jsonl`、`direct-import-ui-steps.jsonl`、两次`direct-import-readback-*.json`、原始driver/readback stdout与stderr，以及保全的raw bundle/验证clone。两case无错误、恢复释放、重试、强制退出或产品源码修改。
+本地证据以仓库外的`<private-evidence>`为根，目录分别为`<private-evidence>/native-model-v1/runs/2026-10-02T03-21-04-091Z-direct-derivative-e9f92077-fc2c-41c6-8aab-7826af82a39f`和`<private-evidence>/native-model-v1/runs/2026-10-02T03-22-05-912Z-direct-remix-a3cdd80a-7e01-4cc5-94b9-bb29159717f3`。各目录保留`orchestration.json`、`result.json`、两个独立`launch-*.json`、`setup-ui-steps.jsonl`、`direct-import-ui-steps.jsonl`、两次`direct-import-readback-*.json`、原始driver/readback stdout与stderr，以及保全的raw bundle/验证clone。两case无错误、恢复释放、重试、强制退出或产品源码修改。
 
 尚未关闭的边界为真实物理文件选择框、Remix多参考DNA、任意外部IPC或直接`window.destroy`的全局关闭协调，以及复杂图片长期使用；late-picker独立case未在本轮执行。受控picker UI闭环不转记为这些结果，不改动已有3warm smoke或20warm模型性能口径。

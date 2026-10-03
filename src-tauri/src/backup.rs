@@ -95,7 +95,70 @@ fn unique_path(dir: &Path, prefix: &str) -> PathBuf {
     dir.join(format!("{}-{}-fallback.sqlite3", prefix, now_nanos()))
 }
 
+#[derive(Debug)]
+enum ValidationFailure {
+    Rejected(String),
+    Unavailable(String),
+}
+
+impl ValidationFailure {
+    fn from_sqlite(error: rusqlite::Error) -> Self {
+        let message = error.to_string();
+        if matches!(
+            &error,
+            rusqlite::Error::SqliteFailure(failure, _)
+                if matches!(failure.code,
+                    rusqlite::ErrorCode::DatabaseCorrupt | rusqlite::ErrorCode::NotADatabase)
+        ) {
+            Self::Rejected(message)
+        } else {
+            Self::Unavailable(message)
+        }
+    }
+
+    fn from_io(error: std::io::Error) -> Self {
+        Self::Unavailable(error.to_string())
+    }
+}
+
+impl std::fmt::Display for ValidationFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Rejected(message) | Self::Unavailable(message) => formatter.write_str(message),
+        }
+    }
+}
+
+fn require_validation_columns(
+    conn: &Connection,
+    table: &str,
+    columns: &[&str],
+) -> Result<(), ValidationFailure> {
+    let mut statement = conn
+        .prepare(&format!("PRAGMA table_info({})", table))
+        .map_err(ValidationFailure::from_sqlite)?;
+    let actual = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(ValidationFailure::from_sqlite)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(ValidationFailure::from_sqlite)?;
+    if columns
+        .iter()
+        .any(|column| !actual.iter().any(|name| name == column))
+    {
+        return Err(ValidationFailure::Rejected(format!(
+            "备份缺少 ImageLore {} 表的必要字段",
+            table
+        )));
+    }
+    Ok(())
+}
+
 fn validate(path: &Path) -> Result<(), String> {
+    validate_typed(path).map_err(|error| error.to_string())
+}
+
+fn validate_typed(path: &Path) -> Result<(), ValidationFailure> {
     #[cfg(test)]
     let _validation = tests::phase_profile::enter("validation.total", Some(path));
     if companions(path)
@@ -103,7 +166,7 @@ fn validate(path: &Path) -> Result<(), String> {
         .skip(1)
         .any(|sidecar| sidecar.exists())
     {
-        let probe_dir = copy_probe_files(path).map_err(|e| e.to_string())?;
+        let probe_dir = copy_probe_files(path).map_err(ValidationFailure::from_io)?;
         let result = validate_in_place(&probe_dir.join("library.sqlite3"));
         let _ = fs::remove_dir_all(probe_dir);
         return result;
@@ -111,36 +174,63 @@ fn validate(path: &Path) -> Result<(), String> {
     validate_in_place(path)
 }
 
-fn validate_in_place(path: &Path) -> Result<(), String> {
+fn validate_in_place(path: &Path) -> Result<(), ValidationFailure> {
     let conn = storage_phase!(
         "validation.open",
         None,
         Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
     )
-    .map_err(|e| e.to_string())?;
+    .map_err(ValidationFailure::from_sqlite)?;
     storage_phase!("validation.configure", None, configure_validation(&conn))
-        .map_err(|e| e.to_string())?;
+        .map_err(ValidationFailure::from_sqlite)?;
     let result: String = storage_phase!(
         "validation.integrity_check",
         None,
         conn.query_row("PRAGMA integrity_check", [], |r| r.get(0))
     )
-    .map_err(|e| e.to_string())?;
+    .map_err(ValidationFailure::from_sqlite)?;
     if result != "ok" {
-        return Err(format!("备份完整性检查失败：{}", result));
+        return Err(ValidationFailure::Rejected(format!(
+            "备份完整性检查失败：{}",
+            result
+        )));
     }
-    let version: String = conn
-        .query_row(
-            "SELECT value FROM app_meta WHERE key='schema_version'",
-            [],
-            |r| r.get(0),
-        )
-        .map_err(|_| "备份不是 ImageLore 资料库：缺少 schema 标记".to_string())?;
+    #[cfg(test)]
+    tests::before_schema_marker_query(path);
+    require_validation_columns(&conn, "app_meta", &["key", "value"])?;
+    let marker = conn.query_row(
+        "SELECT value FROM app_meta WHERE key='schema_version'",
+        [],
+        |row| {
+            Ok(match row.get_ref(0)? {
+                rusqlite::types::ValueRef::Text(bytes) => {
+                    std::str::from_utf8(bytes).ok().map(str::to_owned)
+                }
+                _ => None,
+            })
+        },
+    );
+    let version = match marker {
+        Ok(Some(version)) => version,
+        Ok(None) => {
+            return Err(ValidationFailure::Rejected(
+                "备份不是 ImageLore 资料库：schema 标记必须是有效 UTF-8 文本".into(),
+            ));
+        }
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            return Err(ValidationFailure::Rejected(
+                "备份不是 ImageLore 资料库：缺少 schema 标记".into(),
+            ));
+        }
+        Err(error) => return Err(ValidationFailure::from_sqlite(error)),
+    };
     let version = version
         .parse::<i64>()
         .ok()
         .filter(|v| (1..=crate::migrations::LATEST).contains(v))
-        .ok_or_else(|| format!("备份数据库版本 {} 不受当前程序支持", version))?;
+        .ok_or_else(|| {
+            ValidationFailure::Rejected(format!("备份数据库版本 {} 不受当前程序支持", version))
+        })?;
     // Historical databases have no application_id. Recognize their complete
     // business schema, rather than trusting a forgeable version marker alone.
     let mut tables: Vec<(&str, &[&str])> = vec![
@@ -266,10 +356,6 @@ fn validate_in_place(path: &Path) -> Result<(), String> {
             ("asset_sessions", "asset_id", "assets"),
             ("asset_sessions", "session_id", "generation_sessions"),
         ]);
-        let duplicate: i64 = storage_phase!("validation.portable_ids", None, conn.query_row("SELECT COUNT(*) FROM (SELECT portable_id FROM assets WHERE portable_id<>'' GROUP BY portable_id HAVING COUNT(*)>1)", [], |r| r.get(0))).map_err(|e| e.to_string())?;
-        if duplicate != 0 {
-            return Err("备份存在重复 portable ID".into());
-        }
     }
     if version >= 4 {
         tables.push((
@@ -407,39 +493,37 @@ fn validate_in_place(path: &Path) -> Result<(), String> {
     }
     storage_phase!("validation.schema_tables", None, {
         for (table, columns) in tables {
-            let mut st = conn
-                .prepare(&format!("PRAGMA table_info({})", table))
-                .map_err(|e| e.to_string())?;
-            let actual = st
-                .query_map([], |r| r.get::<_, String>(1))
-                .map_err(|e| e.to_string())?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| e.to_string())?;
-            if columns
-                .iter()
-                .any(|column| !actual.iter().any(|name| name == column))
-            {
-                return Err(format!("备份缺少 ImageLore {} 表的必要字段", table));
-            }
+            require_validation_columns(&conn, table, columns)?;
         }
     });
+    if version >= 3 {
+        let duplicate: i64 = storage_phase!("validation.portable_ids", None, conn.query_row("SELECT COUNT(*) FROM (SELECT portable_id FROM assets WHERE portable_id<>'' GROUP BY portable_id HAVING COUNT(*)>1)", [], |r| r.get(0))).map_err(ValidationFailure::from_sqlite)?;
+        if duplicate != 0 {
+            return Err(ValidationFailure::Rejected(
+                "备份存在重复 portable ID".into(),
+            ));
+        }
+    }
     let fk_error: bool = storage_phase!(
         "validation.foreign_keys",
         None,
         conn.prepare("PRAGMA foreign_key_check")
-            .map_err(|e| e.to_string())?
+            .map_err(ValidationFailure::from_sqlite)?
             .exists([])
     )
-    .map_err(|e| e.to_string())?;
+    .map_err(ValidationFailure::from_sqlite)?;
     if fk_error {
-        return Err("备份外键检查失败".into());
+        return Err(ValidationFailure::Rejected("备份外键检查失败".into()));
     }
     // Also reject orphan business records in files whose FK declarations were removed.
     storage_phase!("validation.business_relations", None, {
         for (table, column, parent) in relations {
-            let orphan: bool = conn.query_row(&format!("SELECT EXISTS(SELECT 1 FROM {table} c LEFT JOIN {parent} p ON p.id=c.{column} WHERE p.id IS NULL)"), [], |r| r.get(0)).map_err(|e| e.to_string())?;
+            let orphan: bool = conn.query_row(&format!("SELECT EXISTS(SELECT 1 FROM {table} c LEFT JOIN {parent} p ON p.id=c.{column} WHERE p.id IS NULL)"), [], |r| r.get(0)).map_err(ValidationFailure::from_sqlite)?;
             if orphan {
-                return Err(format!("备份业务关系检查失败：{}.{}", table, column));
+                return Err(ValidationFailure::Rejected(format!(
+                    "备份业务关系检查失败：{}.{}",
+                    table, column
+                )));
             }
         }
     });
@@ -490,21 +574,25 @@ fn rotate(dir: &Path) -> Result<(), String> {
     let _rotation = tests::phase_profile::enter("rotation.total", None);
     let mut valid_count = 0;
     for item in records(dir)? {
-        if storage_phase!(
+        match storage_phase!(
             "rotation.candidate",
             Some(Path::new(&item.path)),
-            validate(Path::new(&item.path))
-        )
-        .is_err()
-        {
-            // Invalid candidates remain available as evidence and cannot evict
-            // usable recovery points or suppress the next automatic backup.
-            let rejected = dir.join("rejected");
-            fs::create_dir_all(&rejected).map_err(|e| e.to_string())?;
-            let target = rejected.join(format!("{}-{}.raw", item.name, now_nanos()));
-            storage_phase!("rotation.quarantine", None, fs::rename(&item.path, target))
-                .map_err(|e| e.to_string())?;
-            continue;
+            validate_typed(Path::new(&item.path))
+        ) {
+            Ok(()) => {}
+            Err(ValidationFailure::Rejected(_)) => {
+                // Proven invalid candidates remain available as evidence and
+                // cannot evict usable recovery points.
+                let rejected = dir.join("rejected");
+                fs::create_dir_all(&rejected).map_err(|e| e.to_string())?;
+                let target = rejected.join(format!("{}-{}.raw", item.name, now_nanos()));
+                storage_phase!("rotation.quarantine", None, fs::rename(&item.path, target))
+                    .map_err(|e| e.to_string())?;
+                continue;
+            }
+            Err(ValidationFailure::Unavailable(error)) => {
+                return Err(format!("无法校验备份 {}，已停止轮换：{}", item.name, error));
+            }
         }
         valid_count += 1;
         if valid_count > MAX_BACKUPS {
@@ -1149,6 +1237,55 @@ fn stage_restore_at(state: &AppState, name: &str) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct SchemaMarkerHook {
+        path: PathBuf,
+        action: Box<dyn FnOnce()>,
+    }
+
+    thread_local! {
+        static SCHEMA_MARKER_HOOK: std::cell::RefCell<Option<SchemaMarkerHook>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    // A test installs this only on its own thread and candidate path. Take the
+    // callback before calling it, so recursive validation cannot fire it again.
+    pub(super) fn before_schema_marker_query(path: &Path) {
+        let hook = SCHEMA_MARKER_HOOK.with(|slot| {
+            let mut hook = slot.borrow_mut();
+            if hook.as_ref().is_some_and(|hook| hook.path == path) {
+                hook.take()
+            } else {
+                None
+            }
+        });
+        if let Some(hook) = hook {
+            (hook.action)();
+        }
+    }
+
+    fn with_schema_marker_hook<T>(
+        path: &Path,
+        hook: impl FnOnce() + 'static,
+        action: impl FnOnce() -> T,
+    ) -> T {
+        struct ResetHook;
+        impl Drop for ResetHook {
+            fn drop(&mut self) {
+                drop(SCHEMA_MARKER_HOOK.with(|slot| slot.borrow_mut().take()));
+            }
+        }
+        SCHEMA_MARKER_HOOK.with(|slot| {
+            let mut current = slot.borrow_mut();
+            assert!(current.is_none(), "A marker hook is already installed");
+            *current = Some(SchemaMarkerHook {
+                path: path.to_path_buf(),
+                action: Box::new(hook),
+            });
+        });
+        let _reset = ResetHook;
+        action()
+    }
 
     // The production spans are inert unless this one thread explicitly captures
     // an ignored profile operation. No global environment switch enables them.
@@ -2104,6 +2241,363 @@ mod tests {
             next_job_id: std::sync::atomic::AtomicU64::new(1),
             vision_api_key: std::sync::Mutex::new(String::new()),
         }
+    }
+
+    #[test]
+    fn typed_validation_classifies_only_explicit_sqlite_corruption_as_rejected() {
+        use rusqlite::ffi;
+
+        let cases = [
+            (ffi::SQLITE_CORRUPT, true),
+            (ffi::SQLITE_CORRUPT_INDEX, true),
+            (ffi::SQLITE_NOTADB, true),
+            (ffi::SQLITE_BUSY, false),
+            (ffi::SQLITE_BUSY_SNAPSHOT, false),
+            (ffi::SQLITE_LOCKED, false),
+            (ffi::SQLITE_IOERR_READ, false),
+            (ffi::SQLITE_CANTOPEN, false),
+            (ffi::SQLITE_NOMEM, false),
+            (ffi::SQLITE_PERM, false),
+            (ffi::SQLITE_ERROR, false),
+        ];
+        for (code, rejected) in cases {
+            let cause = format!("synthetic SQLite cause for {code}");
+            let sqlite_error =
+                rusqlite::Error::SqliteFailure(ffi::Error::new(code), Some(cause.clone()));
+            let failure = ValidationFailure::from_sqlite(sqlite_error);
+            assert_eq!(
+                matches!(&failure, ValidationFailure::Rejected(_)),
+                rejected,
+                "Unexpected classification for SQLite {code}: {failure:?}"
+            );
+            assert_eq!(failure.to_string(), cause);
+        }
+        let error = rusqlite::Error::InvalidColumnIndex(7);
+        let cause = error.to_string();
+        let failure = ValidationFailure::from_sqlite(error);
+        assert!(matches!(&failure, ValidationFailure::Unavailable(_)));
+        assert_eq!(failure.to_string(), cause);
+        let failure = ValidationFailure::from_io(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "synthetic probe permission failure",
+        ));
+        assert!(matches!(&failure, ValidationFailure::Unavailable(_)));
+        assert_eq!(failure.to_string(), "synthetic probe permission failure");
+    }
+
+    #[test]
+    fn typed_validation_rejects_actual_missing_and_invalid_schema_markers() {
+        let root = test_root("synthetic-typed-marker-schema");
+        assert!(root.is_absolute() && root.starts_with(std::env::temp_dir()));
+        const SENTINEL: &[u8] = b"synthetic typed marker fixture v1\n";
+        fs::write(root.join("fixture.marker"), SENTINEL).unwrap();
+        let cases = [
+            ("missing-table", "DROP TABLE app_meta;"),
+            ("missing-key", "DROP TABLE app_meta; CREATE TABLE app_meta(value TEXT); INSERT INTO app_meta VALUES('11');"),
+            ("missing-value", "DROP TABLE app_meta; CREATE TABLE app_meta(key TEXT PRIMARY KEY); INSERT INTO app_meta VALUES('schema_version');"),
+            ("missing-row", "DELETE FROM app_meta WHERE key='schema_version';"),
+            ("blob", "UPDATE app_meta SET value=x'3131' WHERE key='schema_version';"),
+            ("integer", "DROP TABLE app_meta; CREATE TABLE app_meta(key TEXT PRIMARY KEY,value); INSERT INTO app_meta VALUES('schema_version',11);"),
+            ("real", "DROP TABLE app_meta; CREATE TABLE app_meta(key TEXT PRIMARY KEY,value); INSERT INTO app_meta VALUES('schema_version',11.0);"),
+            ("null", "DROP TABLE app_meta; CREATE TABLE app_meta(key TEXT PRIMARY KEY,value); INSERT INTO app_meta VALUES('schema_version',NULL);"),
+            ("invalid-utf8", "UPDATE app_meta SET value=CAST(x'ff' AS TEXT) WHERE key='schema_version';"),
+            ("invalid-text", "UPDATE app_meta SET value='not-a-version' WHERE key='schema_version';"),
+            ("zero", "UPDATE app_meta SET value='0' WHERE key='schema_version';"),
+            ("future", "UPDATE app_meta SET value='12' WHERE key='schema_version';"),
+        ];
+        for (name, mutation) in cases {
+            let candidate = root.join(format!("{name}.sqlite3"));
+            let writer = seed(&candidate, name);
+            let journal: String = writer
+                .query_row("PRAGMA journal_mode=DELETE", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(journal, "delete");
+            writer.execute_batch(mutation).unwrap();
+            drop(writer);
+            let original = fs::read(&candidate).unwrap();
+            let modified = fs::metadata(&candidate).unwrap().modified().unwrap();
+            let failure = validate_typed(&candidate).unwrap_err();
+            assert!(
+                matches!(&failure, ValidationFailure::Rejected(_)),
+                "Actual marker case {name} must be rejected: {failure:?}; fixture: {root:?}"
+            );
+            assert_eq!(fs::read(&candidate).unwrap(), original, "{name}");
+            assert_eq!(
+                fs::metadata(&candidate).unwrap().modified().unwrap(),
+                modified,
+                "{name}"
+            );
+            assert!(companions(&candidate)
+                .iter()
+                .skip(1)
+                .all(|path| !path.exists()));
+        }
+        let valid = root.join("valid-control.sqlite3");
+        drop(seed(&valid, "valid-control"));
+        validate_typed(&valid).unwrap();
+        assert_eq!(fs::read(root.join("fixture.marker")).unwrap(), SENTINEL);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rotate_preserves_actual_exclusive_locked_candidate_and_its_cause() {
+        let root = test_root("synthetic-typed-rotation-locked");
+        assert!(root.is_absolute() && root.starts_with(std::env::temp_dir()));
+        const SENTINEL: &[u8] = b"synthetic locked rotation fixture v1\n";
+        fs::write(root.join("fixture.marker"), SENTINEL).unwrap();
+        let backups = root.join("backups");
+        let candidate = backups.join("candidate.sqlite3");
+        let writer = seed(&candidate, "locked-candidate");
+        let journal: String = writer
+            .query_row("PRAGMA journal_mode=DELETE", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(journal, "delete");
+        writer.busy_timeout(std::time::Duration::ZERO).unwrap();
+        validate_typed(&candidate).unwrap();
+        let originals = companions(&candidate).map(|path| {
+            let snapshot = if path.exists() {
+                Some((
+                    fs::read(&path).unwrap(),
+                    fs::metadata(&path).unwrap().modified().unwrap(),
+                ))
+            } else {
+                None
+            };
+            (path, snapshot)
+        });
+        let mut before_names: Vec<_> = fs::read_dir(&backups)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        before_names.sort();
+        let reference =
+            Connection::open_with_flags(&candidate, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        reference.busy_timeout(std::time::Duration::ZERO).unwrap();
+        writer.execute_batch("BEGIN EXCLUSIVE").unwrap();
+        let actual_sqlite =
+            reference.query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0));
+        let classified = validate_typed(&candidate);
+        let rotated = rotate(&backups);
+        // Collect outcomes while the real lock exists; release every connection
+        // before any result or preservation assertion can fail.
+        let rollback = writer.execute_batch("ROLLBACK");
+        drop(reference);
+        drop(writer);
+
+        assert!(
+            rollback.is_ok(),
+            "Failed to release synthetic writer: {rollback:?}"
+        );
+        let native_error = actual_sqlite.unwrap_err();
+        assert!(matches!(
+            &native_error,
+            rusqlite::Error::SqliteFailure(failure, _)
+                if matches!(failure.code,
+                    rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+        ));
+        let cause = native_error.to_string();
+        let failure = classified.unwrap_err();
+        assert!(matches!(&failure, ValidationFailure::Unavailable(_)));
+        assert!(failure.to_string().contains(&cause));
+        let error = rotated.unwrap_err();
+        assert!(
+            error.contains(&cause),
+            "Native cause lost: {error}; expected {cause}; fixture: {root:?}"
+        );
+        for (path, snapshot) in originals {
+            if let Some((bytes, modified)) = snapshot {
+                assert_eq!(fs::read(&path).unwrap(), bytes);
+                assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), modified);
+            } else {
+                assert!(!path.exists(), "Unexpected sidecar: {path:?}");
+            }
+        }
+        let mut after_names: Vec<_> = fs::read_dir(&backups)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        after_names.sort();
+        assert_eq!(after_names, before_names);
+        assert!(!backups.join("rejected").exists());
+        assert_eq!(fs::read(root.join("fixture.marker")).unwrap(), SENTINEL);
+        validate_typed(&candidate).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn rotate_preserves_valid_wal_candidate_when_probe_temp_is_unavailable() {
+        const CHILD_ROOT: &str = "IMAGELORE_TEST_PROBE_TEMP_CHILD_ROOT_V1";
+        const FIXTURE_MARKER: &[u8] = b"ImageLore probe-temp regression fixture v1\n";
+        const TEST_NAME: &str =
+            "backup::tests::rotate_preserves_valid_wal_candidate_when_probe_temp_is_unavailable";
+
+        if let Some(root) = std::env::var_os(CHILD_ROOT) {
+            let root = PathBuf::from(root);
+            assert!(root.is_absolute());
+            assert!(root
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("imagelore-rotate-probe-temp-"));
+            assert_eq!(
+                fs::read(root.join("fixture.marker")).unwrap(),
+                FIXTURE_MARKER
+            );
+            assert_eq!(std::env::temp_dir(), root.join("temp-is-a-file"));
+            // Windows temp_dir() appends a separator; metadata on that form
+            // requires a directory even though Path equality ignores it.
+            assert!(fs::metadata(root.join("temp-is-a-file")).unwrap().is_file());
+            // No SQLite connection is opened in this child. Production rotate
+            // must preserve the valid candidate when its probe cannot be made.
+            let result = rotate(&root.join("backups"));
+            assert!(
+                result.is_err(),
+                "Probe I/O failure must abort rotation, not classify the candidate as corrupt: {result:?}"
+            );
+            return;
+        }
+
+        let root = test_root("rotate-probe-temp");
+        fs::write(root.join("fixture.marker"), FIXTURE_MARKER).unwrap();
+        let source = root.join("source.sqlite3");
+        let candidate = root.join("backups/candidate.sqlite3");
+        let conn = seed(&source, "before-wal");
+        conn.pragma_update(None, "journal_mode", "WAL").unwrap();
+        conn.pragma_update(None, "wal_autocheckpoint", 0).unwrap();
+        conn.execute("UPDATE marker SET value='committed-wal'", [])
+            .unwrap();
+        for (source, target) in companions(&source).iter().zip(companions(&candidate)) {
+            assert!(source.is_file());
+            fs::copy(source, target).unwrap();
+        }
+        drop(conn);
+        validate(&candidate).unwrap();
+        let originals = companions(&candidate).map(|path| {
+            let bytes = fs::read(&path).unwrap();
+            let modified = fs::metadata(&path).unwrap().modified().unwrap();
+            (path, bytes, modified)
+        });
+        let mut before_names: Vec<_> = fs::read_dir(root.join("backups"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        before_names.sort();
+        let bad_temp = root.join("temp-is-a-file");
+        let temp_sentinel = b"not a directory\0\xff";
+        fs::write(&bad_temp, temp_sentinel).unwrap();
+
+        // TEMP/TMP belong to this subprocess only; parallel parent tests keep
+        // their normal environment. The child selects this exact test once.
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", TEST_NAME, "--nocapture", "--test-threads=1"])
+            .env(CHILD_ROOT, &root)
+            .env("TEMP", &bad_temp)
+            .env("TMP", &bad_temp)
+            .output()
+            .unwrap();
+        eprintln!("{}", String::from_utf8_lossy(&output.stdout));
+        eprintln!("{}", String::from_utf8_lossy(&output.stderr));
+        let retained: Vec<_> = originals
+            .iter()
+            .map(|(path, bytes, modified)| {
+                let bytes_match = fs::read(path)
+                    .map(|actual| actual == *bytes)
+                    .unwrap_or(false);
+                let mtime_match = fs::metadata(path)
+                    .and_then(|metadata| metadata.modified())
+                    .map(|actual| actual == *modified)
+                    .unwrap_or(false);
+                (
+                    path.file_name().unwrap().to_owned(),
+                    bytes_match,
+                    mtime_match,
+                )
+            })
+            .collect();
+        eprintln!("Candidate byte/mtime preservation: {retained:?}; fixture: {root:?}");
+        assert!(
+            output.status.success(),
+            "Probe-temp subprocess regression failed"
+        );
+        assert!(retained.iter().all(|(_, bytes, mtime)| *bytes && *mtime));
+        let mut after_names: Vec<_> = fs::read_dir(root.join("backups"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        after_names.sort();
+        assert_eq!(after_names, before_names);
+        assert!(!root.join("backups/rejected").exists());
+        assert_eq!(fs::read(&bad_temp).unwrap(), temp_sentinel);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn schema_marker_busy_error_preserves_actual_sqlite_cause() {
+        use std::{cell::RefCell, rc::Rc};
+
+        let root = test_root("schema-marker-busy");
+        let candidate = root.join("candidate.sqlite3");
+        let writer = Rc::new(seed(&candidate, "marker-busy"));
+        let journal: String = writer
+            .query_row("PRAGMA journal_mode=DELETE", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(journal, "delete");
+        writer.busy_timeout(std::time::Duration::ZERO).unwrap();
+        assert!(companions(&candidate)
+            .iter()
+            .skip(1)
+            .all(|path| !path.exists()));
+        validate(&candidate).unwrap();
+        let original = fs::read(&candidate).unwrap();
+        let original_mtime = fs::metadata(&candidate).unwrap().modified().unwrap();
+        let sqlite_cause = Rc::new(RefCell::new(None));
+        let cause_from_hook = Rc::clone(&sqlite_cause);
+        let locked_writer = Rc::clone(&writer);
+        let reference =
+            Connection::open_with_flags(&candidate, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        reference.busy_timeout(std::time::Duration::ZERO).unwrap();
+
+        let result = with_schema_marker_hook(
+            &candidate,
+            move || {
+                // The production integrity statement has ended. A different,
+                // real connection now holds an exclusive rollback-journal lock.
+                locked_writer.execute_batch("BEGIN EXCLUSIVE").unwrap();
+                let error = reference
+                    .query_row(
+                        "SELECT value FROM app_meta WHERE key='schema_version'",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .unwrap_err();
+                assert!(matches!(
+                    &error,
+                    rusqlite::Error::SqliteFailure(failure, _)
+                        if matches!(failure.code,
+                            rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+                ));
+                *cause_from_hook.borrow_mut() = Some(error.to_string());
+            },
+            || validate(&candidate),
+        );
+        writer.execute_batch("ROLLBACK").unwrap();
+        drop(writer);
+        assert_eq!(fs::read(&candidate).unwrap(), original);
+        assert_eq!(
+            fs::metadata(&candidate).unwrap().modified().unwrap(),
+            original_mtime
+        );
+        let actual_cause = sqlite_cause
+            .borrow_mut()
+            .take()
+            .expect("The one-shot marker boundary hook must have run");
+        let error = result.unwrap_err();
+        assert!(
+            error.contains(&actual_cause) && !error.contains("缺少 schema 标记"),
+            "Actual SQLite cause was swallowed: expected {actual_cause:?}, got {error:?}"
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
