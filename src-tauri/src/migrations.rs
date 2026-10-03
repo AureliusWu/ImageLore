@@ -396,7 +396,7 @@ fn migrate_v11(conn: &Connection) -> Result<(), String> {
             rows.filter_map(Result::ok).collect()
         };
         for id in ids {
-            crate::db::reindex_asset(conn, id)?;
+            crate::db::index_created_asset(conn, id)?;
         }
     }
     Ok(())

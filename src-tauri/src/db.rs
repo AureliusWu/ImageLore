@@ -344,15 +344,33 @@ pub fn add_tags(conn: &mut Connection, asset_ids: &[i64], tags: &[String]) -> Re
 }
 
 pub fn reindex_asset(conn: &Connection, asset_id: i64) -> Result<(), String> {
+    write_search_index(conn, asset_id, true)
+}
+
+/// Only for a canonical asset inserted in this transaction, or a rebuild whose
+/// English FTS table was cleared in the same transaction/savepoint. There must
+/// be no English FTS entry for this asset; this is not derived-orphan repair.
+pub(crate) fn index_created_asset(conn: &Connection, asset_id: i64) -> Result<(), String> {
+    write_search_index(conn, asset_id, false)
+}
+
+fn write_search_index(
+    conn: &Connection,
+    asset_id: i64,
+    replace_english: bool,
+) -> Result<(), String> {
     let asset = get_asset(conn, asset_id)?;
     let tags = asset.tags.join(" ");
-    conn.execute(
-        "DELETE FROM asset_search WHERE asset_id=?1",
-        params![asset_id],
-    )
-    .map_err(|e| e.to_string())?;
+    if replace_english {
+        conn.execute(
+            "DELETE FROM asset_search WHERE asset_id=?1",
+            params![asset_id],
+        )
+        .map_err(|e| e.to_string())?;
+    }
     let visual_text = crate::visual_dna::search_text(conn, asset_id)?;
     let reference_text = crate::references::search_text(conn, asset_id)?;
+    // Legacy English FTS rowids are independent of canonical asset IDs.
     conn.execute(
         "INSERT INTO asset_search(asset_id,name,prompt,negative_prompt,model,tags,visual_dna,reference) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
         params![asset_id, asset.name, asset.prompt, asset.negative_prompt, asset.model, tags, visual_text, reference_text],
@@ -565,6 +583,189 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(include_str!("../schema.sql")).unwrap();
         conn
+    }
+
+    fn search_ids(conn: &Connection, query: &str) -> Vec<i64> {
+        let filter = LibraryFilter {
+            query: query.into(),
+            view: "all".into(),
+            ..Default::default()
+        };
+        let page = crate::search::library_page(conn, &filter, 0, 20).unwrap();
+        assert_eq!(page.total, page.items.len() as i64);
+        page.items.into_iter().map(|asset| asset.id).collect()
+    }
+
+    fn english_rows(conn: &Connection) -> Vec<(i64, i64, String)> {
+        let mut statement = conn
+            .prepare("SELECT rowid,asset_id,prompt FROM asset_search ORDER BY rowid")
+            .unwrap();
+        let rows = statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap();
+        rows.collect::<Result<Vec<_>, _>>().unwrap()
+    }
+
+    #[test]
+    fn created_asset_append_preserves_legacy_rowids_and_existing_replacement() {
+        let mut conn = test_conn();
+        conn.execute_batch(
+            "INSERT INTO assets(id,path,name,created_at,updated_at) VALUES
+               (1,'legacy.png','legacy.png',1,1),(3,'steady.png','steady.png',1,1);
+             INSERT INTO prompt_state(asset_id,prompt,updated_at) VALUES
+               (1,'legacyanchor 蓝发角色',1),(3,'steadyanchor',1);
+             INSERT INTO asset_search(rowid,asset_id,name,prompt) VALUES
+               (4,1,'legacy.png','legacyanchor 蓝发角色'),
+               (1,3,'steady.png','steadyanchor');",
+        )
+        .unwrap();
+        let legacy_rows = english_rows(&conn);
+        let created_id = {
+            let tx = conn.transaction().unwrap();
+            tx.execute(
+                "INSERT INTO assets(path,name,created_at,updated_at) VALUES('fresh.png','fresh.png',1,1)",
+                [],
+            )
+            .unwrap();
+            let id = tx.last_insert_rowid();
+            assert_eq!(id, 4); // An existing legacy FTS row already has rowid 4.
+            tx.execute(
+                "INSERT INTO prompt_state(asset_id,prompt,updated_at) VALUES(?1,'freshanchor 新增角色',1)",
+                params![id],
+            )
+            .unwrap();
+            index_created_asset(&tx, id).unwrap();
+            tx.commit().unwrap();
+            id
+        };
+        let rows = english_rows(&conn);
+        assert_eq!(
+            rows.iter()
+                .filter(|row| row.1 != created_id)
+                .cloned()
+                .collect::<Vec<_>>(),
+            legacy_rows
+        );
+        assert_eq!(rows.iter().filter(|row| row.1 == created_id).count(), 1);
+        assert_eq!(search_ids(&conn, "freshanchor"), vec![created_id]);
+        assert_eq!(search_ids(&conn, "新增角色"), vec![created_id]);
+        assert_eq!(search_ids(&conn, "legacyanchor"), vec![1]);
+        assert_eq!(search_ids(&conn, "steadyanchor"), vec![3]);
+
+        let tx = conn.transaction().unwrap();
+        // Add a stale duplicate only for the existing-asset repair phase;
+        // the append phase starts from a valid legacy index.
+        tx.execute(
+            "INSERT INTO asset_search(asset_id,name,prompt) VALUES(1,'legacy.png','legacyanchor 蓝发角色')",
+            [],
+        )
+        .unwrap();
+        assert_eq!(
+            tx.query_row(
+                "SELECT COUNT(*) FROM asset_search WHERE asset_id=1",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            2
+        );
+        tx.execute(
+            "UPDATE prompt_state SET prompt='changedanchor 红衣角色' WHERE asset_id=1",
+            [],
+        )
+        .unwrap();
+        reindex_asset(&tx, 1).unwrap();
+        reindex_asset(&tx, 1).unwrap();
+        tx.commit().unwrap();
+        let updated = english_rows(&conn);
+        assert_eq!(updated.iter().filter(|row| row.1 == 1).count(), 1);
+        assert_eq!(
+            updated.iter().filter(|row| row.1 != 1).collect::<Vec<_>>(),
+            rows.iter().filter(|row| row.1 != 1).collect::<Vec<_>>()
+        );
+        assert!(search_ids(&conn, "legacyanchor").is_empty());
+        assert_eq!(search_ids(&conn, "changedanchor"), vec![1]);
+        assert_eq!(search_ids(&conn, "红衣角色"), vec![1]);
+        assert_eq!(
+            conn.query_row(
+                "SELECT asset_id FROM asset_cjk_search WHERE rowid=?1",
+                params![created_id],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            created_id
+        );
+    }
+
+    #[test]
+    fn cleared_search_rebuild_append_preserves_all_keyword_fields_and_context() {
+        let mut conn = test_conn();
+        conn.execute_batch(
+            "INSERT INTO assets(id,path,name,created_at,updated_at) VALUES
+               (1,'prompt.png','prompt.png',1,1),(2,'dna.png','dna.png',1,1),(3,'reference.png','reference.png',1,1);
+             INSERT INTO prompt_state(asset_id,prompt,negative_prompt,model,updated_at) VALUES
+               (1,'promptanchor 蓝发角色','negativeanchor','modelanchor',1),(2,'','','',1),(3,'','','',1);
+             INSERT INTO tags(id,name,created_at) VALUES(1,'taganchor',1);
+             INSERT INTO asset_tags(asset_id,tag_id,created_at) VALUES(1,1,1);
+             INSERT INTO visual_dna(asset_id,subject,search_text,updated_at) VALUES(2,'dnaanchor 红衣角色','dnaanchor 红衣角色',1);
+             INSERT INTO reference_sources(asset_id,source_url,page_title,created_at,updated_at) VALUES(3,'https://example.test/reference.png','referenceanchor 紫色光影',1,1);",
+        )
+        .unwrap();
+        for id in 1..=3 {
+            crate::generation_index::upsert(&conn, id, r#"{"seed":42,"steps":28}"#).unwrap();
+            reindex_asset(&conn, id).unwrap();
+        }
+        let expected = [
+            ("promptanchor", 1),
+            ("蓝发角色", 1),
+            ("negativeanchor", 1),
+            ("modelanchor", 1),
+            ("taganchor", 1),
+            ("dnaanchor", 2),
+            ("红衣角色", 2),
+            ("referenceanchor", 3),
+            ("紫色光影", 3),
+        ];
+        for (query, id) in expected {
+            assert_eq!(search_ids(&conn, query), vec![id]);
+        }
+        let tx = conn.transaction().unwrap();
+        tx.execute("DELETE FROM asset_search", []).unwrap();
+        for id in 1..=3 {
+            index_created_asset(&tx, id).unwrap();
+        }
+        tx.commit().unwrap();
+        for (query, id) in expected {
+            assert_eq!(search_ids(&conn, query), vec![id]);
+        }
+        assert_eq!(english_rows(&conn).len(), 3);
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM asset_cjk_search WHERE rowid=asset_id",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            3
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM generation_index WHERE seed='42' AND steps=28",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            3
+        );
+        assert_eq!(get_asset(&conn, 1).unwrap().tags, vec!["taganchor"]);
+        assert_eq!(
+            crate::visual_dna::get(&conn, 2).unwrap().subject,
+            "dnaanchor 红衣角色"
+        );
+        assert_eq!(
+            crate::references::list(&conn, 3).unwrap()[0].page_title,
+            "referenceanchor 紫色光影"
+        );
     }
 
     #[test]

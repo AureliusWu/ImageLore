@@ -235,7 +235,7 @@ fn insert_new(state: &AppState, item: PreparedAsset) -> Result<InsertOutcome, St
     db::replace_tags_raw(&tx, id, &item.tags)?;
     merge_context(&tx, id, &item)?;
     generation_index::upsert(&tx, id, &item.generation_json)?;
-    db::reindex_asset(&tx, id)?;
+    db::index_created_asset(&tx, id)?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(InsertOutcome::Added(id))
 }
@@ -538,6 +538,150 @@ mod tests {
             .unwrap()
             .sort_by_key(|parent| parent["portable_id"].as_str().unwrap().to_string());
         value
+    }
+
+    #[test]
+    fn new_import_and_fingerprint_duplicate_keep_single_search_entries() {
+        use serde_json::json;
+        let root = temp_root("created-search-index");
+        let images = root.join("images");
+        fs::create_dir_all(&images).unwrap();
+        let state = test_state(&root.join("library"));
+        let base = image_fixture(&images, "base.png", [10, 20, 30]);
+        let fresh = image_fixture(&images, "fresh.png", [40, 50, 60]);
+        sidecar::write_atomic(&sidecar::path_for(&base), &json!({
+            "schema":"imagelore.sidecar.v3", "prompt":"baseanchor",
+            "reference":{"source_url":"https://example.test/base.png", "page_url":"https://example.test/base", "page_title":"oldreferenceanchor", "captured_at":1}
+        }).to_string()).unwrap();
+        sidecar::write_atomic(&sidecar::path_for(&fresh), &json!({
+            "schema":"imagelore.sidecar.v3", "prompt":"freshanchor 新增角色", "tags":["freshtag"],
+            "visual_dna":{"subject":"dnaanchor 红衣角色"},
+            "session":{"name":"index-session", "asset_note":"fresh note"},
+            "reference":{"source_url":"https://example.test/fresh.png", "page_title":"freshreferenceanchor 紫色光影", "captured_at":1}
+        }).to_string()).unwrap();
+        let base_summary = import_files(&state, &[&base]);
+        assert_eq!((base_summary.added, base_summary.failed), (1, 0));
+        let base_id = base_summary.last_id.unwrap();
+        let fresh_summary = import_files(&state, &[&fresh]);
+        assert_eq!((fresh_summary.added, fresh_summary.failed), (1, 0));
+        let fresh_id = fresh_summary.last_id.unwrap();
+        let assert_search = |query: &str, id: i64| {
+            let conn = state.db.lock().unwrap();
+            let filter = crate::models::LibraryFilter {
+                query: query.into(),
+                view: "all".into(),
+                ..Default::default()
+            };
+            let page = crate::search::library_page(&conn, &filter, 0, 20).unwrap();
+            assert_eq!(page.total, 1);
+            assert_eq!(page.items[0].id, id);
+            assert_eq!(
+                conn.query_row("SELECT COUNT(*) FROM asset_search", [], |row| row
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                2
+            );
+            assert_eq!(
+                conn.query_row(
+                    "SELECT COUNT(*) FROM asset_search WHERE asset_id=?1",
+                    params![id],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+                1
+            );
+            assert_eq!(
+                conn.query_row(
+                    "SELECT asset_id FROM asset_cjk_search WHERE rowid=?1",
+                    params![id],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+                id
+            );
+        };
+        for query in [
+            "freshanchor",
+            "新增角色",
+            "freshtag",
+            "dnaanchor",
+            "红衣角色",
+            "freshreferenceanchor",
+            "紫色光影",
+        ] {
+            assert_search(query, fresh_id);
+        }
+        assert_eq!(
+            exported(&state, fresh_id)["session"]["name"],
+            "index-session"
+        );
+
+        let duplicate = images.join("duplicate.png");
+        fs::copy(&base, &duplicate).unwrap();
+        sidecar::write_atomic(&sidecar::path_for(&duplicate), &json!({
+            "schema":"imagelore.sidecar.v3", "prompt":"mustnotreplacebase",
+            "reference":{"source_url":"https://example.test/base.png", "page_url":"https://example.test/base", "page_title":"duplicatereferenceanchor", "captured_at":2}
+        }).to_string()).unwrap();
+        let duplicate_summary = import_files(&state, &[&duplicate]);
+        assert_eq!(
+            (
+                duplicate_summary.added,
+                duplicate_summary.duplicates,
+                duplicate_summary.failed
+            ),
+            (0, 1, 0)
+        );
+        assert_eq!(duplicate_summary.last_id, Some(base_id));
+        assert_search("duplicatereferenceanchor", base_id);
+        assert_search("baseanchor", base_id);
+
+        sidecar::write_atomic(&sidecar::path_for(&base), &json!({
+            "schema":"imagelore.sidecar.v3", "prompt":"mustnotreplacebase",
+            "reference":{"source_url":"https://example.test/base.png", "page_url":"https://example.test/base", "page_title":"latestreferenceanchor 蓝色光影", "captured_at":3}
+        }).to_string()).unwrap();
+        let refresh_summary = import_files(&state, &[&base]);
+        assert_eq!(
+            (
+                refresh_summary.added,
+                refresh_summary.skipped,
+                refresh_summary.duplicates,
+                refresh_summary.failed
+            ),
+            (0, 1, 0, 0)
+        );
+        assert_search("latestreferenceanchor", base_id);
+        assert_search("蓝色光影", base_id);
+        assert_search("freshanchor", fresh_id);
+        {
+            let conn = state.db.lock().unwrap();
+            assert_eq!(db::get_asset(&conn, base_id).unwrap().prompt, "baseanchor");
+            assert_eq!(references::list(&conn, base_id).unwrap().len(), 1);
+            assert_eq!(
+                conn.query_row("SELECT COUNT(*) FROM generation_index", [], |row| row
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                2
+            );
+            for old in [
+                "oldreferenceanchor",
+                "duplicatereferenceanchor",
+                "mustnotreplacebase",
+            ] {
+                let filter = crate::models::LibraryFilter {
+                    query: old.into(),
+                    view: "all".into(),
+                    ..Default::default()
+                };
+                assert_eq!(
+                    crate::search::library_page(&conn, &filter, 0, 20)
+                        .unwrap()
+                        .total,
+                    0
+                );
+            }
+        }
+        drop(state);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
