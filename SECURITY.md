@@ -27,6 +27,8 @@ git config --local imagelore.gitleaksBinary <verified-local-gitleaks-executable>
 
 `pre-commit` 检查真实暂存字节；`pre-push` 同时检查可达历史和 Git 传入的实际待上传 SHA，防止直接推送未被本地分支引用的旧提交。缺少已验证的本地 Gitleaks 时拒绝推送。钩子使用本地配置的扫描器路径，路径不得写入公开项目配置。
 
+本地 Git 的 noreply 邮箱不能覆盖 GitHub 自动生成提交时的账号邮箱选择。维护者应在账号 Settings → Emails 开启 `Keep my email addresses private` 与 `Block command line pushes that expose my email`，并核实新生成提交实际使用 noreply；[GitHub 官方说明](https://docs.github.com/en/account-and-profile/how-tos/email-preferences/blocking-command-line-pushes-that-expose-your-personal-email-address)。未验证该设置时，不创建或重新打开会生成测试合并提交的 PR，也不通过网页生成合并提交；可以将已通过全历史检查的 noreply 候选提交快进到主分支。
+
 手工核验入口：
 
 ```text
