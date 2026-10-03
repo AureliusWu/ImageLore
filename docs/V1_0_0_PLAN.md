@@ -115,13 +115,13 @@ A1 与 Reference 切图回归首先在接手轮次完成。后续 A2–A7 已开
 - Windows Authenticode：签应用EXE与NSIS安装器，验证发行者、签名链及可信时间戳。需要可用代码签名证书或受支持签名服务；不能承诺签名后立即获得SmartScreen信誉。
 - Tauri updater：独立签名密钥，客户端内置公钥，发行包配套签名。验签证明更新包来自发行者；不能替代Windows代码签名。私钥只进入受保护发布环境，禁止提交、打日志或放进客户端。
 
-实施前确定签名服务/证书、发布账号、Secrets、密钥备份与轮换责任。密钥轮换要设计旧客户端到新公钥的升级桥接；丢失密钥不能通过关闭验签解决。
+实施前确定本地或外部受控签名服务/证书、发布账号、密钥备份与轮换责任。按敏感信息保护要求，私钥、密码和访问令牌保存在仓库外，不上传 GitHub，也不放入 GitHub Secrets；GitHub 只接收公开公钥和已签名产物。密钥轮换要设计旧客户端到新公钥的升级桥接；丢失密钥不能通过关闭验签解决。
 
 官方依据：[Tauri Windows signing](https://v2.tauri.app/distribute/sign/windows/)、[Tauri updater](https://v2.tauri.app/plugin/updater/)。实施时再次核对锁定依赖与当时文档。
 
 ### 5.2 推荐渠道与用户流程
 
-源码仓库当前为私有仓库。推荐独立的发行仓库或HTTPS静态分发渠道，托管 updater manifest 与签名产物；在选定渠道前验证普通已安装客户端可以下载。不能假定私有GitHub Release可匿名访问，不能把共享仓库Token写进应用。
+源码仓库现已公开。候选发行渠道可使用本仓库的公开 GitHub Release 或 HTTPS 静态渠道，托管 updater manifest 与签名产物；发布前仍须实际验证普通客户端匿名下载和签名内容。Actions artifact 不作为客户端更新渠道，不能把共享仓库 Token 写进应用。源码、历史和上传防护要求见 [SECURITY.md](../SECURITY.md)。
 
 沿用NSIS currentUser与稳定identifier；接入Tauri updater和最小所需能力。设置页提供当前版本、检查更新、更新说明、下载进度/取消、错误原因与重试。启动检查不阻塞本地资料库，断网仍可使用；稳定渠道默认不升级到预发布版。安装更新前复用编辑flush和任务协调，创建并验证备份，得到用户安装意图后关闭/重启。
 

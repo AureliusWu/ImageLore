@@ -1554,7 +1554,15 @@ mod tests {
         profile_plain_path(&supplied);
         let root = fs::canonicalize(&supplied).unwrap();
         let project = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-        let evidence = fs::canonicalize(project.join("<private-evidence>")).unwrap();
+        let evidence = fs::canonicalize(PathBuf::from(
+            std::env::var_os("IMAGELORE_PRIVATE_EVIDENCE_ROOT")
+                .expect("Explicit external private evidence root is required"),
+        ))
+        .unwrap();
+        assert!(
+            !evidence.starts_with(fs::canonicalize(project).unwrap()),
+            "Private profile fixtures must remain outside the repository"
+        );
         assert_eq!(root.parent(), Some(evidence.as_path()));
         assert!(root
             .file_name()

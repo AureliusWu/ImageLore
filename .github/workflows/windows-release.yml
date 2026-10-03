@@ -23,6 +23,19 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Check sensitive information before building or uploading
+        shell: pwsh
+        run: |
+          python scripts/test_sensitive_guard.py
+          if ($LASTEXITCODE -ne 0) { throw 'Sensitive guard regression tests failed' }
+          python scripts/check_sensitive.py --tracked --history
+          if ($LASTEXITCODE -ne 0) { throw 'Sensitive information guard failed' }
+          ./scripts/check_gitleaks.ps1
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -93,7 +106,7 @@ jobs:
         run: |
           $baseline = Join-Path $env:RUNNER_TEMP ("imagelore-v0.19.0-" + [Guid]::NewGuid().ToString("N"))
           if (Test-Path -LiteralPath $baseline) { throw "Upgrade baseline directory already exists" }
-          git worktree add --detach "$baseline" 23959672b340524b6db9cf97298a4118f4668efb
+          git worktree add --detach "$baseline" cfe80c5dfa6e4290b6372910e2a98908193e0b13
           if ($LASTEXITCODE -ne 0) { throw "Could not prepare upgrade baseline" }
           Push-Location $baseline
           try {

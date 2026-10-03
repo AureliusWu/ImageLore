@@ -1,0 +1,6 @@
+title = "ImageLore sensitive information guard"
+
+[extend]
+useDefault = true
+
+# No blanket source, history, or test-fixture allowlists.

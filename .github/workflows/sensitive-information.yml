@@ -1,0 +1,46 @@
+name: ImageLore Sensitive Information Guard
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: imagelore-sensitive-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  sensitive-information:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Verify sensitive guard regressions
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python scripts/test_sensitive_guard.py
+          if ($LASTEXITCODE -ne 0) { throw 'Sensitive guard regression tests failed' }
+
+      - name: Check tracked files and Git history
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python scripts/check_sensitive.py --tracked --history
+          if ($LASTEXITCODE -ne 0) { throw 'Tracked files or Git history failed the sensitive information guard' }
+
+      - name: Verify and run pinned Gitleaks on all history
+        shell: pwsh
+        run: ./scripts/check_gitleaks.ps1
