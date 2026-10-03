@@ -1,6 +1,6 @@
 # v0.26.0 真实模型验收矩阵
 
-本报告按实际 source/SHA 分开记录 2026-10-02 的模型验收。最新 `2276de1` 产物完成300图功能流程、编码期间关窗与恢复、编码取消与恢复、失败代理环境下的缓存分支，以及观察到实际下载后的取消。旧 `34baa87` 的自然32图、哈希取消和初始化取消保留原身份，不转记到新产物。各项只有终态、正常关闭与独立持久化核验齐全才记为通过；功能通过不等于性能、质量或全部版本门槛通过。
+本报告按实际 source/SHA 分开记录 2026-10-02 的模型验收，2026-10-03 更新既有50k报告的只读复核。历史 `2276de1` 产物完成300图、5k、50k功能闭环、编码期间关窗与恢复、编码取消与恢复、失败代理环境下的缓存分支，以及实际下载取消和重新下载恢复。旧 `34baa87` 的自然32图、哈希取消和初始化取消保留原身份；这些结果也不能转记为隐私重写后源码的验收。各项只有终态、正常关闭与独立持久化核验齐全才记为通过；功能通过不等于质量或全部版本门槛通过，三次可比冷测仍未完成。
 
 桌面current于北京时间11:06:29更新为 `2276de1` / EXE `077027CD…32B82B`，旧 `34baa87` 保留，见[桌面更新回执](V0_26_DESKTOP_ACCEPTANCE.md)。这不表示v0.26或v1.0.0的全部退出条件已满足。
 
@@ -20,12 +20,12 @@
 | 失败代理环境下缓存分支 / 新2276de1 | `PASS_REAL_MODEL_ENCODING_AND_DURABLE_RESTART` | 已可信缓存编码300/300，备份及重启核验；仅3warm smoke，不表示物理断网 |
 | 实际下载阶段UI取消 / 新2276de1 | `PASS_OBSERVED_DOWNLOAD_CANCEL_AND_DURABLE_CLOSE` | 观察暂存92,828,085字节后取消，112ms观察到终态；0向量部分库重启，未发布组件且无未发布stage；未执行重新下载或编码恢复 |
 | 5k真实模型规模流程 / 新2276de1 | `PASS_REAL_MODEL_ENCODING_AND_DURABLE_RESTART` | 5000/5000真实编码、各20warm及备份/关闭/重启核验通过；详见下节 |
-| 50k真实模型规模流程 | 待验收 | 不能由5k外推为50k通过；尚未完成本矩阵50k真实模型验收 |
+| 50k真实模型规模流程 / 历史2276de1 | `PASS_REAL_MODEL_ENCODING_AND_DURABLE_RESTART` | 50000/50000实际编码、failed=0；各20warm IPC p95=1350.6/486.1ms；备份/两次关闭/一次fresh重启持久核验一致；合成图库非自然召回 |
 | 下载取消后重新下载并恢复 / 新2276de1 | `PASS_REAL_MODEL_ENCODING_AND_DURABLE_RESTART` | 独立空缓存中实际取消、部分库重启，再真实下载可信组件及编码300项，五阶段核验和四次正常关闭通过；仅3warm smoke |
 | 物理断网、损坏模型重新下载 | 未完成本矩阵验收 | 已完成下载重试不代替损坏模型重试；失败代理缓存分支不等于物理断网 |
 | derivative / Remix 导入中物理关窗 | 受控选择输入的原生UI闭环通过 | 真实关系/Session/谱系和最新编辑完成后正常退出，fresh-profile读回一致；fixture picker bypass及其它边界见[导入记录](V0_26_IMPORT_CLOSE.md) |
 
-## 最新2276de1产物的独立终态
+## 历史2276de1产物的独立终态
 
 实际来源 `2276de179da95cf29a889a0a6e7d9a01d940ad8a`，EXE SHA256 `077027CDCE55A9FFCA55D18E00B84D50290FF876F9C708B721BC31BAE532B82B`，ProductVersion仍为0.26.0。实际候选路径为 `<private-evidence>/import-candidate-2276de1-20261002T025343-32ea0c6b/ImageLore.exe`。下列五项均有对应最终`finishedAt`、`errors=[]`、独立隔离目录和实际启动身份；未使用种子向量。
 
@@ -94,6 +94,24 @@ download-cancel在无已发布vision/text组件的fresh目录中实际进入down
 snapshot/full-closed/full-restarted均`valid=true`、integrity=ok、外键错误=0，三阶段asset/metadata/vector aggregate分别保持`942b6a5a1ab8449393f7aa635be8c480f77e936e3d4b201a171a2036eeaf9b1e`、`6231fe9d5264900d3ae0a9665d8149762d89a6fd62c1e88625e2e5342fe4ffe5`、`0607ea090ce038a47bfe42c679805fccaba33344fc52781b8388a14c5e79798e`。关闭副本核验保留原DB/WAL/SHM，源SQLite未打开。
 
 编码期间记录236份进程采样，观测Private Bytes峰值826478592字节；sample81中的PID1696在采样时退出或不可访问，保留一次collection failure，未补零或删除记录。这是带已知采样缺口的观测峰值，不声明完整进程树的真实最大值，也不计为10分钟内存预算通过。模型功能、索引及持久闭环的PASS不覆盖该内存缺口。
+
+## 50k真实模型规模流程
+
+2026-10-02T04:56:14.437Z终态为`PASS_REAL_MODEL_ENCODING_AND_DURABLE_RESTART`、errors为空，绑定上节完整`2276de1` source和EXE SHA；不是隐私重写后源码的重新验收。独立run为`<private-evidence>/native-model-v1/runs/2026-10-02T03-25-53-021Z-50000-functional-ddfcbc16-302f-4ee9-be09-b180b7bd778c/`。50,000张合成PNG/JPEG/WebP（含6张大图）真实编码，无种子向量；本项使用已有可信缓存，不表示自然图片召回或冷下载验收。
+
+| 项目 | 实际结果 |
+| --- | --- |
+| UI调度至终态观察 | worker 3882340ms；processed/indexed=50000，failed/skipped=0、cancelled=false |
+| worker吞吐口径 | 12.8788图/秒，包含prepare/hash/init及终态观察；不是隔离ONNX推理吞吐 |
+| 文本检索20warm nativeIpcMs | min1170 / median1251.55 / p95 1350.6 / max1439.2ms；3000ms门槛通过 |
+| 相似图20warm nativeIpcMs | min408.5 / median474.7 / p95 486.1 / max489.1ms；3000ms门槛通过 |
+| 首次文本/相似检索 | 1727.1/441.3ms，各一次；三次可比冷测仍未完成 |
+| 向量核验 | 50000项有限512维float32、102400000字节、当前fingerprint、stale=0；norm最大误差3.221689715005027e-08 |
+| 正常关闭与持久化 | 一次fresh-profile重启、两次WM_CLOSE retained-handle确切exit0，端口释放，无强杀；三份核验摘要一致 |
+
+20个warm原始样本已独立重算，median取中间两项均值、p95取`ceil(.95*20)`近秩，与报告相符；nativeIpcMs不包含外部轮询。snapshot/full-closed/full-restarted全部valid、integrity=ok、FK=0，资产/元数据/向量三组完整SHA见[50k验收记录](V0_26_MODEL_ACCEPTANCE.md)。两closed报告各11字段比较无差异，WAL只在新独立副本读取，clone checkpoint为(0,0,0)、前后typed业务/schema保持；源SQLite未打开，原DB/WAL/SHM的bytes/size/mtime/SHA保持并全保留。
+
+北京时间两次实际WM_CLOSE请求/观察退出为12:55:24.713/12:55:25.006、12:55:54.492/12:55:54.813；293/321ms为观察边界，helper queued→实际请求约1.1s单列，不归成产品阻塞。内存仅采 initial worker/查询窗口11:49:12.660–12:55:11.049：2711份、collection failure=0，观测Private Bytes峰953008128字节（908.86MiB）、summed Working Sets峰969887744字节（924.96MiB）。采集本身median1387/max3416ms，可能漏瞬态；不覆盖导入准备或重启，Working Sets可能重复共享页，不能当长期内存上界或滚动预算通过。功能、持久与warm预算PASS不关闭自然召回、三次冷测或阶段A全部门槛。
 
 ## 旧34baa87的固定程序与模型身份
 
@@ -289,7 +307,7 @@ adapter 的自然 PASS 标签表示真实编码、结构有效的完整排名、
 
 ## 本地证据路径与复核边界
 
-以下路径均相对仓库 `<project>`，位于 `<private-evidence>`，用于本机追溯，不随本报告提交为公开 Git 文件。
+以下路径以仓库外的 `<private-evidence>` 为抽象根，用于本机追溯；该根不是仓库子目录，原始材料不随本报告提交为公开 Git 文件。
 
 | 证据 | 本地目录 |
 | --- | --- |
@@ -310,4 +328,4 @@ adapter 的自然 PASS 标签表示真实编码、结构有效的完整排名、
 
 初始化取消另在 `<private-evidence>/native-model-v1/runs/2026-10-02T02-46-05-046Z-300-cached-init-cancel-48e6ae94-c7f2-473d-8383-16b2db05cbc8/` 完成，仍为同源EXE。观察到`init`阶段后UI取消，从观察请求到唯一终态856ms，processed/indexed/failed均为0；单次ONNX init不能被抢占，本次结果不是无条件2秒保证。四次正常WM_CLOSE均exit0，部分关闭/重启两次核验为300资产、0向量，恢复worker23878ms补齐300项、failed=0。后续备份、完整关闭与完整重启核验全valid=true，最终errors=[]；text/similar各20次warm IPC P95为971.0/4.9ms。以上两种阶段取消不代替下载或编码阶段取消。
 
-最新2276de1的下载取消/重试、编码取消、关窗恢复和5k真实模型闭环见前节；旧34baa87的哈希、初始化和自然图证据仍仅属于旧来源。受控选择输入的原生UI导入关闭闭环见[导入记录](V0_26_IMPORT_CLOSE.md)。50k真实模型在2026-10-02T03:25:53Z开始执行，run为`2026-10-02T03-25-53-021Z-50000-functional-ddfcbc16-302f-4ee9-be09-b180b7bd778c`，尚无终态；不推断规模耗时，不将小样本质量、离散内存或窗口消息采样提升为完整版本发布门槛。
+历史2276de1的下载取消/重试、编码取消、关窗恢复及5k/50k真实模型闭环见前节；旧34baa87的哈希、初始化和自然图证据仍仅属于旧来源。受控选择输入的原生UI导入关闭闭环见[导入记录](V0_26_IMPORT_CLOSE.md)。50k已取得完整终态和独立持久核验，三次可比冷测仍待完成；不将合成规模、小样本质量、离散内存或窗口消息采样提升为完整版本发布门槛，也不转记到隐私重写后的新源。
