@@ -31,6 +31,8 @@ cargo test --locked --manifest-path src-tauri/Cargo.toml --release backup::tests
 
 手动备份的 11 次 integrity check 共 18.126 秒，foreign-key check 共 2.601 秒，VACUUM INTO 1.583 秒。轮换占本次操作约85%；热点来自逐份完整校验，迁移和文件复制不是本次主要耗时。下一步比较有界的两路完整校验，并保持按原有排序处理隔离和十份保留策略；没有跳过检查、持久缓存“已验证”标记或扩大 SQLite cache。
 
+10月5日后续[两路完整校验对照](V0_26_BACKUP_ROTATION_PAIR.md)已完成3轮ABBA、12次探索性实测，文件及业务保全检查通过。该轮只执行只读校验和dry plan，未执行真实轮换、删除或GUI恢复；与本页10月2日的单次操作样本分别保留，不能直接合并为生产性能结论。
+
 ## 证据边界
 
 完整证据目录：`<private-evidence>\storage-phase-profile-20261002T021151-e7258501`，保留新建单次 fixture、原始 bundle、clone checkpoint 结果、六份操作 JSON、完整 stdout 和 `profile-summary.json`。
