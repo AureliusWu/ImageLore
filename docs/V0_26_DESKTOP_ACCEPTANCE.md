@@ -1,8 +1,16 @@
 # v0.26.0 桌面原生验收
 
-日期：2026-09-30；本记录主体固定2026-10-01（Asia/Shanghai）的 `f61f59bf86505dadacd15f75da3b75f0ed68fdf3` 程序，版本 `0.26.0`，schema `11`。历史连续使用和恢复复验属于 `99b2699`，真实模型小样本属于 `035a37e`；各轮按实际 source/SHA 保留身份，不混用。
+日期：2026-09-30；执行更新：2026-10-03（Asia/Shanghai）。当前桌面稳定目标为 `ec8874f9421deb184e17e833347d2a70bf5b0238` / EXE SHA256 `10381121a5ea89c71d629f93c6f5e2879ca829612706e50c5ba82e16bd50e01c`，版本 `0.26.0`，schema `11`。本记录后续历史主体固定 10 月 1 日的 `f61f59bf86505dadacd15f75da3b75f0ed68fdf3`；更早连续使用和恢复复验属于 `99b2699`，三图模型属于 `035a37e`，10 月 2 日工作流与规模属于 `2276de1`。各轮保留实际 source/SHA，不转记为当前产物。
 
-2026-10-02最新桌面稳定路径已替换为 `2276de179da95cf29a889a0a6e7d9a01d940ad8a` / EXE SHA256 `077027CDCE55A9FFCA55D18E00B84D50290FF876F9C708B721BC31BAE532B82B`，仍为 `0.26.0`。实际发布时刻为`2026-10-02T03:06:29.1460572Z`（北京时间11:06:29），快捷方式仍为`%USERPROFILE%\Desktop\ImageLore v0.26.0.lnk`，指向`desktop-runtime/current/ImageLore.exe`。
+## 10 月 3 日当前产物
+
+当前 300 项合成图片已经通过真实 Native 生产 IPC 和 512 维 CLIP 编码：预期缺失/损坏两项先保留 `298 indexed / 2 failed` 终态，修复补齐后 `300/300`、`stale=0`、向量 `614400` bytes。text/similar 各 20 warm 的 Native IPC p95 为 `803 / 4.6` ms，observer p95 为 `1046 / 268` ms，计时分列；worker `19074 + 1054` ms 包含 prepare/hash/init，不作为隔离推理吞吐。备份、首次闭库与 fresh-profile 重启后闭库的三组 asset/metadata/vector typed 摘要相同，两次 retained-handle 正常 `WM_CLOSE` 均 exit0，端口释放，闭库验证只打开 clone SQLite。
+
+该 EXE 于 `2026-10-03T15:41:05.5079495Z`（北京时间 10 月 3 日 23:41:05）推广至 `<project>/desktop-runtime/current/ImageLore.exe`，已有桌面 `ImageLore v0.26.0.lnk` 的稳定目标已验证。旧 `2276de1` 完整 current 文件保存在 `<project>/desktop-runtime/previous-20261003-154105-8664e52888984d39bf61c845d8b1dd44`，逐字节相同。推广前后列明的六个默认用户 DB/WAL/SHM 元数据检查均不存在/相同，该范围不扩大为全部用户数据保全。56 个内存样本及 `750 + 6` 个 `WM_NULL` 只属于功能短窗，不关闭冷测、长期内存、物理 UI 或当前 50k 门槛；详情与回执身份见[当前运行时验收](V0_26_CURRENT_RUNTIME_ACCEPTANCE.md)。
+
+## 10 月 2 日历史产物
+
+2026-10-02桌面稳定路径曾替换为 `2276de179da95cf29a889a0a6e7d9a01d940ad8a` / EXE SHA256 `077027CDCE55A9FFCA55D18E00B84D50290FF876F9C708B721BC31BAE532B82B`，仍为 `0.26.0`。当时发布时刻为`2026-10-02T03:06:29.1460572Z`（北京时间11:06:29），快捷方式为已有的桌面 `ImageLore v0.26.0.lnk`，稳定目标为 `<project>/desktop-runtime/current/ImageLore.exe`。
 
 同源两条CI：[run 36957688387](https://github.com/AureliusWu/ImageLore/actions/runs/36957688387)与[run 36957688415](https://github.com/AureliusWu/ImageLore/actions/runs/36957688415)均completed/success。新产物已完成300图functional（text/similar各20warm p95=964.0/4.8ms，预算通过）、编码取消与恢复、编码期间正常关窗与恢复、失败proxy环境下缓存分支，以及随后实际下载阶段取消；证据见[模型矩阵](V0_26_MODEL_MATRIX.md)和[直接导入关闭保护](V0_26_IMPORT_CLOSE.md)。三个缓存控制用例各3warm仅smoke，不关闭performance；失败proxy分支不等于物理断网。
 
@@ -30,11 +38,11 @@
 | 产物 | SHA-256 `D0AF13E8B229B326CA291EDE454D421482DBA637F97CBC5D271A3D5616271F82`；原生 release 无安装器构建 |
 | runtime manifest | builtFrom `f61f59bf86505dadacd15f75da3b75f0ed68fdf3`；publishedAt `2026-10-01T11:49:02.9511496Z`；每次替换的 previous 目录保留 |
 | 本地门禁 | 前端 check / build，Rust fmt / locked check / strict clippy / full lib test 均通过；85 command 契约、33 Node 行为用例（9 + 3 + 3 + 18）、104 Rust passed / 1 ignored；规模用例另行执行 |
-| CI | 当前 `f61f59b` 的 [ImageLore CI](https://github.com/AureliusWu/ImageLore/actions/runs/36857820830) 与 [Native CI](https://github.com/AureliusWu/ImageLore/actions/runs/36857821109) 均 completed / success |
+| CI | 当时 `f61f59b` 的 [ImageLore CI](https://github.com/AureliusWu/ImageLore/actions/runs/36857820830) 与 [Native CI](https://github.com/AureliusWu/ImageLore/actions/runs/36857821109) 均 completed / success |
 | 分页复验（f61f59b） | 4 / 4，通过真实滚动和每轮四连选：240→480→720→960→1200；末张身份、解码与 fit/actual 模式保持正确 |
 | 正常启动 | `f61f59b` 三次进程重新启动：3,471.5 / 3,254.2 / 3,277.7 ms 到 FCP，全部超过建议 ≤3 秒，保留 **WARN** |
 
-当前证据为 `<private-evidence>/desktop-build-perf-final-v026.txt`、`frontend-check-perf-v026.txt`、`cargo-{clippy,test}-perf-final-v026.txt`、`startup-backup-lock-{check,clippy}.txt`、`native-gui/perf-final-runtime-identity.json`、`pagination-perf-final.json` 与 `startup-after-perf-{1,2,3}.json`。文档追加提交不改变上述程序源 SHA 或产物身份。
+10 月 1 日历史证据为 `<private-evidence>/desktop-build-perf-final-v026.txt`、`frontend-check-perf-v026.txt`、`cargo-{clippy,test}-perf-final-v026.txt`、`startup-backup-lock-{check,clippy}.txt`、`native-gui/perf-final-runtime-identity.json`、`pagination-perf-final.json` 与 `startup-after-perf-{1,2,3}.json`。文档追加提交不改变上述程序源 SHA 或产物身份。
 
 历史 `99b2699` EXE 的 SHA-256 为 `EA0251C953FEF20AC06A9AD5ADEB7AE5D011E47719FF2676E6D57BE076950EFE`；`035a37e` 为 `08FEC9ADBA57C4290A907CFC83DDAD5B991AA8C32B5D6640E2995388C790AFA7`。从前者到后者，唯一产品代码修改是公共 CLIP 下载器直接以本库 cache 构造客户端并显式禁用 token；固定模型 revision/大小/SHA 保持。两者的 UI 代码相同，历史 10 分钟测量仍绑定原 EXE。`035a37e` 另外通过实际启动、Revision 保存、输入后 26 ms OS 关窗、进程退出后 SQLite 最新值回读及三图真实模型流程。历史 `99b2699` 和 `035a37e` 的两套 CI 均已 success，不能代替当前 source 的 CI。
 
@@ -105,7 +113,7 @@ API 计时在 Native WebView 内以 `performance.now()` 包围 `__TAURI_INTERNAL
 
 `035a37e` 程序完成固定 revision 的 vision/text ONNX 下载和 SHA/尺寸验证，真实编码三张 224×224 纯色 PNG，生成三组 fresh 512 维向量；生产备份独立读取、归一化、点积与排序复核通过。20 次暖文本检索 p95 为 1,270.1 ms，相似图 p95 为 4.8 ms。首次文本查询约 18.058 秒，冷模型取消约 19.156 秒才观察到终态，继续保留等待/取消风险。详见[模型验收](V0_26_MODEL_ACCEPTANCE.md)；三图集成证据不能替代 50k 吞吐、自然图片召回质量和完整断网矩阵。
 
-## 10 月 1 日当前 EXE 复验
+## 10 月 1 日历史 EXE 复验
 
 `f61f59b` / `D0AF…71F82` 的连续交互窗口为 `2026-10-01T11:51:04.479Z` 至 `12:01:04.758Z`，工作流计时 600.282 秒。300 轮、1,198 次点击、300 次末图身份/fingerprint/当前元素解码检查通过；60 次快照的 838 张图全部完成并解码。图库持续从 1,200 追加至 3,600，DOM 18–20、可见 8–10，Runtime/console/action errors 均为 0。没有遍历全部 50k，素材仍为上述纯色合成分布。
 
@@ -122,10 +130,10 @@ API 计时在 Native WebView 内以 `performance.now()` 包围 `__TAURI_INTERNAL
 
 本轮输入后 19 ms OS 关窗，进程正常退出，SQLite readonly 回读资产 25998 的最新文本一致；再次启动也一致。生产创建的 `imagelore-1790856241402461800.sqlite3` 已独立 immutable 检查 integrity/FK 和该文本。首个验收脚本在 30 秒 CDP 超时后退出，但原生备份继续完成；没有把超时当作取消或删除备份。延长本地验收等待并复用这份完成且验证过的快照，修改记录、stage、关窗重启，恢复文本一致。恢复启动 FCP **84.369 秒 WARN**，不混入正常启动；本轮恢复点数量增加，不能据此作单因素前后归因。
 
-当前 EXE 另以原三图隔离库和已有可信模型执行 text/similar 各三次、生产备份向量复核及 OS 关窗，状态 `PASS_FINAL_RUNTIME_MODEL_SMOKE`。这证明当前产物仍能使用真实模型，不重复声称首次下载或 20 次暖采样属于该产物。所有验收窗口已正常关闭，正常用户 DB/WAL/SHM 仍不存在。
+当时 `f61f59b` EXE 另以原三图隔离库和已有可信模型执行 text/similar 各三次、生产备份向量复核及 OS 关窗，状态 `PASS_FINAL_RUNTIME_MODEL_SMOKE`。这证明该历史产物仍能使用真实模型，不重复声称首次下载或 20 次暖采样属于该产物。所有验收窗口已正常关闭，当时列明的正常用户 DB/WAL/SHM 不存在。
 
 本地证据：`native-gui/soak-canonical-2026-10-01T11-51-04-428Z/{result,analysis,raw}.json*`、`memory-summary-perf-final.json`、`process-memory-perf-final.jsonl`、`mode-stable-perf-final.json`、`save-close-perf-final.json`、`closed-readback-perf-final.json`、`backup-independent-perf-final.json`、`backup-stage-perf-final.json`、`restore-verified-perf-final.json`、`startup-restore-perf-final.json`、`user-library-after-perf-final.json` 与 `native-model/smoke-perf-final.json`。历史报告和证据均保留，不覆盖为新来源。
 
 ## 阶段结论与后续门槛
 
-本轮已同步源码、交付可运行 `0.26.0` 桌面程序和随实际 EXE 版本维护的快捷方式，完成存储/迁移安全回归、原生分页修复及实际保存/关闭/重启/恢复验证。derivative/Remix受控picker UI导入关闭、关联/Session/谱系与最新编辑持久化、fresh-profile重启已各自实际PASS；真实物理选择框仍pending。**阶段 A 保持进行中**：正常启动、恢复启动与WebView内存增长保留历史WARN；新产物编码关窗完整观察2821ms仍超过2秒。最新300功能、编码取消/关窗恢复、下载取消以及5k真实编码/20warm/备份关闭重启已取得各自终态，旧来源自然图和哈希/初始化取消不转嫁。5k text/similar IPC p95为989.2/56.2ms，均通过3秒预算；内存观测保留一次采样缺口，不推算50k耗时。50k真实模型、真实物理选择框交互、Remix多参考DNA、下载取消后的重新下载恢复、物理离线及复杂图片长期稳态仍待验收。阶段B的证书/签名服务、公开可访问发行渠道和updater密钥管理尚未配置，后续按A→B→RC→1.0顺序推进。
+当前 `ec8874f` / `10381121…50e01c` 已交付到稳定桌面目标，300 项真实编码、20 warm 检索、备份、两次正常关闭与一次 fresh-profile 重启已通过，详见[当前运行时验收](V0_26_CURRENT_RUNTIME_ACCEPTANCE.md)。历史 `2276de1` 的 derivative/Remix 受控 picker UI 导入关闭、编码/下载取消及重新下载闭环、5k/50k 真实编码与持久核验均保持原身份；50k 结果已完成，见[模型验收](V0_26_MODEL_ACCEPTANCE.md)，不能转记为当前产物已完成同规模验收。**阶段 A 保持进行中**：启动、恢复和 WebView 内存增长以及历史编码关窗观察 `2821` ms 的 WARN 保留。当前 50k、至少三次可比冷测、真实物理选择框、Remix 多参考 DNA、物理离线、自然召回和复杂图片长期稳态仍须验收。阶段 B 的证书/签名服务、正式 Release 与已验证 updater 端点尚未就绪，后续按 A→B→RC→1.0 顺序推进。
