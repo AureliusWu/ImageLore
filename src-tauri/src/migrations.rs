@@ -781,7 +781,7 @@ mod tests {
                 version.to_string()
             );
             assert_eq!(snapshot(&conn, version), before);
-            assert_eq!(has_table(&conn, "reference_sources").unwrap(), false);
+            assert!(!has_table(&conn, "reference_sources").unwrap());
             if version <= 2 {
                 assert!(!has_column(&conn, "assets", "portable_id").unwrap());
             }
