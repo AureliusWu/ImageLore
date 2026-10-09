@@ -9,6 +9,7 @@ use std::{
 use tauri::{Manager, State};
 
 const MAX_BACKUPS: usize = 10;
+const ROTATION_VALIDATION_WORKERS: usize = 2;
 const AUTO_INTERVAL: i64 = 24 * 3600;
 // Full integrity checks revisit index pages. A bounded, connection-local cache
 // avoids repeatedly reading them; it is released when the probe closes and
@@ -569,35 +570,155 @@ fn records(dir: &Path) -> Result<Vec<BackupRecord>, String> {
     Ok(out)
 }
 
+struct RotationValidation {
+    result: Result<(), ValidationFailure>,
+    #[cfg(test)]
+    events: Vec<serde_json::Value>,
+    #[cfg(test)]
+    failure_origin: Option<&'static str>,
+}
+
+fn rotation_worker_panic(payload: Box<dyn std::any::Any + Send>) -> String {
+    let cause = payload
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| payload.downcast_ref::<&str>().copied())
+        .unwrap_or("panic payload is not text");
+    format!("备份校验线程未正常完成：{}", cause)
+}
+
+fn validate_rotation_batch(
+    batch: &[BackupRecord],
+    _first_ordinal: usize,
+) -> Vec<Result<(), ValidationFailure>> {
+    std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(batch.len());
+        for item in batch {
+            let path = Path::new(&item.path);
+            #[cfg(test)]
+            let ordinal = _first_ordinal + handles.len();
+            #[cfg(test)]
+            let token = tests::phase_profile::worker_token(path, ordinal);
+            #[cfg(test)]
+            let control = tests::rotation_workers::current();
+            #[cfg(test)]
+            if control
+                .as_ref()
+                .is_some_and(|control| control.fail_spawn_at == Some(ordinal))
+            {
+                handles.push((
+                    token,
+                    Err(std::io::Error::other(
+                        "synthetic rotation worker spawn failure",
+                    )),
+                ));
+                break;
+            }
+            #[cfg(test)]
+            let capture = token.is_some();
+            let handle = std::thread::Builder::new().spawn_scoped(scope, move || {
+                #[cfg(test)]
+                {
+                    tests::rotation_workers::run(path, ordinal, capture, control)
+                }
+                #[cfg(not(test))]
+                {
+                    RotationValidation {
+                        result: validate_typed(path),
+                    }
+                }
+            });
+            let spawn_failed = handle.is_err();
+            #[cfg(test)]
+            {
+                handles.push((token, handle));
+            }
+            #[cfg(not(test))]
+            {
+                handles.push(handle);
+            }
+            if spawn_failed {
+                break;
+            }
+        }
+        // Join every handle before the caller can rename or delete any file.
+        // Completion order must not change the records-order reduction below.
+        handles
+            .into_iter()
+            .map(|handle| {
+                #[cfg(test)]
+                let (token, handle) = handle;
+                let outcome = match handle {
+                    Ok(handle) => match handle.join() {
+                        Ok(outcome) => outcome,
+                        Err(payload) => RotationValidation {
+                            result: Err(ValidationFailure::Unavailable(rotation_worker_panic(
+                                payload,
+                            ))),
+                            #[cfg(test)]
+                            events: Vec::new(),
+                            #[cfg(test)]
+                            failure_origin: Some("join"),
+                        },
+                    },
+                    Err(error) => RotationValidation {
+                        result: Err(ValidationFailure::Unavailable(format!(
+                            "无法启动备份校验线程：{}",
+                            error
+                        ))),
+                        #[cfg(test)]
+                        events: Vec::new(),
+                        #[cfg(test)]
+                        failure_origin: Some("spawn"),
+                    },
+                };
+                #[cfg(test)]
+                tests::phase_profile::record_worker(
+                    token,
+                    outcome.events,
+                    outcome.failure_origin,
+                    &outcome.result,
+                );
+                outcome.result
+            })
+            .collect()
+    })
+}
+
 fn rotate(dir: &Path) -> Result<(), String> {
     #[cfg(test)]
     let _rotation = tests::phase_profile::enter("rotation.total", None);
     let mut valid_count = 0;
-    for item in records(dir)? {
-        match storage_phase!(
-            "rotation.candidate",
-            Some(Path::new(&item.path)),
-            validate_typed(Path::new(&item.path))
-        ) {
-            Ok(()) => {}
-            Err(ValidationFailure::Rejected(_)) => {
-                // Proven invalid candidates remain available as evidence and
-                // cannot evict usable recovery points.
-                let rejected = dir.join("rejected");
-                fs::create_dir_all(&rejected).map_err(|e| e.to_string())?;
-                let target = rejected.join(format!("{}-{}.raw", item.name, now_nanos()));
-                storage_phase!("rotation.quarantine", None, fs::rename(&item.path, target))
+    let candidates = records(dir)?;
+    for (batch_index, batch) in candidates.chunks(ROTATION_VALIDATION_WORKERS).enumerate() {
+        let first_ordinal = batch_index * ROTATION_VALIDATION_WORKERS + 1;
+        let outcomes = validate_rotation_batch(batch, first_ordinal);
+        #[cfg(test)]
+        let mut candidate_ordinals = first_ordinal..;
+        for (item, outcome) in batch.iter().zip(outcomes) {
+            #[cfg(test)]
+            tests::phase_profile::consume_worker(candidate_ordinals.next().unwrap());
+            match outcome {
+                Ok(()) => {}
+                Err(ValidationFailure::Rejected(_)) => {
+                    // Proven invalid candidates remain available as evidence and
+                    // cannot evict usable recovery points.
+                    let rejected = dir.join("rejected");
+                    fs::create_dir_all(&rejected).map_err(|e| e.to_string())?;
+                    let target = rejected.join(format!("{}-{}.raw", item.name, now_nanos()));
+                    storage_phase!("rotation.quarantine", None, fs::rename(&item.path, target))
+                        .map_err(|e| e.to_string())?;
+                    continue;
+                }
+                Err(ValidationFailure::Unavailable(error)) => {
+                    return Err(format!("无法校验备份 {}，已停止轮换：{}", item.name, error));
+                }
+            }
+            valid_count += 1;
+            if valid_count > MAX_BACKUPS {
+                storage_phase!("rotation.remove", None, fs::remove_file(&item.path))
                     .map_err(|e| e.to_string())?;
-                continue;
             }
-            Err(ValidationFailure::Unavailable(error)) => {
-                return Err(format!("无法校验备份 {}，已停止轮换：{}", item.name, error));
-            }
-        }
-        valid_count += 1;
-        if valid_count > MAX_BACKUPS {
-            storage_phase!("rotation.remove", None, fs::remove_file(item.path))
-                .map_err(|e| e.to_string())?;
         }
     }
     Ok(())
@@ -1287,8 +1408,8 @@ mod tests {
         action()
     }
 
-    // The production spans are inert unless this one thread explicitly captures
-    // an ignored profile operation. No global environment switch enables them.
+    // Each worker gets a separate TLS capture only when its calling thread
+    // explicitly captures an operation. No environment switch enables spans.
     pub(super) mod phase_profile {
         use serde_json::{json, Value};
         use std::{
@@ -1304,8 +1425,83 @@ mod tests {
             stack: Vec<u64>,
             files: BTreeMap<PathBuf, u64>,
             events: Vec<Value>,
+            external_workers: Vec<Value>,
         }
         thread_local! { static CURRENT: RefCell<Option<Session>> = const { RefCell::new(None) }; }
+        use super::super::ValidationFailure;
+
+        pub(in crate::backup) struct WorkerToken {
+            parent_scope_id: Option<u64>,
+            file_ordinal: u64,
+            candidate_ordinal: usize,
+        }
+
+        pub(in crate::backup) fn worker_token(
+            path: &Path,
+            candidate_ordinal: usize,
+        ) -> Option<WorkerToken> {
+            CURRENT.with(|slot| {
+                let mut current = slot.borrow_mut();
+                let session = current.as_mut()?;
+                let next = session.files.len() as u64 + 1;
+                let file_ordinal = *session.files.entry(path.to_path_buf()).or_insert(next);
+                Some(WorkerToken {
+                    parent_scope_id: session.stack.last().copied(),
+                    file_ordinal,
+                    candidate_ordinal,
+                })
+            })
+        }
+
+        pub(in crate::backup) fn record_worker(
+            token: Option<WorkerToken>,
+            events: Vec<Value>,
+            failure_origin: Option<&str>,
+            result: &Result<(), ValidationFailure>,
+        ) {
+            let Some(token) = token else {
+                return;
+            };
+            let (classification, cause) = match result {
+                Ok(()) => ("Valid", None),
+                Err(ValidationFailure::Rejected(cause)) => ("Rejected", Some(cause)),
+                Err(ValidationFailure::Unavailable(cause)) => ("Unavailable", Some(cause)),
+            };
+            CURRENT.with(|slot| {
+                let mut current = slot.borrow_mut();
+                if let Some(session) = current.as_mut() {
+                    session.external_workers.push(json!({
+                        "externalWorker": true,
+                        "parentScopeId": token.parent_scope_id,
+                        "fileOrdinal": token.file_ordinal,
+                        "candidateOrdinal": token.candidate_ordinal,
+                        "consumed": false,
+                        "classification": classification,
+                        "cause": cause,
+                        "failureOrigin": failure_origin,
+                        "clock": "independent worker TLS origin",
+                        "parentage": "parentScopeId links sessions; worker parentId values are local",
+                        "events": events,
+                    }));
+                }
+            });
+        }
+
+        pub(in crate::backup) fn consume_worker(candidate_ordinal: usize) {
+            CURRENT.with(|slot| {
+                let mut current = slot.borrow_mut();
+                let Some(session) = current.as_mut() else {
+                    return;
+                };
+                let parent = session.stack.last().copied();
+                if let Some(worker) = session.external_workers.iter_mut().rev().find(|worker| {
+                    worker["parentScopeId"].as_u64() == parent
+                        && worker["candidateOrdinal"].as_u64() == Some(candidate_ordinal as u64)
+                }) {
+                    worker["consumed"] = json!(true);
+                }
+            });
+        }
         struct ActiveScope {
             id: u64,
             parent: Option<u64>,
@@ -1392,13 +1588,15 @@ mod tests {
                     stack: Vec::new(),
                     files: BTreeMap::new(),
                     events: Vec::new(),
+                    external_workers: Vec::new(),
                 });
             });
             let mut total = enter(operation, None);
             let result = action();
             total.observe_result(result.is_ok());
             drop(total);
-            let mut events = CURRENT.with(|slot| slot.borrow_mut().take().unwrap().events);
+            let session = CURRENT.with(|slot| slot.borrow_mut().take().unwrap());
+            let mut events = session.events;
             let child_sums: BTreeMap<u64, f64> = events
                 .iter()
                 .filter_map(|event| {
@@ -1418,8 +1616,110 @@ mod tests {
                     .unwrap_or(0.0);
                 event["inclusiveMs"] = json!(inclusive);
                 event["exclusiveMs"] = json!((inclusive - children).max(0.0));
+                event["exclusiveScope"] =
+                    json!("same-thread child spans only; includes external-worker wait");
             }
+            // Envelopes have no parentId/durationMs: external worker durations
+            // never enter the calling thread's child sums or exclusive time.
+            events.extend(session.external_workers);
             (result, events)
+        }
+    }
+
+    // Scheduling/fault controls are scoped to a single test's caller TLS. Only
+    // this Send + Sync control is cloned into workers; SchemaMarkerHook is not.
+    pub(super) mod rotation_workers {
+        use super::*;
+        use std::{cell::RefCell, sync::Arc};
+
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        pub(in crate::backup) enum Stage {
+            Before,
+            After,
+        }
+
+        #[derive(Clone)]
+        pub(in crate::backup) struct Control {
+            pub(in crate::backup) action: Arc<dyn Fn(usize, Stage) + Send + Sync>,
+            pub(in crate::backup) fail_spawn_at: Option<usize>,
+        }
+
+        thread_local! {
+            static CONTROL: RefCell<Option<Control>> = const { RefCell::new(None) };
+        }
+
+        pub(in crate::backup) fn current() -> Option<Control> {
+            CONTROL.with(|slot| slot.borrow().clone())
+        }
+
+        pub(super) fn with_control<T>(control: Control, action: impl FnOnce() -> T) -> T {
+            struct Reset;
+            impl Drop for Reset {
+                fn drop(&mut self) {
+                    CONTROL.with(|slot| drop(slot.borrow_mut().take()));
+                }
+            }
+            CONTROL.with(|slot| {
+                let mut current = slot.borrow_mut();
+                assert!(current.is_none(), "Nested rotation control is unsupported");
+                *current = Some(control);
+            });
+            let _reset = Reset;
+            action()
+        }
+
+        pub(in crate::backup) fn run(
+            path: &Path,
+            ordinal: usize,
+            capture: bool,
+            control: Option<Control>,
+        ) -> RotationValidation {
+            let action = || {
+                if let Some(control) = &control {
+                    (control.action)(ordinal, Stage::Before);
+                }
+                let result = validate_typed(path);
+                if let Some(control) = &control {
+                    (control.action)(ordinal, Stage::After);
+                }
+                result
+            };
+            if !capture {
+                // Without opt-in profiling, a test panic exercises the same
+                // actual join-error path as a production worker panic.
+                return RotationValidation {
+                    result: action(),
+                    events: Vec::new(),
+                    failure_origin: None,
+                };
+            }
+            let mut result = None;
+            let mut panicked = false;
+            let (_, events) = phase_profile::capture("rotation.candidate", || {
+                let attempted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(action));
+                match attempted {
+                    Ok(outcome) => {
+                        let success = outcome.is_ok();
+                        result = Some(outcome);
+                        if success {
+                            Ok(())
+                        } else {
+                            Err("validator returned a classified failure".into())
+                        }
+                    }
+                    Err(payload) => {
+                        let cause = rotation_worker_panic(payload);
+                        result = Some(Err(ValidationFailure::Unavailable(cause.clone())));
+                        panicked = true;
+                        Err(cause)
+                    }
+                }
+            });
+            RotationValidation {
+                result: result.expect("The profiling wrapper must retain the validator outcome"),
+                events,
+                failure_origin: panicked.then_some("profiled_worker_panic"),
+            }
         }
     }
 
@@ -1515,16 +1815,42 @@ mod tests {
         action: impl FnOnce() -> Result<T, String>,
     ) -> T {
         use std::io::Write;
-        let (result, events) = phase_profile::capture(operation, action);
-        let validations = events
+        let (result, captured) = phase_profile::capture(operation, action);
+        let (worker_traces, events): (Vec<_>, Vec<_>) = captured
+            .into_iter()
+            .partition(|event| event["externalWorker"] == true);
+        let same_thread_validations = events
             .iter()
             .filter(|event| event["phase"] == "validation.total")
             .count();
-        let rotation_candidates = events
+        let worker_validations: usize = worker_traces
             .iter()
-            .filter(|event| event["phase"] == "rotation.candidate")
+            .map(|worker| {
+                worker["events"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|event| event["phase"] == "validation.total")
+                    .count()
+            })
+            .sum();
+        let validations = same_thread_validations + worker_validations;
+        let rotation_candidates = worker_traces.len();
+        let started = worker_traces
+            .iter()
+            .filter(|worker| {
+                worker["events"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|event| event["phase"] == "rotation.candidate")
+            })
             .count();
-        let report = serde_json::json!({"operation":operation,"ok":result.is_ok(),"fullValidationCalls":validations,"rotationCandidates":rotation_candidates,"cacheKiB":VALIDATION_CACHE_KIB,"timing":"inclusive nested spans; do not sum parents and children","events":events});
+        let consumed = worker_traces
+            .iter()
+            .filter(|worker| worker["consumed"] == true)
+            .count();
+        let report = serde_json::json!({"profileSchemaVersion":2,"operation":operation,"ok":result.is_ok(),"fullValidationCalls":validations,"sameThreadFullValidationCalls":same_thread_validations,"workerFullValidationCalls":worker_validations,"validationCountScope":"full-validator invocations; not a completion/success assertion; inspect panicking and classification","rotationCandidates":rotation_candidates,"rotationCandidatesStarted":started,"rotationCandidatesConsumed":consumed,"candidateCountScope":"batch attempts include spawn failure and speculative unconsumed workers","cacheKiB":VALIDATION_CACHE_KIB,"timing":"same-thread inclusive/exclusive spans; exclusive includes external-worker waits; workerTraces use independent TLS origins and are never added to parent durations","events":events,"workerTraces":worker_traces});
         let mut output = OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -2241,6 +2567,409 @@ mod tests {
             next_job_id: std::sync::atomic::AtomicU64::new(1),
             vision_api_key: std::sync::Mutex::new(String::new()),
         }
+    }
+
+    fn ordered_rotation_fixture(root: &Path, count: usize) -> Vec<PathBuf> {
+        let paths: Vec<_> = (0..count)
+            .map(|index| {
+                let path = root
+                    .join("backups")
+                    .join(format!("candidate-{:04}.sqlite3", count - index));
+                let conn = seed(&path, &format!("synthetic candidate {}", index + 1));
+                let journal: String = conn
+                    .query_row("PRAGMA journal_mode=DELETE", [], |row| row.get(0))
+                    .unwrap();
+                assert_eq!(journal, "delete");
+                drop(conn);
+                path
+            })
+            .collect();
+        equal_rotation_mtimes(&paths);
+        let actual: Vec<_> = records(&root.join("backups"))
+            .unwrap()
+            .into_iter()
+            .map(|item| PathBuf::from(item.path))
+            .collect();
+        assert_eq!(
+            actual, paths,
+            "The real records sorter fixes candidate ordinals"
+        );
+        paths
+    }
+
+    fn equal_rotation_mtimes(paths: &[PathBuf]) {
+        for path in paths {
+            File::options()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_times(
+                    std::fs::FileTimes::new()
+                        .set_modified(UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000)),
+                )
+                .unwrap();
+        }
+    }
+
+    fn rotation_bundle(path: &Path) -> Vec<Option<(Vec<u8>, SystemTime)>> {
+        companions(path)
+            .iter()
+            .map(|path| {
+                path.exists().then(|| {
+                    (
+                        fs::read(path).unwrap(),
+                        fs::metadata(path).unwrap().modified().unwrap(),
+                    )
+                })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn rotation_consumes_only_the_records_prefix_before_actual_unavailability() {
+        use rotation_workers::{Control, Stage};
+        use std::sync::{Arc, Mutex};
+
+        let root = test_root("rotation-ordered-prefix");
+        let paths = ordered_rotation_fixture(&root, 15);
+        let rejected = b"synthetic explicitly non-SQLite candidate";
+        fs::write(&paths[0], rejected).unwrap();
+        fs::write(
+            &paths[13],
+            b"speculative later rejection must stay in place",
+        )
+        .unwrap();
+        equal_rotation_mtimes(&paths);
+        let locked = Connection::open(&paths[12]).unwrap();
+        locked.busy_timeout(std::time::Duration::ZERO).unwrap();
+        locked.execute_batch("BEGIN EXCLUSIVE").unwrap();
+        let originals: Vec<_> = paths.iter().map(|path| rotation_bundle(path)).collect();
+        let started = Arc::new(Mutex::new(Vec::new()));
+        let started_worker = Arc::clone(&started);
+        let result = rotation_workers::with_control(
+            Control {
+                action: Arc::new(move |ordinal, stage| {
+                    if stage == Stage::Before {
+                        started_worker.lock().unwrap().push(ordinal);
+                    }
+                }),
+                fail_spawn_at: None,
+            },
+            || rotate(&root.join("backups")),
+        );
+        let rollback = locked.execute_batch("ROLLBACK");
+        drop(locked);
+        rollback.unwrap();
+        let error = result.unwrap_err();
+        assert!(
+            error.contains("locked") || error.contains("busy"),
+            "{error}"
+        );
+        assert!(
+            !paths[0].exists(),
+            "An earlier proven rejection is quarantined"
+        );
+        let quarantined: Vec<_> = fs::read_dir(root.join("backups/rejected"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(quarantined.len(), 1);
+        assert_eq!(fs::read(&quarantined[0]).unwrap(), rejected);
+        for index in 1..=10 {
+            assert_eq!(rotation_bundle(&paths[index]), originals[index]);
+        }
+        assert!(
+            !paths[11].exists(),
+            "Only the eleventh earlier valid file is removed"
+        );
+        for index in 12..=14 {
+            assert_eq!(rotation_bundle(&paths[index]), originals[index]);
+        }
+        let mut started = started.lock().unwrap().clone();
+        started.sort_unstable();
+        assert_eq!(started, (1..=14).collect::<Vec<_>>());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rotation_keeps_newest_ten_valid_candidates_despite_a_newer_rejection() {
+        let root = test_root("rotation-retention-with-rejection");
+        let paths = ordered_rotation_fixture(&root, MAX_BACKUPS + 2);
+        let invalid = fs::read(&paths[0]).unwrap();
+        let conn = Connection::open(&paths[0]).unwrap();
+        conn.execute(
+            "UPDATE app_meta SET value='12' WHERE key='schema_version'",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+        let rejected_bytes = fs::read(&paths[0]).unwrap();
+        assert_ne!(invalid, rejected_bytes);
+        equal_rotation_mtimes(&paths);
+        rotate(&root.join("backups")).unwrap();
+        let retained: Vec<_> = records(&root.join("backups"))
+            .unwrap()
+            .into_iter()
+            .map(|item| PathBuf::from(item.path))
+            .collect();
+        assert_eq!(retained, paths[1..=MAX_BACKUPS]);
+        assert!(!paths[MAX_BACKUPS + 1].exists());
+        let quarantined: Vec<_> = fs::read_dir(root.join("backups/rejected"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(quarantined.len(), 1);
+        assert_eq!(fs::read(&quarantined[0]).unwrap(), rejected_bytes);
+        for path in retained {
+            validate_typed(&path).unwrap();
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rotation_bounds_workers_and_tolerates_reverse_validation_completion() {
+        use rotation_workers::{Control, Stage};
+        use std::sync::{atomic::AtomicUsize, Arc, Condvar, Mutex};
+        use std::time::Duration;
+
+        let root = test_root("rotation-worker-order");
+        let paths = ordered_rotation_fixture(&root, 5);
+        let originals: Vec<_> = paths.iter().map(|path| rotation_bundle(path)).collect();
+        let active = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let barrier = Arc::new((Mutex::new(0usize), Condvar::new()));
+        let gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let completed = Arc::new(Mutex::new(Vec::new()));
+        let (worker_active, worker_peak, worker_barrier, worker_gate, worker_completed) = (
+            Arc::clone(&active),
+            Arc::clone(&peak),
+            Arc::clone(&barrier),
+            Arc::clone(&gate),
+            Arc::clone(&completed),
+        );
+        rotation_workers::with_control(
+            Control {
+                action: Arc::new(move |ordinal, stage| {
+                    if stage == Stage::Before {
+                        let count = worker_active.fetch_add(1, Ordering::SeqCst) + 1;
+                        worker_peak.fetch_max(count, Ordering::SeqCst);
+                        if ordinal <= 2 {
+                            let (lock, wake) = &*worker_barrier;
+                            let mut arrived = lock.lock().unwrap();
+                            *arrived += 1;
+                            wake.notify_all();
+                            let (arrived, _) = wake
+                                .wait_timeout_while(arrived, Duration::from_secs(30), |count| {
+                                    *count < 2
+                                })
+                                .unwrap();
+                            assert_eq!(*arrived, 2, "Both validation workers must start");
+                        }
+                        if ordinal == 1 {
+                            let (lock, wake) = &*worker_gate;
+                            let (done, _) = wake
+                                .wait_timeout_while(
+                                    lock.lock().unwrap(),
+                                    Duration::from_secs(30),
+                                    |done| !*done,
+                                )
+                                .unwrap();
+                            assert!(*done, "The second worker must complete first");
+                        }
+                    } else {
+                        worker_completed.lock().unwrap().push(ordinal);
+                        if ordinal == 2 {
+                            let (lock, wake) = &*worker_gate;
+                            *lock.lock().unwrap() = true;
+                            wake.notify_one();
+                        }
+                        worker_active.fetch_sub(1, Ordering::SeqCst);
+                    }
+                }),
+                fail_spawn_at: None,
+            },
+            || rotate(&root.join("backups")).unwrap(),
+        );
+        assert_eq!(peak.load(Ordering::SeqCst), ROTATION_VALIDATION_WORKERS);
+        assert_eq!(active.load(Ordering::SeqCst), 0);
+        assert_eq!(&completed.lock().unwrap()[..2], &[2, 1]);
+        for (path, original) in paths.iter().zip(originals) {
+            assert_eq!(rotation_bundle(path), original);
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rotation_worker_panic_and_spawn_failure_preserve_unconsumed_files() {
+        use rotation_workers::{Control, Stage};
+        use std::sync::{atomic::AtomicUsize, Arc};
+
+        for spawn_failure in [false, true] {
+            let root = test_root("rotation-worker-unavailable");
+            let paths = ordered_rotation_fixture(&root, 3);
+            let originals: Vec<_> = paths.iter().map(|path| rotation_bundle(path)).collect();
+            let completed = Arc::new(AtomicUsize::new(0));
+            let completed_worker = Arc::clone(&completed);
+            let result = rotation_workers::with_control(
+                Control {
+                    action: Arc::new(move |ordinal, stage| {
+                        if !spawn_failure && ordinal == 1 && stage == Stage::Before {
+                            panic!("synthetic rotation worker panic");
+                        }
+                        if stage == Stage::After {
+                            completed_worker.fetch_add(1, Ordering::SeqCst);
+                        }
+                        assert!(ordinal <= 2, "A later batch must never start");
+                    }),
+                    fail_spawn_at: spawn_failure.then_some(2),
+                },
+                || rotate(&root.join("backups")),
+            );
+            let error = result.unwrap_err();
+            assert!(
+                error.contains(if spawn_failure {
+                    "synthetic rotation worker spawn failure"
+                } else {
+                    "synthetic rotation worker panic"
+                }),
+                "{error}"
+            );
+            assert_eq!(
+                completed.load(Ordering::SeqCst),
+                1,
+                "The other handle is joined"
+            );
+            assert!(!root.join("backups/rejected").exists());
+            for (path, original) in paths.iter().zip(originals) {
+                assert_eq!(rotation_bundle(path), original);
+            }
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn rotation_preserves_wal_bundle_while_validating_independent_copies() {
+        let root = test_root("rotation-wal-preservation");
+        let source = root.join("source.sqlite3");
+        let source_conn = seed(&source, "before-wal");
+        source_conn
+            .pragma_update(None, "journal_mode", "WAL")
+            .unwrap();
+        source_conn
+            .pragma_update(None, "wal_autocheckpoint", 0)
+            .unwrap();
+        source_conn
+            .execute("UPDATE marker SET value='committed-wal'", [])
+            .unwrap();
+        let candidate = root.join("backups/wal.sqlite3");
+        for (source, target) in companions(&source).iter().zip(companions(&candidate)) {
+            assert!(source.is_file());
+            fs::copy(source, target).unwrap();
+        }
+        let other = root.join("backups/plain.sqlite3");
+        drop(seed(&other, "plain-control"));
+        let original = rotation_bundle(&candidate);
+        assert!(original.iter().all(Option::is_some));
+        rotate(&root.join("backups")).unwrap();
+        assert_eq!(rotation_bundle(&candidate), original);
+        drop(source_conn);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rotation_profile_keeps_worker_sessions_separate_and_counts_full_validators() {
+        let root = test_root("rotation-worker-profile");
+        ordered_rotation_fixture(&root, 3);
+        profile_operation(&root, "rotation_profile", || rotate(&root.join("backups")));
+        let report: serde_json::Value =
+            serde_json::from_slice(&fs::read(root.join("rotation_profile.json")).unwrap()).unwrap();
+        assert_eq!(report["profileSchemaVersion"], 2);
+        assert_eq!(report["fullValidationCalls"], 3);
+        assert_eq!(report["sameThreadFullValidationCalls"], 0);
+        assert_eq!(report["workerFullValidationCalls"], 3);
+        assert_eq!(report["rotationCandidates"], 3);
+        assert_eq!(report["rotationCandidatesConsumed"], 3);
+        let parent_events = report["events"].as_array().unwrap();
+        let rotation = parent_events
+            .iter()
+            .find(|event| event["phase"] == "rotation.total")
+            .unwrap();
+        assert!(rotation["exclusiveScope"]
+            .as_str()
+            .unwrap()
+            .contains("same-thread"));
+        for worker in report["workerTraces"].as_array().unwrap() {
+            assert_eq!(worker["parentScopeId"], rotation["id"]);
+            assert_eq!(worker["clock"], "independent worker TLS origin");
+            let events = worker["events"].as_array().unwrap();
+            for phase in [
+                "rotation.candidate",
+                "validation.total",
+                "validation.integrity_check",
+                "validation.schema_tables",
+                "validation.foreign_keys",
+                "validation.business_relations",
+            ] {
+                assert_eq!(
+                    events
+                        .iter()
+                        .filter(|event| event["phase"] == phase)
+                        .count(),
+                    1
+                );
+            }
+            assert!(events.iter().any(|event| {
+                event["phase"] == "rotation.candidate" && event["parentId"].is_null()
+            }));
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rotation_profile_retains_failure_trace_and_unconsumed_speculation() {
+        use rotation_workers::{Control, Stage};
+        use std::sync::Arc;
+
+        let root = test_root("rotation-worker-failure-profile");
+        let paths = ordered_rotation_fixture(&root, 3);
+        let originals: Vec<_> = paths.iter().map(|path| rotation_bundle(path)).collect();
+        let (result, captured) = rotation_workers::with_control(
+            Control {
+                action: Arc::new(|ordinal, stage| {
+                    if ordinal == 1 && stage == Stage::After {
+                        panic!("synthetic profiled panic after full validation");
+                    }
+                }),
+                fail_spawn_at: None,
+            },
+            || phase_profile::capture("rotation_failure_profile", || rotate(&root.join("backups"))),
+        );
+        assert!(result.unwrap_err().contains("synthetic profiled panic"));
+        let workers: Vec<_> = captured
+            .iter()
+            .filter(|event| event["externalWorker"] == true)
+            .collect();
+        assert_eq!(workers.len(), 2);
+        assert_eq!(workers[0]["classification"], "Unavailable");
+        assert_eq!(workers[0]["failureOrigin"], "profiled_worker_panic");
+        assert_eq!(workers[0]["consumed"], true);
+        assert_eq!(workers[1]["consumed"], false);
+        for worker in workers {
+            assert_eq!(
+                worker["events"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|event| event["phase"] == "validation.total")
+                    .count(),
+                1,
+            );
+        }
+        assert!(!root.join("backups/rejected").exists());
+        for (path, original) in paths.iter().zip(originals) {
+            assert_eq!(rotation_bundle(path), original);
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
