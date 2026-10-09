@@ -1817,13 +1817,11 @@ mod tests {
         business
     }
 
-    fn profile_operation<T>(
-        root: &Path,
+    fn profile_report(
         operation: &'static str,
-        action: impl FnOnce() -> Result<T, String>,
-    ) -> T {
-        use std::io::Write;
-        let (result, captured) = phase_profile::capture(operation, action);
+        ok: bool,
+        captured: Vec<serde_json::Value>,
+    ) -> serde_json::Value {
         let (worker_traces, events): (Vec<_>, Vec<_>) = captured
             .into_iter()
             .partition(|event| event["externalWorker"] == true);
@@ -1858,7 +1856,57 @@ mod tests {
             .iter()
             .filter(|worker| worker["consumed"] == true)
             .count();
-        let report = serde_json::json!({"profileSchemaVersion":2,"operation":operation,"ok":result.is_ok(),"fullValidationCalls":validations,"sameThreadFullValidationCalls":same_thread_validations,"workerFullValidationCalls":worker_validations,"validationCountScope":"full-validator invocations; not a completion/success assertion; inspect panicking and classification","rotationCandidates":rotation_candidates,"rotationCandidatesStarted":started,"rotationCandidatesConsumed":consumed,"candidateCountScope":"batch attempts include spawn failure and speculative unconsumed workers","cacheKiB":VALIDATION_CACHE_KIB,"timing":"same-thread inclusive/exclusive spans; exclusive includes external-worker waits; workerTraces use independent TLS origins and are never added to parent durations","events":events,"workerTraces":worker_traces});
+        serde_json::json!({"profileSchemaVersion":2,"operation":operation,"ok":ok,"fullValidationCalls":validations,"sameThreadFullValidationCalls":same_thread_validations,"workerFullValidationCalls":worker_validations,"validationCountScope":"full-validator invocations; not a completion/success assertion; inspect panicking and classification","rotationCandidates":rotation_candidates,"rotationCandidatesStarted":started,"rotationCandidatesConsumed":consumed,"candidateCountScope":"batch attempts include spawn failure and speculative unconsumed workers","cacheKiB":VALIDATION_CACHE_KIB,"timing":"same-thread inclusive/exclusive spans; exclusive includes external-worker waits; workerTraces use independent TLS origins and are never added to parent durations","events":events,"workerTraces":worker_traces})
+    }
+
+    fn export_worker_profile(case: &'static str, report: impl FnOnce() -> serde_json::Value) {
+        let Some(supplied) = std::env::var_os("IMAGELORE_BACKUP_WORKER_PROFILE_EXPORT_DIR") else {
+            return;
+        };
+        let supplied = PathBuf::from(supplied);
+        assert!(supplied.is_absolute());
+        for ancestor in supplied.ancestors() {
+            profile_plain_path(ancestor);
+            assert!(
+                !ancestor.join(".git").exists(),
+                "Private worker profile exports must remain outside Git checkouts"
+            );
+        }
+        let root = fs::canonicalize(&supplied).unwrap();
+        let evidence = PathBuf::from(
+            std::env::var_os("IMAGELORE_PRIVATE_EVIDENCE_ROOT")
+                .expect("Explicit external private evidence root is required"),
+        );
+        assert!(evidence.is_absolute());
+        profile_plain_path(&evidence);
+        let evidence = fs::canonicalize(evidence).unwrap();
+        let project = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        assert!(!evidence.starts_with(fs::canonicalize(project).unwrap()));
+        assert_eq!(root.parent(), Some(evidence.as_path()));
+        let filename = match case {
+            "normal" => "rotation-normal.json",
+            "before" => "rotation-panic-before.json",
+            "after" => "rotation-panic-after.json",
+            "spawn" => "rotation-spawn.json",
+            _ => panic!("Unsupported private worker profile case"),
+        };
+        let mut output = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(root.join(filename))
+            .unwrap();
+        serde_json::to_writer_pretty(&mut output, &report()).unwrap();
+        output.sync_all().unwrap();
+    }
+
+    fn profile_operation<T>(
+        root: &Path,
+        operation: &'static str,
+        action: impl FnOnce() -> Result<T, String>,
+    ) -> T {
+        use std::io::Write;
+        let (result, captured) = phase_profile::capture(operation, action);
+        let report = profile_report(operation, result.is_ok(), captured);
         let mut output = OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -1868,7 +1916,7 @@ mod tests {
         output.flush().unwrap();
         println!(
             "{}",
-            serde_json::json!({"operation":operation,"ok":result.is_ok(),"fullValidationCalls":validations,"rotationCandidates":rotation_candidates})
+            serde_json::json!({"operation":operation,"ok":result.is_ok(),"fullValidationCalls":report["fullValidationCalls"],"rotationCandidates":report["rotationCandidates"]})
         );
         result.unwrap_or_else(|error| panic!("Profile operation {} failed: {}", operation, error))
     }
@@ -2960,6 +3008,7 @@ mod tests {
             assert_eq!(candidate["panicking"], false);
             assert_profiled_validation_sql_succeeded(events);
         }
+        export_worker_profile("normal", || report);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -2988,6 +3037,7 @@ mod tests {
                     })
                 },
             );
+            let profile_ok = result.is_ok();
             assert!(result.unwrap_err().contains(if spawn_failure {
                 "synthetic rotation worker spawn failure"
             } else {
@@ -3040,6 +3090,14 @@ mod tests {
             for (path, original) in paths.iter().zip(originals) {
                 assert_eq!(rotation_bundle(path), original);
             }
+            let case = match panic_at {
+                Some(Stage::Before) => "before",
+                Some(Stage::After) => "after",
+                None => "spawn",
+            };
+            export_worker_profile(case, || {
+                profile_report("rotation_failure_profile", profile_ok, captured)
+            });
             fs::remove_dir_all(root).unwrap();
         }
     }
