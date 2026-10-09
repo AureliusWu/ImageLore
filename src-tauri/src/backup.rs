@@ -179,15 +179,22 @@ fn validate_in_place(path: &Path) -> Result<(), ValidationFailure> {
     let conn = storage_phase!(
         "validation.open",
         None,
-        Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY),
+        result
     )
     .map_err(ValidationFailure::from_sqlite)?;
-    storage_phase!("validation.configure", None, configure_validation(&conn))
-        .map_err(ValidationFailure::from_sqlite)?;
+    storage_phase!(
+        "validation.configure",
+        None,
+        configure_validation(&conn),
+        result
+    )
+    .map_err(ValidationFailure::from_sqlite)?;
     let result: String = storage_phase!(
         "validation.integrity_check",
         None,
-        conn.query_row("PRAGMA integrity_check", [], |r| r.get(0))
+        conn.query_row("PRAGMA integrity_check", [], |r| r.get(0)),
+        result
     )
     .map_err(ValidationFailure::from_sqlite)?;
     if result != "ok" {
@@ -498,7 +505,7 @@ fn validate_in_place(path: &Path) -> Result<(), ValidationFailure> {
         }
     });
     if version >= 3 {
-        let duplicate: i64 = storage_phase!("validation.portable_ids", None, conn.query_row("SELECT COUNT(*) FROM (SELECT portable_id FROM assets WHERE portable_id<>'' GROUP BY portable_id HAVING COUNT(*)>1)", [], |r| r.get(0))).map_err(ValidationFailure::from_sqlite)?;
+        let duplicate: i64 = storage_phase!("validation.portable_ids", None, conn.query_row("SELECT COUNT(*) FROM (SELECT portable_id FROM assets WHERE portable_id<>'' GROUP BY portable_id HAVING COUNT(*)>1)", [], |r| r.get(0)), result).map_err(ValidationFailure::from_sqlite)?;
         if duplicate != 0 {
             return Err(ValidationFailure::Rejected(
                 "备份存在重复 portable ID".into(),
@@ -510,7 +517,8 @@ fn validate_in_place(path: &Path) -> Result<(), ValidationFailure> {
         None,
         conn.prepare("PRAGMA foreign_key_check")
             .map_err(ValidationFailure::from_sqlite)?
-            .exists([])
+            .exists([]),
+        result
     )
     .map_err(ValidationFailure::from_sqlite)?;
     if fk_error {
@@ -2876,6 +2884,27 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    fn assert_profiled_validation_sql_succeeded(events: &[serde_json::Value]) {
+        for phase in [
+            "validation.open",
+            "validation.configure",
+            "validation.integrity_check",
+            "validation.foreign_keys",
+            "validation.portable_ids",
+        ] {
+            let matching: Vec<_> = events
+                .iter()
+                .filter(|event| event["phase"] == phase)
+                .collect();
+            assert_eq!(matching.len(), 1, "Missing or repeated SQL phase: {phase}");
+            assert_eq!(
+                matching[0]["resultOk"], true,
+                "Unobserved SQL result: {phase}"
+            );
+            assert_eq!(matching[0]["panicking"], false);
+        }
+    }
+
     #[test]
     fn rotation_profile_keeps_worker_sessions_separate_and_counts_full_validators() {
         let root = test_root("rotation-worker-profile");
@@ -2899,6 +2928,8 @@ mod tests {
             .unwrap()
             .contains("same-thread"));
         for worker in report["workerTraces"].as_array().unwrap() {
+            assert_eq!(worker["classification"], "Valid");
+            assert!(worker["failureOrigin"].is_null());
             assert_eq!(worker["parentScopeId"], rotation["id"]);
             assert_eq!(worker["clock"], "independent worker TLS origin");
             let events = worker["events"].as_array().unwrap();
@@ -2921,6 +2952,13 @@ mod tests {
             assert!(events.iter().any(|event| {
                 event["phase"] == "rotation.candidate" && event["parentId"].is_null()
             }));
+            let candidate = events
+                .iter()
+                .find(|event| event["phase"] == "rotation.candidate")
+                .unwrap();
+            assert_eq!(candidate["resultOk"], true);
+            assert_eq!(candidate["panicking"], false);
+            assert_profiled_validation_sql_succeeded(events);
         }
         fs::remove_dir_all(root).unwrap();
     }
@@ -2930,46 +2968,80 @@ mod tests {
         use rotation_workers::{Control, Stage};
         use std::sync::Arc;
 
-        let root = test_root("rotation-worker-failure-profile");
-        let paths = ordered_rotation_fixture(&root, 3);
-        let originals: Vec<_> = paths.iter().map(|path| rotation_bundle(path)).collect();
-        let (result, captured) = rotation_workers::with_control(
-            Control {
-                action: Arc::new(|ordinal, stage| {
-                    if ordinal == 1 && stage == Stage::After {
-                        panic!("synthetic profiled panic after full validation");
-                    }
-                }),
-                fail_spawn_at: None,
-            },
-            || phase_profile::capture("rotation_failure_profile", || rotate(&root.join("backups"))),
-        );
-        assert!(result.unwrap_err().contains("synthetic profiled panic"));
-        let workers: Vec<_> = captured
-            .iter()
-            .filter(|event| event["externalWorker"] == true)
-            .collect();
-        assert_eq!(workers.len(), 2);
-        assert_eq!(workers[0]["classification"], "Unavailable");
-        assert_eq!(workers[0]["failureOrigin"], "profiled_worker_panic");
-        assert_eq!(workers[0]["consumed"], true);
-        assert_eq!(workers[1]["consumed"], false);
-        for worker in workers {
-            assert_eq!(
-                worker["events"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .filter(|event| event["phase"] == "validation.total")
-                    .count(),
-                1,
+        for panic_at in [Some(Stage::Before), Some(Stage::After), None] {
+            let root = test_root("rotation-worker-failure-profile");
+            let paths = ordered_rotation_fixture(&root, 3);
+            let originals: Vec<_> = paths.iter().map(|path| rotation_bundle(path)).collect();
+            let spawn_failure = panic_at.is_none();
+            let (result, captured) = rotation_workers::with_control(
+                Control {
+                    action: Arc::new(move |ordinal, stage| {
+                        if ordinal == 1 && panic_at == Some(stage) {
+                            panic!("synthetic profiled panic");
+                        }
+                    }),
+                    fail_spawn_at: spawn_failure.then_some(2),
+                },
+                || {
+                    phase_profile::capture("rotation_failure_profile", || {
+                        rotate(&root.join("backups"))
+                    })
+                },
             );
+            assert!(result.unwrap_err().contains(if spawn_failure {
+                "synthetic rotation worker spawn failure"
+            } else {
+                "synthetic profiled panic"
+            }));
+            let workers: Vec<_> = captured
+                .iter()
+                .filter(|event| event["externalWorker"] == true)
+                .collect();
+            assert_eq!(workers.len(), 2);
+            assert_eq!(workers[0]["consumed"], true);
+            assert_eq!(workers[1]["consumed"], spawn_failure);
+            for (index, worker) in workers.iter().enumerate() {
+                let unavailable = index == usize::from(spawn_failure);
+                assert_eq!(
+                    worker["classification"],
+                    if unavailable { "Unavailable" } else { "Valid" }
+                );
+                let events = worker["events"].as_array().unwrap();
+                if unavailable && spawn_failure {
+                    assert_eq!(worker["failureOrigin"], "spawn");
+                    assert!(events.is_empty());
+                    continue;
+                }
+                if unavailable {
+                    assert_eq!(worker["failureOrigin"], "profiled_worker_panic");
+                } else {
+                    assert!(worker["failureOrigin"].is_null());
+                }
+                let candidate = events
+                    .iter()
+                    .find(|event| event["phase"] == "rotation.candidate")
+                    .unwrap();
+                assert!(candidate["parentId"].is_null());
+                assert_eq!(candidate["resultOk"], !unavailable);
+                assert_eq!(candidate["panicking"], false);
+                let completed_validation = !unavailable || panic_at == Some(Stage::After);
+                assert_eq!(
+                    events
+                        .iter()
+                        .filter(|event| event["phase"] == "validation.total")
+                        .count(),
+                    usize::from(completed_validation)
+                );
+                if completed_validation {
+                    assert_profiled_validation_sql_succeeded(events);
+                }
+            }
+            assert!(!root.join("backups/rejected").exists());
+            for (path, original) in paths.iter().zip(originals) {
+                assert_eq!(rotation_bundle(path), original);
+            }
+            fs::remove_dir_all(root).unwrap();
         }
-        assert!(!root.join("backups/rejected").exists());
-        for (path, original) in paths.iter().zip(originals) {
-            assert_eq!(rotation_bundle(path), original);
-        }
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
