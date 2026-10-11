@@ -163,9 +163,11 @@
 
 执行中；全库验证、手动备份关闭等待及正式内存窗口的进度见[性能跟进](docs/V0_26_PERFORMANCE_FOLLOWUP.md)，阶段退出条件通过后再推进下一版本。
 - 五组10分钟[内存隔离窗口](docs/V0_26_MEMORY_ISOLATION.md)已完成；连续换图与缩略图滚动仍超过20%预算，保留WARN。坏语义向量的[严格读取与增量重建](docs/V0_26_VECTOR_INTEGRITY.md)已修复，源码CI通过。
+- 10月9日当前 `ec8874f` 运行时完成[两组内存诊断](docs/V0_26_MEMORY_DIAGNOSTIC_PAIR.md)：初始条目反复滚动保留 `WARN`，不同图片加载为 `PASS_THIS_WINDOW`，各300步/10分钟且正常退出。两组同产物诊断不是旧版/新版配对，不证明旧 `cd220b2` 警告已修复；完整五组正式窗口和阶段退出条件仍待关闭。
 - `2276de1`候选的[真实模型矩阵](docs/V0_26_MODEL_MATRIX.md)已完成300图故障恢复、编码/下载取消、编码中关闭及缓存模式下重启读回；300图与5k真实编码均完成各20次热查询和完整持久闭环，p95通过3秒预算。32张冻结自然图的质量记录来自`34baa87`，中文召回有明确局限。50k及同场景冷测尚待验收，不计为全规模通过。
 - 50k独立副本的[启动、备份及恢复分阶段测量](docs/V0_26_BACKUP_PHASES.md)已通过，原DB/WAL/SHM保持；备份轮换的逐份完整校验是已测热点，后续优化保留全部校验。
 - 10月5日[两路备份校验对照](docs/V0_26_BACKUP_ROTATION_PAIR.md)完成3轮ABBA、12次探索性实测；完整校验和原件保全通过，生产整合、正式性能样本与真实备份/恢复仍待验收。
+- 10月11日[备份两路校验候选](docs/V0_26_BACKUP_WORKER_CANDIDATE.md)已实现并通过同提交三项CI、真实报告消费和私有桌面构建；尚未推广main/current，正式cold/warm及真实备份/恢复仍待验收。
 - 当前开发版本已推进到 `0.26.0`；按本阶段任务实施。验收记录：[存储/恢复](docs/V0_26_STORAGE_ACCEPTANCE.md)、[关键工作流](docs/V0_26_WORKFLOW_ACCEPTANCE.md)、[原生规模](docs/V0_26_NATIVE_SCALE.md)、[桌面程序](docs/V0_26_DESKTOP_ACCEPTANCE.md)、[真实模型](docs/V0_26_MODEL_ACCEPTANCE.md)。实际快捷方式、桌面保存重启和恢复已有验证；CLIP 三图集成已通过，启动/内存、全规模模型和完整退出标准仍需关闭。
 - [版本化桌面快捷方式](docs/DESKTOP_SHORTCUT.md)：本地原生运行目录与实际 EXE 版本联动，保护手工链接、拒绝自动降级、失败回退。
 - 执行方案、分阶段任务与可量化验收见 [v1.0.0 更新方案](docs/V1_0_0_PLAN.md)
