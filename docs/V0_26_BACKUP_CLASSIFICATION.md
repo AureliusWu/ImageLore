@@ -26,6 +26,18 @@ schema 标记必须是有效 UTF-8 TEXT；不能用 BLOB、数值或 NULL 冒充
 
 当前工作区同时含新增资产 FTS 优化，完整本地 Native 门禁在该联合源码上通过：fmt、locked check、Clippy `-D warnings`、147 passed / 3 ignored。前端 `npm run check` 与 `npm run build` 通过，Node 回归为 59 项，命令契约保持 85。源码与原始日志摘要保存在 `<private-evidence>`，本地工作区结果不代替最终提交的 CI 或新 EXE 验收。
 
+## 2026-10-15：无辅助文件的 WAL 候选
+
+真实桌面对照发现：已经 checkpoint、只剩主文件的 WAL 格式候选，仍可能被 SQLite 的 `READ_ONLY` 连接在原目录生成空 WAL 和 SHM。源文件头的读写版本为 `2/2`；实际 `VACUUM INTO` 新备份为 `1/1`。不能用 immutable 连接返回的 `journal_mode` 代替这一物理格式观测。本次观察未发现九份保留旧备份的主文件字节、mtime 或文件身份改变，新备份的完整逻辑校验也通过，但原目录新增辅助文件的保护缺口需要修复。
+
+`needs_probe_copy` 现在同时识别已有 WAL/SHM 和 SQLite WAL 文件头，令校验与生成快照都复用既有临时 DB/WAL 副本。普通回滚日志格式仍直接只读校验；短文件和非 SQLite 内容继续由原 SQLite 路径分类，其他文件读取错误保持不可用。没有修改原件、清理已有辅助文件或放宽完整性、外键和业务关系检查。
+
+新增两项真实文件回归：`wal_header_without_sidecars_validation_preserves_source`、`wal_header_without_sidecars_snapshot_preserves_source`。fixture 由 SQLite 实际写入 WAL、checkpoint、正常关闭后仅复制主文件生成，不伪改文件头。测试比较源字节、mtime、目录项、相邻哨兵及无新 WAL/SHM；新快照另回读已提交的 marker、Prompt 和素材计数。原生产实现的两项测试均因新增辅助文件失败；修复后完整 Rust 库回归为 **149 passed / 0 failed / 3 ignored**。最终结果已绑定重新编译的测试产物及测试前后相同的源码 SHA；原始失败和完整日志保留在 `<private-evidence>`。
+
+同一源码的 fmt、离线 locked Clippy `-D warnings`、85 项前端/Native/mock 命令契约及 tracked 敏感信息检查也通过。
+
+本记录冻结时，补丁仍在独立本地分支，未合入 main、未构建或推广新的桌面 EXE。WAL 候选增加的副本 I/O 需要在固定新源码上测量；旧运行时和两路候选的性能数据不转记为本补丁结果。该回归不关闭真实桌面配对、恢复矩阵、长期内存或 v1.0.0 发布门槛。
+
 ## 仍需独立验证的边界
 
 停止轮换只保证当前不可用候选不被修改，不会回滚此前已合法处理的其他候选。新快照可能暂时使备份数超过保留上限。已有隔离和保留清理只操作其原有主文件路径，本修复没有新增损坏 DB/WAL/SHM 的原子隔离，也没有解决外部进程并发修改的路径竞争。

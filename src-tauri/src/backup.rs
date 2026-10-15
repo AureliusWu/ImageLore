@@ -154,6 +154,27 @@ fn require_validation_columns(
     Ok(())
 }
 
+fn needs_probe_copy(path: &Path) -> std::io::Result<bool> {
+    use std::io::{ErrorKind, Read};
+
+    if companions(path)
+        .iter()
+        .skip(1)
+        .any(|sidecar| sidecar.exists())
+    {
+        return Ok(true);
+    }
+    // READ_ONLY may create WAL/SHM for a closed WAL database without sidecars.
+    // Do not turn short/non-SQLite corruption into an unavailable probe error.
+    let mut header = [0u8; 20];
+    let mut source = File::open(path)?;
+    match source.read_exact(&mut header) {
+        Ok(()) => Ok(&header[..16] == b"SQLite format 3\0" && (header[18] == 2 || header[19] == 2)),
+        Err(error) if error.kind() == ErrorKind::UnexpectedEof => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
 fn validate(path: &Path) -> Result<(), String> {
     validate_typed(path).map_err(|error| error.to_string())
 }
@@ -161,11 +182,7 @@ fn validate(path: &Path) -> Result<(), String> {
 fn validate_typed(path: &Path) -> Result<(), ValidationFailure> {
     #[cfg(test)]
     let _validation = tests::phase_profile::enter("validation.total", Some(path));
-    if companions(path)
-        .iter()
-        .skip(1)
-        .any(|sidecar| sidecar.exists())
-    {
+    if needs_probe_copy(path).map_err(ValidationFailure::from_io)? {
         let probe_dir = copy_probe_files(path).map_err(ValidationFailure::from_io)?;
         let result = validate_in_place(&probe_dir.join("library.sqlite3"));
         let _ = fs::remove_dir_all(probe_dir);
@@ -606,11 +623,7 @@ fn rotate(dir: &Path) -> Result<(), String> {
 fn vacuum_snapshot(source: &Path, target: &Path) -> Result<(), String> {
     #[cfg(test)]
     let _snapshot = tests::phase_profile::enter("snapshot.total", Some(source));
-    if companions(source)
-        .iter()
-        .skip(1)
-        .any(|sidecar| sidecar.exists())
-    {
+    if needs_probe_copy(source).map_err(|error| error.to_string())? {
         let probe_dir = copy_probe_files(source).map_err(|e| e.to_string())?;
         let result = vacuum_snapshot_in_place(&probe_dir.join("library.sqlite3"), target);
         let _ = fs::remove_dir_all(probe_dir);
@@ -3099,6 +3112,134 @@ mod tests {
             drop(conn);
             validate(&path).unwrap_or_else(|e| panic!("historical v{}: {}", version, e));
         }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn closed_wal_header_candidate(root: &Path) -> PathBuf {
+        let source_dir = root.join("wal-writer");
+        fs::create_dir(&source_dir).unwrap();
+        let source = source_dir.join("library.sqlite3");
+        let conn = seed(&source, "before-wal");
+        let mode: String = conn
+            .query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(mode, "wal");
+        conn.pragma_update(None, "wal_autocheckpoint", 0).unwrap();
+        conn.execute_batch(
+            "BEGIN IMMEDIATE;
+             UPDATE marker SET value='committed-header-only-wal';
+             UPDATE prompt_state SET prompt='committed-header-only-prompt' WHERE asset_id=1;
+             COMMIT;",
+        )
+        .unwrap();
+        assert!(
+            fs::metadata(source.with_extension("sqlite3-wal"))
+                .unwrap()
+                .len()
+                > 0
+        );
+        let checkpoint: (i64, i64, i64) = conn
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .unwrap();
+        assert_eq!(checkpoint, (0, 0, 0));
+        drop(conn);
+        assert!(companions(&source)
+            .iter()
+            .skip(1)
+            .all(|path| !path.exists()));
+        let bytes = fs::read(&source).unwrap();
+        assert_eq!(&bytes[..16], b"SQLite format 3\0");
+        // SQLite itself produced the persistent WAL header; never forge it.
+        assert_eq!(&bytes[18..20], &[2, 2]);
+
+        let candidate_dir = root.join("header-only-candidate");
+        fs::create_dir(&candidate_dir).unwrap();
+        let candidate = candidate_dir.join("candidate.sqlite3");
+        fs::copy(&source, &candidate).unwrap(); // Only the closed main DB is copied.
+        fs::write(candidate_dir.join("unrelated.bin"), b"retain this sibling").unwrap();
+        assert_eq!(fs::read(&candidate).unwrap(), bytes);
+        candidate
+    }
+
+    fn source_directory_entries(database: &Path) -> Vec<std::ffi::OsString> {
+        let mut names: Vec<_> = fs::read_dir(database.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        names.sort();
+        names
+    }
+
+    fn assert_header_only_source_unchanged(
+        candidate: &Path,
+        original: &[u8],
+        modified: SystemTime,
+        entries: &[std::ffi::OsString],
+    ) {
+        assert!(
+            fs::read(candidate).unwrap().as_slice() == original,
+            "Header-only WAL source bytes changed: {candidate:?}"
+        );
+        assert_eq!(
+            fs::metadata(candidate).unwrap().modified().unwrap(),
+            modified
+        );
+        assert_eq!(source_directory_entries(candidate).as_slice(), entries);
+        assert!(companions(candidate)
+            .iter()
+            .skip(1)
+            .all(|path| !path.exists()));
+        assert_eq!(
+            fs::read(candidate.parent().unwrap().join("unrelated.bin")).unwrap(),
+            b"retain this sibling"
+        );
+    }
+
+    #[test]
+    fn wal_header_without_sidecars_validation_preserves_source() {
+        let root = test_root("header-only-wal-validation");
+        let candidate = closed_wal_header_candidate(&root);
+        let original = fs::read(&candidate).unwrap();
+        let modified = fs::metadata(&candidate).unwrap().modified().unwrap();
+        let entries = source_directory_entries(&candidate);
+
+        validate_typed(&candidate).unwrap();
+
+        assert_header_only_source_unchanged(&candidate, &original, modified, &entries);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn wal_header_without_sidecars_snapshot_preserves_source() {
+        let root = test_root("header-only-wal-snapshot");
+        let candidate = closed_wal_header_candidate(&root);
+        let original = fs::read(&candidate).unwrap();
+        let modified = fs::metadata(&candidate).unwrap().modified().unwrap();
+        let entries = source_directory_entries(&candidate);
+        // Keep the output outside the source directory so membership is an oracle.
+        let snapshot = root.join("snapshot.sqlite3");
+
+        vacuum_snapshot(&candidate, &snapshot).unwrap();
+
+        assert_eq!(read_marker(&snapshot), "committed-header-only-wal");
+        let copied =
+            Connection::open_with_flags(&snapshot, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        let prompt: String = copied
+            .query_row(
+                "SELECT prompt FROM prompt_state WHERE asset_id=1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(prompt, "committed-header-only-prompt");
+        let count: i64 = copied
+            .query_row("SELECT COUNT(*) FROM assets", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+        drop(copied);
+        assert_header_only_source_unchanged(&candidate, &original, modified, &entries);
         fs::remove_dir_all(root).unwrap();
     }
 

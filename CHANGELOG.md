@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Isolated sidecar-free WAL backups during validation and snapshot creation so SQLite cannot create WAL/SHM beside the originals; added real-file preservation regressions.
+
 ## 0.26.0 — Stability Acceptance
 
 - Added version-aware Windows desktop shortcuts backed by the actual EXE version, safe ownership checks, cross-process serialization, downgrade protection and local runtime rollback.
