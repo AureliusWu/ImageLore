@@ -16,7 +16,6 @@ $testCurrent = Join-Path $testRuntime 'current'
 $testCurrentExe = Join-Path $testCurrent 'ImageLore.exe'
 $testPublisher = Join-Path $testScripts 'publish_desktop_runtime.ps1'
 $testCsc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
-$testShell = $null
 $testLock = $null
 $testCopyOverride = $false
 $testOwnsRoot = $false
@@ -88,9 +87,8 @@ function Assert-Current([string]$Version, [string]$Commit, [string]$Provenance =
   $state = Get-Content -LiteralPath $testState -Raw -Encoding UTF8 | ConvertFrom-Json
   $linkPath = Join-Path $testDesktop "ImageLore v$Version.lnk"
   Assert-Test ($state.version -eq $Version -and $state.executable -eq $testCurrentExe -and $state.link -eq $linkPath) "state $Version"
-  $link = $testShell.CreateShortcut($linkPath)
-  try { Assert-Test ($link.TargetPath -eq $testCurrentExe -and $link.Description.Contains("version=$Version")) "shortcut $Version" }
-  finally { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($link) | Out-Null }
+  $link = [ImageLore.UnicodeShortcut]::Read($linkPath)
+  Assert-Test ($link.TargetPath -eq $testCurrentExe -and $link.Description.Contains("version=$Version")) "shortcut $Version"
 }
 function Snapshot-Protected([string]$Version) {
   @{ binary=(Get-Digest $testCurrentExe); manifest=(Get-Digest (Join-Path $testCurrent 'runtime.json')); state=(Get-Digest $testState); link=(Get-Digest (Join-Path $testDesktop "ImageLore v$Version.lnk")) }
@@ -134,7 +132,6 @@ try {
     Assert-Test ($LASTEXITCODE -eq 0) 'fixture hooks, signing and fsmonitor are isolated'
   }
   Write-Text (Join-Path $testProject 'tracked.txt') 'tracked baseline'
-  $testShell = New-Object -ComObject WScript.Shell
 
   Compile-TestBinary '0.26.0'
   $firstCommit = Get-FixtureHead
@@ -212,12 +209,8 @@ try {
   Complete-Scenario 'staged-copy hash mismatch refuses promotion and preserves current/source'
 
   $collisionPath = Join-Path $testDesktop 'ImageLore v0.28.0.lnk'
-  $unowned = $testShell.CreateShortcut($collisionPath)
-  try {
-    $unowned.TargetPath = $testSourceExe
-    $unowned.Description = 'Unrelated user shortcut sentinel'
-    $unowned.Save()
-  } finally { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($unowned) | Out-Null }
+  [ImageLore.UnicodeShortcut]::Write($collisionPath, $testSourceExe,
+    [IO.Path]::GetDirectoryName($testSourceExe), $testSourceExe, 'Unrelated user shortcut sentinel')
   $collisionDigest = Get-Digest $collisionPath
   Assert-Rejected { Invoke-Publisher } 'unrelated shortcut'
   Assert-Current '0.27.0' $currentCommit
@@ -260,7 +253,6 @@ try {
 } finally {
   if ($testCopyOverride) { Remove-Item -LiteralPath Function:\Copy-Item }
   if ($null -ne $testLock) { $testLock.Dispose() }
-  if ($null -ne $testShell) { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($testShell) | Out-Null }
   if ($testOwnsRoot) {
     $resolved = [IO.Path]::GetFullPath($testRoot)
     Assert-OwnedPath $resolved -AllowRoot
