@@ -31,12 +31,15 @@ function Update-Fixture([string]$Binary, [switch]$ManagedOnly, [switch]$ExpectFa
   $previousPreference = $ErrorActionPreference
   try {
     $ErrorActionPreference = 'Continue'
-    & $powershell @arguments 2>&1 | Out-Null
+    $output = @(& $powershell @arguments 2>&1)
+    $exitCode = $LASTEXITCODE
   } finally {
     $ErrorActionPreference = $previousPreference
   }
-  if ($ExpectFailure) { Assert-True ($LASTEXITCODE -ne 0) 'Expected safe refusal' }
-  else { Assert-True ($LASTEXITCODE -eq 0) 'Shortcut script failed' }
+  $scenario = 'version=' + [IO.Path]::GetFileName([IO.Path]::GetDirectoryName($Binary)) + '; managedOnly=' + $ManagedOnly.IsPresent
+  $details = ($output | Select-Object -Last 12 | Out-String).Trim()
+  if ($ExpectFailure) { Assert-True ($exitCode -ne 0) ('Expected safe refusal; ' + $scenario) }
+  else { Assert-True ($exitCode -eq 0) ("Shortcut script failed; $scenario; exit=$exitCode`n$details") }
 }
 try {
   New-Item -ItemType Directory -Path $desktop -Force | Out-Null
