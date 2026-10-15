@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Isolated sidecar-free WAL backups during validation and snapshot creation so SQLite cannot create WAL/SHM beside the originals; added real-file preservation regressions.
+- Read Windows shortcut state and runtime manifests as UTF-8, with non-ASCII paths covered by the existing lifecycle tests.
 
 ## 0.26.0 — Stability Acceptance
 

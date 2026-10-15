@@ -18,7 +18,7 @@ try {
 if (-not $SourceDirectory) { $SourceDirectory = Join-Path $project 'src-tauri\target\release' }
 $source = [IO.Path]::GetFullPath($SourceDirectory)
 $binary = Join-Path $source 'imagelore.exe'
-$version = (Get-Content -LiteralPath (Join-Path $project 'VERSION') -Raw).Trim()
+$version = (Get-Content -LiteralPath (Join-Path $project 'VERSION') -Raw -Encoding UTF8).Trim()
 if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) { throw "Build the native application first: $binary" }
 $actual = (Get-Item -LiteralPath $binary).VersionInfo.ProductVersion
 if ($actual -notmatch '(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)' -or $Matches[1] -ne $version) {
@@ -28,7 +28,7 @@ $sourceManifestPath = Join-Path $source 'runtime.json'
 $binaryHash = (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash
 if (Test-Path -LiteralPath $sourceManifestPath) {
   if (-not (Test-Path -LiteralPath $sourceManifestPath -PathType Leaf)) { throw 'Source runtime.json must be a file' }
-  $sourceManifest = Get-Content -LiteralPath $sourceManifestPath -Raw | ConvertFrom-Json
+  $sourceManifest = Get-Content -LiteralPath $sourceManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
   if ($sourceManifest -isnot [pscustomobject] -or
       $sourceManifest.builtFrom -isnot [string] -or $sourceManifest.builtFrom -cnotmatch '\A[0-9A-Fa-f]{40}\z' -or
       $sourceManifest.sha256 -isnot [string] -or $sourceManifest.sha256 -cnotmatch '\A[0-9A-Fa-f]{64}\z' -or

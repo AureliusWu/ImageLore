@@ -1,5 +1,6 @@
 $ErrorActionPreference = 'Stop'
-$root = Join-Path ([IO.Path]::GetTempPath()) ('imagelore-shortcut-test-' + [Guid]::NewGuid().ToString('N'))
+# Exercise UTF-8 state paths even on an ASCII-only Windows user profile.
+$root = Join-Path ([IO.Path]::GetTempPath()) ('imagelore-shortcut-test-' + [char]0x4e2d + [char]0x6587 + '-' + [Guid]::NewGuid().ToString('N'))
 $desktop = Join-Path $root 'desktop'
 $state = Join-Path $root 'state\desktop-shortcut.json'
 $update = Join-Path $PSScriptRoot 'update_desktop_shortcut.ps1'
@@ -67,11 +68,11 @@ try {
   Update-Fixture $first -ManagedOnly
   Assert-True (Test-Path -LiteralPath $secondLink) 'Starting an older binary downgraded the shortcut'
   Assert-True (-not (Test-Path -LiteralPath $firstLink)) 'Older binary recreated an obsolete shortcut'
-  $beforeState = Get-Content -LiteralPath $state -Raw
+  $beforeState = Get-Content -LiteralPath $state -Raw -Encoding UTF8
   $lockedLink = [IO.File]::Open($secondLink, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
   try { Update-Fixture $third -ExpectFailure }
   finally { $lockedLink.Dispose() }
-  Assert-True ((Get-Content -LiteralPath $state -Raw) -eq $beforeState) 'Failed old-link cleanup did not roll back state'
+  Assert-True ((Get-Content -LiteralPath $state -Raw -Encoding UTF8) -eq $beforeState) 'Failed old-link cleanup did not roll back state'
   Assert-True (Test-Path -LiteralPath $secondLink) 'Failure lost the previous shortcut'
   Assert-True (-not (Test-Path -LiteralPath (Join-Path $desktop 'ImageLore v0.3.0.lnk'))) 'Failure retained a partially committed shortcut'
   Update-Fixture $first

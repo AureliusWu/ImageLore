@@ -59,7 +59,7 @@ function Compare-SemVer([string]$Left, [string]$Right) {
   return $partsA.Length.CompareTo($partsB.Length)
 }
 if (Test-Path -LiteralPath $StatePath -PathType Leaf) {
-  $previous = Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json
+  $previous = Get-Content -LiteralPath $StatePath -Raw -Encoding UTF8 | ConvertFrom-Json
   if ($previous.owner -ne $owner) { throw 'Shortcut state is not owned by ImageLore' }
 }
 if ($ManagedOnly -and (-not $previous -or -not (Test-OwnedShortcut $previous.link $previous.executable))) {

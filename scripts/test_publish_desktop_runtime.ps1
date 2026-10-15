@@ -3,8 +3,9 @@ $ErrorActionPreference = 'Stop'
 Import-Module -Name (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop
 $testTempBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
 $testRoot = Join-Path $testTempBase ('imagelore-runtime-publish-test-' + [Guid]::NewGuid().ToString('N'))
-$testProject = Join-Path $testRoot 'project'
-$testDesktop = Join-Path $testRoot 'isolated-desktop'
+# Exercise UTF-8 paths without changing the owned-root cleanup guard.
+$testProject = Join-Path $testRoot ('project-' + [char]0x4e2d + [char]0x6587)
+$testDesktop = Join-Path $testRoot ('isolated-desktop-' + [char]0x4e2d + [char]0x6587)
 $testState = Join-Path $testRoot 'isolated-state\desktop-shortcut.json'
 $testScripts = Join-Path $testProject 'scripts'
 $testSource = Join-Path $testProject 'synthetic-build'
@@ -72,7 +73,7 @@ internal static class Program { private static void Main() { } }
   Commit-Fixture "Synthetic fixture $Version"
   Write-Text (Join-Path $testSource 'sentinel.dll') "synthetic-dependency-$Version"
   Assert-Test ((Get-Item -LiteralPath $testSourceExe).VersionInfo.ProductVersion -eq $Version) "fixture ProductVersion $Version"
-  $metadata = @{ version=$Version; executable='ImageLore.exe'; builtFrom=(Get-FixtureHead); sha256=(Get-Digest $testSourceExe); candidate=$true }
+  $metadata = @{ version=$Version; executable='ImageLore.exe'; builtFrom=(Get-FixtureHead); sha256=(Get-Digest $testSourceExe); candidate=$true; fixturePath=$testSource }
   Write-Text $testSourceManifest ($metadata | ConvertTo-Json)
 }
 function Invoke-Publisher {
@@ -80,11 +81,11 @@ function Invoke-Publisher {
 }
 function Assert-Current([string]$Version, [string]$Commit, [string]$Provenance = 'source-runtime-manifest') {
   Assert-Test ((Get-Item -LiteralPath $testCurrentExe).VersionInfo.ProductVersion -eq $Version) "current version $Version"
-  $manifest = Get-Content -LiteralPath (Join-Path $testCurrent 'runtime.json') -Raw | ConvertFrom-Json
+  $manifest = Get-Content -LiteralPath (Join-Path $testCurrent 'runtime.json') -Raw -Encoding UTF8 | ConvertFrom-Json
   Assert-Test ($manifest.version -ceq $Version -and $manifest.executable -ceq 'ImageLore.exe' -and $manifest.builtFrom -ceq $Commit) "manifest version/executable/actual source commit $Version"
   Assert-Test ($manifest.sha256 -ceq (Get-Digest $testCurrentExe) -and $manifest.builtFromSource -ceq $Provenance) "manifest exact executable hash and provenance $Version"
-  Assert-Test ((Get-Content -LiteralPath (Join-Path $testCurrent 'sentinel.dll') -Raw) -eq "synthetic-dependency-$Version") "dependency copied $Version"
-  $state = Get-Content -LiteralPath $testState -Raw | ConvertFrom-Json
+  Assert-Test ((Get-Content -LiteralPath (Join-Path $testCurrent 'sentinel.dll') -Raw -Encoding UTF8) -eq "synthetic-dependency-$Version") "dependency copied $Version"
+  $state = Get-Content -LiteralPath $testState -Raw -Encoding UTF8 | ConvertFrom-Json
   $linkPath = Join-Path $testDesktop "ImageLore v$Version.lnk"
   Assert-Test ($state.version -eq $Version -and $state.executable -eq $testCurrentExe -and $state.link -eq $linkPath) "state $Version"
   $link = $testShell.CreateShortcut($linkPath)
@@ -156,14 +157,14 @@ try {
   $previous = @(Get-ChildItem -LiteralPath $testRuntime -Directory -Filter 'previous-*')
   Assert-Test ($previous.Count -eq 1) 'upgrade preserves one previous runtime'
   Assert-Test ((Get-Digest (Join-Path $previous[0].FullName 'ImageLore.exe')) -eq $firstBinaryDigest) 'previous contains exact original binary'
-  $previousManifest = Get-Content -LiteralPath (Join-Path $previous[0].FullName 'runtime.json') -Raw | ConvertFrom-Json
+  $previousManifest = Get-Content -LiteralPath (Join-Path $previous[0].FullName 'runtime.json') -Raw -Encoding UTF8 | ConvertFrom-Json
   Assert-Test ($previousManifest.builtFrom -ceq $firstCommit -and $previousManifest.sha256 -ceq $firstBinaryDigest) 'previous preserves original source metadata'
   Assert-Test (-not (Test-Path -LiteralPath (Join-Path $testDesktop 'ImageLore v0.26.0.lnk'))) 'old managed link removed after successful upgrade'
   Complete-Scenario 'upgrade preserves exact previous executable/source metadata and updates owned shortcut'
 
   $protected = Snapshot-Protected '0.27.0'
   Compile-TestBinary '0.28.0'
-  $validManifestText = Get-Content -LiteralPath $testSourceManifest -Raw
+  $validManifestText = Get-Content -LiteralPath $testSourceManifest -Raw -Encoding UTF8
   $directoriesBeforeReject = Runtime-Directories
   $invalidMetadata = @(
     @{ name='truncated commit'; field='builtFrom'; value='1234567'; cause='Source runtime.json' },
@@ -266,7 +267,7 @@ try {
     if (-not $resolved.StartsWith($testTempBase + '\', [StringComparison]::OrdinalIgnoreCase) -or
         [IO.Path]::GetFileName($resolved) -notmatch '^imagelore-runtime-publish-test-[0-9a-f]{32}$' -or
         -not (Test-Path -LiteralPath $testOwnerMarker -PathType Leaf) -or
-        (Get-Content -LiteralPath $testOwnerMarker -Raw) -cne $testOwnerToken) {
+        (Get-Content -LiteralPath $testOwnerMarker -Raw -Encoding UTF8) -cne $testOwnerToken) {
       throw "Refusing cleanup of an unowned temp root: $resolved"
     }
     $pending = [Collections.Generic.Stack[string]]::new()
