@@ -2,6 +2,19 @@
 
 日期：2026-09-30；执行更新：2026-10-01（Asia/Shanghai）。范围：A1 启动保护、A2 备份/恢复、A3 历史迁移、A4 自动备份后端。全部故障库与哨兵数据位于独立临时目录，未打开用户正常资料库。
 
+## 2026-10-15 离线补充验证
+
+基于 `main / 69299a4` 补充故障回归并修复已提交恢复的临时不可用分支。最终测试源码的 `backup.rs` SHA256 为 `52b4f97aa3c1d488feee6429cd85acf66f27f8f4a956bd96bd48490b824b7a8c`，`migrations.rs` 为 `734741faa4ea886f921b133c829ddd2c6491a85283f26784c352630dda4330bd`。原始日志、失败现场和测试 EXE 保留在仓库外 `<private-evidence>/backup-permission-recovery-20261015-01`，不上传 GitHub。
+
+- **已提交恢复遇到真实锁。** 新用例先证明实际 SQLite `BEGIN EXCLUSIVE` 使已安装库校验返回 `Unavailable`。旧实现实际删除了 `COMMITTED`，新回归因此失败；原失败及现场保留。修复将临时锁、IO 等不可用错误与明确无效的安装分开处理，在删除 marker 或移动文件前停止，保留错误原因。`pending` / `recovery` 两种合法 marker 的 DB、pending、reserved 原件及 marker 字节和 mtime 均保持；解锁后再次执行，保留有效安装并按原语义清理。
+- **缺失或已确认损坏的安装仍回退。** 两种合法 marker × 缺失/明确 `Rejected` 的四个文件库场景均回读预留原件，pending 候选保持可重试。未来 schema 的既有拒绝保护继续通过。此修复没有增加跨进程持续锁或文件集合原子替换保证。
+- **真实 Windows 权限拒绝。** 仅对唯一标记的合成目录 `backups`，为当前 SID 设置不继承的 `CreateFiles` deny。实际创建文件得到 `PermissionDenied`，恢复停止，原 DB/WAL/SHM/pending 字节和 mtime 不变，无 rollback/next 残留。辅助进程在显式请求或控制端 EOF 时恢复独立保存的原 Access ACL；显式恢复逐字核验 ACL 并正常退出后，同一 pending 重试成功，三份原始 raw 字节均保存。没有修改默认用户目录或全局权限。
+- **历史矩阵补齐 oracle。** 本地 Git 对象核验 11 份历史 SQL 和 schema-2 历史迁移源码均匹配冻结 manifest。既有文件库矩阵补充七个资产属性的非默认哨兵与带类型快照，校验 schema-2 实际 include 的 SQL 副本，关闭并重新 `init_db` 后比较完整业务快照、portable ID 与最新版本标记。保留原有迁移重跑、故障回滚重试、外键及完整性断言。
+
+最终 `cargo test --offline --locked --lib --jobs 1 -- --test-threads=1` 为 **152 passed / 0 failed / 3 原有 ignored**；locked/offline check、strict Clippy `-D warnings`、fmt 与 diff 检查通过。完整测试前的一次 ACL 辅助启动失败单独保留：Windows PowerShell 继承了不兼容的模块搜索路径；辅助脚本显式导入本宿主 `$PSHOME` 的 ACL 模块后，单项及完整复测通过，该失败不计作 PASS。
+
+本节证明当前源码的合成文件库后端与真实 Windows 文件权限行为，未启动 ImageLore 桌面程序，未验证物理断电、真实磁盘耗尽、跨进程完整恢复、安装器/updater 或完整 GUI 故障矩阵。当前桌面 EXE、性能样本与先前构建身份保持各自记录，阶段 A 和 v1.0.0 的完整退出标准仍未关闭。
+
 ## 已执行的验证
 
 - cargo test --locked --manifest-path src-tauri/Cargo.toml --lib migrations::tests -- --test-threads=1：15/15 通过。包含 schema 1–11 文件数据库升级、完整业务记录快照、确定性 portable ID、迁移重跑、最终步骤故障回滚后重新打开/重试、未来及非法 schema 拒绝、fixture 来源 hash。

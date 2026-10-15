@@ -776,14 +776,32 @@ fn finish_or_rollback(database: &Path, data_dir: &Path) -> Result<(), String> {
     let committed = dir.join("COMMITTED");
     if committed.exists() {
         let state = fs::read_to_string(&committed).map_err(|e| e.to_string())?;
-        if (state == "pending" || state == "recovery") && validate(database).is_ok() {
-            if state == "pending" {
-                let pending = data_dir.join("restore.pending.sqlite3");
-                if pending.exists() {
-                    fs::remove_file(pending).map_err(|e| e.to_string())?;
+        if (state == "pending" || state == "recovery")
+            && database.try_exists().map_err(|error| {
+                format!(
+                    "无法复核已提交的恢复资料库，已保留提交标记和原件：{}",
+                    error
+                )
+            })?
+        {
+            match validate_typed(database) {
+                Ok(()) => {
+                    if state == "pending" {
+                        let pending = data_dir.join("restore.pending.sqlite3");
+                        if pending.exists() {
+                            fs::remove_file(pending).map_err(|e| e.to_string())?;
+                        }
+                    }
+                    return fs::remove_dir_all(&dir).map_err(|e| e.to_string());
                 }
+                Err(ValidationFailure::Unavailable(error)) => {
+                    return Err(format!(
+                        "无法校验已提交的恢复资料库，已保留提交标记和原件：{}",
+                        error
+                    ));
+                }
+                Err(ValidationFailure::Rejected(_)) => (),
             }
-            return fs::remove_dir_all(&dir).map_err(|e| e.to_string());
         }
         // A torn commit marker or damaged installation is still an interrupted
         // transaction. Keep the pending source and restore the reserved originals.
@@ -2934,6 +2952,146 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn raw_preservation_permission_denied_keeps_bundle_and_retries() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::process::{Child, ChildStdout, Command, Stdio};
+
+        struct AccessAclGuard {
+            child: Child,
+            output: BufReader<ChildStdout>,
+            restored: bool,
+        }
+        impl AccessAclGuard {
+            fn deny_create_files(root: &Path) -> Self {
+                let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/fixtures/backup/hold-createfiles-deny.ps1");
+                let mut child = Command::new("powershell.exe")
+                    .args([
+                        "-NoLogo",
+                        "-NoProfile",
+                        "-NonInteractive",
+                        "-ExecutionPolicy",
+                        "Bypass",
+                        "-File",
+                    ])
+                    .arg(fixture)
+                    .arg("-OwnedRoot")
+                    .arg(root)
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .expect("Start the owned ACL fixture");
+                let output = BufReader::new(child.stdout.take().unwrap());
+                let mut guard = Self {
+                    child,
+                    output,
+                    restored: false,
+                };
+                let mut ready = String::new();
+                guard.output.read_line(&mut ready).unwrap();
+                assert_eq!(ready.trim_end(), "ACL_DENY_READY");
+                guard
+            }
+
+            fn restore(&mut self) -> Result<(), &'static str> {
+                if self.restored {
+                    return Ok(());
+                }
+                let requested = self.child.stdin.take().is_some_and(|mut input| {
+                    input
+                        .write_all(b"RESTORE\n")
+                        .and_then(|_| input.flush())
+                        .is_ok()
+                });
+                let mut terminal = String::new();
+                let observed = self.output.read_line(&mut terminal).is_ok()
+                    && terminal.trim_end() == "ACL_ACCESS_RESTORED";
+                let exited = self.child.wait().is_ok_and(|status| status.success());
+                self.restored = observed && exited;
+                if requested && self.restored {
+                    Ok(())
+                } else {
+                    Err("Owned access ACL restoration was not proved")
+                }
+            }
+        }
+        impl Drop for AccessAclGuard {
+            fn drop(&mut self) {
+                if !self.restored {
+                    let _ = self.restore();
+                }
+            }
+        }
+
+        let root = test_root("raw-acl-preservation");
+        fs::write(
+            root.join(".imagelore-raw-acl-test"),
+            b"ImageLore raw ACL test v1\n",
+        )
+        .unwrap();
+        let backups = root.join("backups");
+        let database = root.join("library.sqlite3");
+        let pending = root.join("restore.pending.sqlite3");
+        for (path, bytes) in companions(&database).iter().zip([
+            b"corrupt original DB".as_slice(),
+            b"corrupt original WAL".as_slice(),
+            b"corrupt original SHM".as_slice(),
+        ]) {
+            fs::write(path, bytes).unwrap();
+        }
+        drop(seed(&pending, "permission-retry-candidate"));
+        let originals: Vec<_> = companions(&database)
+            .into_iter()
+            .chain(std::iter::once(pending.clone()))
+            .map(|path| {
+                let bytes = fs::read(&path).unwrap();
+                let modified = fs::metadata(&path).unwrap().modified().unwrap();
+                (path, bytes, modified)
+            })
+            .collect();
+        let control = backups.join("permission-control.raw");
+        fs::write(&control, b"directory was writable before the deny").unwrap();
+        fs::remove_file(&control).unwrap();
+
+        let mut acl = AccessAclGuard::deny_create_files(&root);
+        let denied = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&control)
+            .unwrap_err();
+        assert_eq!(denied.kind(), std::io::ErrorKind::PermissionDenied);
+        let error = apply_pending_restore(&database, &root, &backups).unwrap_err();
+        assert!(error.contains("保全原件"));
+        for (path, bytes, modified) in &originals {
+            assert!(fs::read(path).unwrap().as_slice() == bytes.as_slice());
+            assert_eq!(fs::metadata(path).unwrap().modified().unwrap(), *modified);
+        }
+        assert_eq!(fs::read_dir(&backups).unwrap().count(), 0);
+        assert!(!root.join("restore.rollback").exists());
+        assert!(!fs::read_dir(&root).unwrap().any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with("restore.next-")));
+
+        acl.restore().unwrap();
+        apply_pending_restore(&database, &root, &backups).unwrap();
+        assert_eq!(read_marker(&database), "permission-retry-candidate");
+        assert!(!pending.exists());
+        let preserved: Vec<_> = fs::read_dir(&backups)
+            .unwrap()
+            .map(|entry| fs::read(entry.unwrap().path()).unwrap())
+            .collect();
+        assert_eq!(preserved.len(), 3);
+        for (_, bytes, _) in originals.iter().take(3) {
+            assert!(preserved.contains(bytes));
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn locked_active_and_future_active_are_preserved_with_pending() {
         for future in [false, true] {
@@ -3458,6 +3616,101 @@ mod tests {
         drop(conn);
         assert_eq!(fs::read(&backup).unwrap(), candidate);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn committed_restore_unavailable_validation_keeps_originals_and_retries() {
+        for state in ["pending", "recovery"] {
+            let root = test_root("committed-restore-locked");
+            let database = root.join("library.sqlite3");
+            let pending = root.join("restore.pending.sqlite3");
+            let reservation = rollback_dir(&database).unwrap();
+            fs::create_dir(&reservation).unwrap();
+            let reserved = reservation.join("database");
+            let committed = reservation.join("COMMITTED");
+            drop(seed(&reserved, "reserved-original"));
+            drop(seed(&pending, "installed-candidate"));
+            let conn = seed(&database, "installed-candidate");
+            validate(&database).unwrap();
+            fs::write(&committed, state).unwrap();
+            let tracked = [&database, &pending, &reserved, &committed];
+            let before: Vec<_> = tracked
+                .iter()
+                .map(|path| {
+                    (
+                        fs::read(path).unwrap(),
+                        fs::metadata(path).unwrap().modified().unwrap(),
+                    )
+                })
+                .collect();
+
+            // A real rollback-journal lock permits the disposable schema probe,
+            // but makes validation of the actual installed database unavailable.
+            conn.execute_batch("BEGIN EXCLUSIVE;").unwrap();
+            let failure = validate_typed(&database).unwrap_err();
+            assert!(matches!(&failure, ValidationFailure::Unavailable(_)));
+            let result = finish_or_rollback(&database, &root);
+            assert!(
+                result.is_err(),
+                "{} must stop on unavailable validation",
+                state
+            );
+            for (path, (bytes, modified)) in tracked.iter().zip(&before) {
+                assert_eq!(fs::read(path).unwrap(), *bytes, "{}: {:?}", state, path);
+                assert_eq!(
+                    fs::metadata(path).unwrap().modified().unwrap(),
+                    *modified,
+                    "{}: {:?}",
+                    state,
+                    path
+                );
+            }
+            assert!(result.unwrap_err().contains(&failure.to_string()));
+
+            conn.execute_batch("ROLLBACK;").unwrap();
+            drop(conn);
+            finish_or_rollback(&database, &root).unwrap();
+            assert_eq!(fs::read(&database).unwrap(), before[0].0);
+            assert_eq!(read_marker(&database), "installed-candidate");
+            assert!(!reservation.exists());
+            assert_eq!(pending.exists(), state == "recovery");
+            if pending.exists() {
+                assert_eq!(fs::read(&pending).unwrap(), before[1].0);
+            }
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn committed_restore_missing_or_rejected_installation_still_rolls_back() {
+        for state in ["pending", "recovery"] {
+            for missing in [false, true] {
+                let root = test_root("committed-restore-invalid");
+                let database = root.join("library.sqlite3");
+                let pending = root.join("restore.pending.sqlite3");
+                let reservation = rollback_dir(&database).unwrap();
+                fs::create_dir(&reservation).unwrap();
+                drop(seed(&reservation.join("database"), "reserved-original"));
+                drop(seed(&pending, "retry-candidate"));
+                let original = fs::read(reservation.join("database")).unwrap();
+                let candidate = fs::read(&pending).unwrap();
+                fs::write(reservation.join("COMMITTED"), state).unwrap();
+                if !missing {
+                    fs::write(&database, b"confirmed corrupt installed database").unwrap();
+                    assert!(matches!(
+                        validate_typed(&database),
+                        Err(ValidationFailure::Rejected(_))
+                    ));
+                }
+
+                finish_or_rollback(&database, &root).unwrap();
+                assert_eq!(fs::read(&database).unwrap(), original);
+                assert_eq!(read_marker(&database), "reserved-original");
+                assert_eq!(fs::read(&pending).unwrap(), candidate);
+                assert!(!reservation.exists());
+                fs::remove_dir_all(root).unwrap();
+            }
+        }
     }
 
     #[test]
