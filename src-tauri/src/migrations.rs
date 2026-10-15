@@ -569,9 +569,9 @@ mod tests {
             .unwrap();
         assert_eq!(actual, version.to_string());
         conn.execute_batch(
-            "INSERT INTO assets(id,path,name,generation_json,fingerprint,created_at,updated_at) VALUES
-                (1,'synthetic/one.png','历史蓝色大肥鱼.png','{\"seed\":\"42\",\"steps\":\"30\",\"sampler\":\"Euler\",\"cfg_scale\":\"6.5\"}','fp-one',10,20),
-                (2,'synthetic/two.png','second.png','{}','fp-two',11,21);
+            "INSERT INTO assets(id,path,name,width,height,file_size,format,mime_type,metadata_type,generation_json,fingerprint,file_mtime,created_at,updated_at) VALUES
+                (1,'synthetic/one.png','历史蓝色大肥鱼.png',640,480,12345,'png','image/png','fixture-one','{\"seed\":\"42\",\"steps\":\"30\",\"sampler\":\"Euler\",\"cfg_scale\":\"6.5\"}','fp-one',13,10,20),
+                (2,'synthetic/two.png','second.png',1024,768,67890,'webp','image/webp','fixture-two','{}','fp-two',14,11,21);
              INSERT INTO prompt_state VALUES(1,'sentinel prompt','sentinel negative','fixture model',20),(2,'child prompt','','fixture model',21);
              INSERT INTO prompt_revisions(asset_id,prompt,negative_prompt,model,tags_json,note,created_at) VALUES(1,'old prompt','old negative','old model','[\"海洋少女\"]','revision note',12);
              INSERT INTO tags(id,name,created_at) VALUES(1,'海洋少女',10);
@@ -619,7 +619,7 @@ mod tests {
 
     fn snapshot(conn: &Connection, version: usize) -> Vec<String> {
         let mut queries = vec![
-            "SELECT id,path,name,favorite,generation_json,fingerprint,missing,created_at,updated_at FROM assets ORDER BY id",
+            "SELECT id,path,name,favorite,width,height,file_size,format,mime_type,metadata_type,generation_json,fingerprint,file_mtime,missing,created_at,updated_at FROM assets ORDER BY id",
             "SELECT * FROM prompt_state ORDER BY asset_id",
             "SELECT * FROM prompt_revisions ORDER BY id",
             "SELECT * FROM tags ORDER BY id",
@@ -759,7 +759,38 @@ mod tests {
                 "42"
             );
             drop(conn);
-            drop(crate::db::init_db(&path).unwrap());
+            let reopened = crate::db::init_db(&path).unwrap();
+            assert_eq!(
+                snapshot(&reopened, 11),
+                migrated,
+                "schema {} reopened business data",
+                version
+            );
+            let reopened_portable: Vec<String> = reopened
+                .prepare("SELECT portable_id FROM assets ORDER BY id")
+                .unwrap()
+                .query_map([], |r| r.get(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            assert_eq!(
+                reopened_portable, portable,
+                "schema {} reopened IDs",
+                version
+            );
+            assert_eq!(
+                reopened
+                    .query_row(
+                        "SELECT value FROM app_meta WHERE key='schema_version'",
+                        [],
+                        |r| r.get::<_, String>(0)
+                    )
+                    .unwrap(),
+                LATEST.to_string(),
+                "schema {} reopened version",
+                version
+            );
+            drop(reopened);
             std::fs::remove_file(path).unwrap();
         }
     }
@@ -832,6 +863,15 @@ mod tests {
             );
             assert_eq!(fixture["commit"].as_str().unwrap().len(), 40);
         }
+        assert_eq!(
+            format!(
+                "{:x}",
+                Sha256::digest(
+                    include_str!("../tests/fixtures/migrations/schema-2/schema.sql").as_bytes()
+                )
+            ),
+            manifest["fixtures"][1]["sha256"].as_str().unwrap()
+        );
         assert_eq!(
             format!(
                 "{:x}",
