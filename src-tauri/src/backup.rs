@@ -2955,18 +2955,28 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn raw_preservation_permission_denied_keeps_bundle_and_retries() {
-        use std::io::{BufRead, BufReader, Write};
+        use std::io::{BufRead, BufReader, Read, Write};
         use std::process::{Child, ChildStdout, Command, Stdio};
 
         struct AccessAclGuard {
             child: Child,
             output: BufReader<ChildStdout>,
+            stderr_path: PathBuf,
+            requested: bool,
+            observed: bool,
+            child_exit_status: String,
             restored: bool,
         }
         impl AccessAclGuard {
             fn deny_create_files(root: &Path) -> Self {
                 let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
                     .join("tests/fixtures/backup/hold-createfiles-deny.ps1");
+                let stderr_path = root.join("acl-fixture.stderr.log");
+                let stderr = OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&stderr_path)
+                    .expect("Create the owned ACL fixture stderr log");
                 let mut child = Command::new("powershell.exe")
                     .args([
                         "-NoLogo",
@@ -2981,40 +2991,77 @@ mod tests {
                     .arg(root)
                     .stdin(Stdio::piped())
                     .stdout(Stdio::piped())
-                    .stderr(Stdio::null())
+                    .stderr(Stdio::from(stderr))
                     .spawn()
                     .expect("Start the owned ACL fixture");
                 let output = BufReader::new(child.stdout.take().unwrap());
                 let mut guard = Self {
                     child,
                     output,
+                    stderr_path,
+                    requested: false,
+                    observed: false,
+                    child_exit_status: "not-waited".to_string(),
                     restored: false,
                 };
                 let mut ready = String::new();
-                guard.output.read_line(&mut ready).unwrap();
-                assert_eq!(ready.trim_end(), "ACL_DENY_READY");
+                let read = guard.output.read_line(&mut ready);
+                if read.is_err() || ready.trim_end() != "ACL_DENY_READY" {
+                    let _ = guard.restore();
+                    panic!("{}", guard.diagnostic("ready: ready-observed=false"));
+                }
                 guard
             }
 
-            fn restore(&mut self) -> Result<(), &'static str> {
+            fn diagnostic(&self, stage: &str) -> String {
+                const LIMIT: usize = 4096;
+                let stderr = fs::File::open(&self.stderr_path)
+                    .and_then(|file| {
+                        let mut bytes = Vec::new();
+                        file.take(LIMIT as u64).read_to_end(&mut bytes)?;
+                        Ok(String::from_utf8_lossy(&bytes).into_owned())
+                    })
+                    .unwrap_or_else(|error| format!("unavailable({:?})", error.kind()));
+                let mut message = format!(
+                    "Owned access ACL fixture failed: stage={stage}; requested={}; observed={}; child-exit-status={}; stderr={stderr}",
+                    self.requested, self.observed, self.child_exit_status
+                );
+                let mut end = message.len().min(LIMIT);
+                while !message.is_char_boundary(end) {
+                    end -= 1;
+                }
+                message.truncate(end);
+                message
+            }
+
+            fn restore(&mut self) -> Result<(), String> {
                 if self.restored {
                     return Ok(());
                 }
-                let requested = self.child.stdin.take().is_some_and(|mut input| {
+                self.requested = self.child.stdin.take().is_some_and(|mut input| {
                     input
                         .write_all(b"RESTORE\n")
                         .and_then(|_| input.flush())
                         .is_ok()
                 });
                 let mut terminal = String::new();
-                let observed = self.output.read_line(&mut terminal).is_ok()
+                self.observed = self.output.read_line(&mut terminal).is_ok()
                     && terminal.trim_end() == "ACL_ACCESS_RESTORED";
-                let exited = self.child.wait().is_ok_and(|status| status.success());
-                self.restored = observed && exited;
-                if requested && self.restored {
+                let exited = match self.child.wait() {
+                    Ok(status) => {
+                        self.child_exit_status = status.to_string();
+                        status.success()
+                    }
+                    Err(error) => {
+                        self.child_exit_status = format!("wait-error({:?})", error.kind());
+                        false
+                    }
+                };
+                self.restored = self.observed && exited;
+                if self.requested && self.restored {
                     Ok(())
                 } else {
-                    Err("Owned access ACL restoration was not proved")
+                    Err(self.diagnostic("restore"))
                 }
             }
         }
