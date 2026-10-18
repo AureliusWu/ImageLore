@@ -8,6 +8,10 @@ use std::{
 };
 use tauri::{Manager, State};
 
+// Isolated Windows primitive prototype; the restore transaction does not use it.
+#[cfg(all(test, windows))]
+mod owned_handle;
+
 const MAX_BACKUPS: usize = 10;
 const AUTO_INTERVAL: i64 = 24 * 3600;
 // Full integrity checks revisit index pages. A bounded, connection-local cache
