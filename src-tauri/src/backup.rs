@@ -1164,9 +1164,22 @@ pub fn recover_latest_valid_backup(
     reason: &str,
 ) -> Result<Option<BackupRecord>, String> {
     finish_or_rollback(database_path, data_dir)?;
-    let selected = records(backups_dir)?
-        .into_iter()
-        .find(|item| validate(Path::new(&item.path)).is_ok());
+    let mut selected = None;
+    for item in records(backups_dir)? {
+        match validate_typed(Path::new(&item.path)) {
+            Ok(()) => {
+                selected = Some(item);
+                break;
+            }
+            Err(ValidationFailure::Rejected(_)) => continue,
+            Err(ValidationFailure::Unavailable(error)) => {
+                return Err(format!(
+                    "无法校验恢复备份 {}，已停止自动恢复：{}",
+                    item.name, error
+                ));
+            }
+        }
+    }
     let Some(selected) = selected else {
         return Ok(None);
     };
@@ -2190,6 +2203,112 @@ mod tests {
                 .unwrap();
         assert!(result.is_none());
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn startup_recovery_unavailable_newest_preserves_files_and_retries() {
+        // Run an independent unlocked control first so the unsafe implementation's
+        // preservation failure cannot hide the released candidate's business check.
+        for recover_while_locked in [false, true] {
+            let root = test_root("recovery-candidate-unavailable");
+            let backups = root.join("backups");
+            let database = root.join("library.sqlite3");
+            let older = backups.join("aa-older.sqlite3");
+            let newest = backups.join("zz-newest.sqlite3");
+            fs::write(&database, b"corrupt active library must remain exact").unwrap();
+            drop(seed(&older, "older-candidate"));
+            let writer = seed(&newest, "newest-candidate");
+            let mode: String = writer
+                .query_row("PRAGMA journal_mode=DELETE", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(mode, "delete");
+            validate_typed(&older).unwrap();
+            validate_typed(&newest).unwrap();
+            for (path, seconds) in [(&older, 1_700_000_000), (&newest, 1_700_000_060)] {
+                File::options()
+                    .write(true)
+                    .open(path)
+                    .unwrap()
+                    .set_times(
+                        std::fs::FileTimes::new()
+                            .set_modified(UNIX_EPOCH + std::time::Duration::from_secs(seconds)),
+                    )
+                    .unwrap();
+            }
+            let ordered = records(&backups).unwrap();
+            assert_eq!(ordered.len(), 2);
+            assert_eq!(ordered[0].name, "zz-newest.sqlite3");
+            assert_eq!(ordered[1].name, "aa-older.sqlite3");
+            assert!(ordered[0].created_at > ordered[1].created_at);
+            let originals: Vec<_> = [&database, &older, &newest]
+                .into_iter()
+                .map(|path| {
+                    (
+                        path.clone(),
+                        fs::read(path).unwrap(),
+                        fs::metadata(path).unwrap().modified().unwrap(),
+                    )
+                })
+                .collect();
+
+            writer.execute_batch("BEGIN EXCLUSIVE;").unwrap();
+            let failure = validate_typed(&newest).unwrap_err();
+            assert!(matches!(&failure, ValidationFailure::Unavailable(_)));
+            if recover_while_locked {
+                let error = recover_latest_valid_backup(
+                    &database,
+                    &root,
+                    &backups,
+                    "synthetic corrupt active library",
+                )
+                .unwrap_err();
+                assert!(error.contains(&failure.to_string()));
+                for (path, bytes, modified) in &originals {
+                    assert_eq!(fs::read(path).unwrap(), *bytes, "{:?}", path);
+                    assert_eq!(
+                        fs::metadata(path).unwrap().modified().unwrap(),
+                        *modified,
+                        "{:?}",
+                        path
+                    );
+                }
+                assert!(!crate::diagnostics::recovery_notice_path(&root).exists());
+                assert!(!root.join("recovery").exists());
+                assert!(!root.join("restore.rollback").exists());
+                assert!(!fs::read_dir(&root).unwrap().any(|entry| entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("restore.next-")));
+                assert_eq!(fs::read_dir(&backups).unwrap().count(), 2);
+            }
+
+            writer.execute_batch("ROLLBACK;").unwrap();
+            drop(writer);
+            let selected = recover_latest_valid_backup(
+                &database,
+                &root,
+                &backups,
+                "synthetic corrupt active library",
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(selected.name, "zz-newest.sqlite3");
+            assert_eq!(read_marker(&database), "newest-candidate");
+            for (path, bytes, modified) in originals.iter().skip(1) {
+                assert_eq!(fs::read(path).unwrap(), *bytes, "{:?}", path);
+                assert_eq!(
+                    fs::metadata(path).unwrap().modified().unwrap(),
+                    *modified,
+                    "{:?}",
+                    path
+                );
+            }
+            assert!(fs::read_dir(root.join("recovery"))
+                .unwrap()
+                .any(|entry| { fs::read(entry.unwrap().path()).unwrap() == originals[0].1 }));
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 
     fn test_root(label: &str) -> PathBuf {
