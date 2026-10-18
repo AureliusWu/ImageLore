@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Stop automatic recovery before replacing the active library when the newest backup is temporarily unavailable; retry the same newest backup after unlocking, while retaining fallback for confirmed-invalid candidates.
 - Isolated sidecar-free WAL backups during validation and snapshot creation so SQLite cannot create WAL/SHM beside the originals; added real-file preservation regressions.
 - Read Windows shortcut state and runtime manifests as UTF-8, with non-ASCII paths covered by the existing lifecycle tests.
 - Preserve committed restore markers and originals when installed-library validation is temporarily unavailable; retain rollback for missing or confirmed-invalid installations, with real SQLite lock and Windows permission-denial regressions.

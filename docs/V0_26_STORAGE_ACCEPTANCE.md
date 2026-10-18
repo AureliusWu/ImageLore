@@ -2,6 +2,20 @@
 
 日期：2026-09-30；执行更新：2026-10-01（Asia/Shanghai）。范围：A1 启动保护、A2 备份/恢复、A3 历史迁移、A4 自动备份后端。全部故障库与哨兵数据位于独立临时目录，未打开用户正常资料库。
 
+## 2026-10-18 离线补充验证
+
+用户暂缓桌面验收期间，完成最新恢复候选临时不可用的文件库回归与修复。生产源码提交为 `525258bbbc71c1e2da382f034009a7d003aeec67`，`backup.rs` SHA256 为 `3cc0fc9460314565802d10a62ebdb5d9a639ec3ff25adc4273c6bb061a6e8dcc`。原始日志、RED/GREEN 源码、测试产物及终态回执保留在仓库外 `<private-evidence>/recovery-offline-20261018-01`。
+
+- **最新候选临时被锁。** 两个独立合成目录各含损坏活动库及新旧两份有效备份；固定不同 mtime 并核对排序。真实 SQLite `BEGIN EXCLUSIVE` 使最新备份校验返回 `Unavailable`。旧实现跳过最新备份，在报错前用较旧库替换了活动库，新增字节保全断言实际失败，测试退出码 101。修复在任何替换之前保留原因并停止；活动库及两份候选的字节和 mtime 保持，没有恢复通知、raw/rollback/next 工件。释放锁后，同一目录成功恢复最新备份的业务哨兵，并保留损坏原件。独立解锁控制场景也成功选中最新备份。
+- **明确无效仍可跳过。** 选择候选时保留 typed 分类，只有 `Rejected` 继续查找较旧候选。既有“最新损坏、较旧有效”和无有效候选测试保留并通过；临时不可用不能被当作损坏授权回退。
+- **权限辅助进程的原 ACL 写回。** 先前 `005bc4e` 的[远端 Native CI](https://github.com/AureliusWu/ImageLore/actions/runs/38709607553)为 151 passed / 1 failed / 3 ignored，失败在辅助进程确认原 Access ACL 精确恢复；本地成功不能覆盖该失败。修复显式把独立保存的原 Access 描述符标记为待写回，再调用 `Set-Acl`，保留精确比较与正常退出要求。本地真实拒绝、原件保全、ACL 恢复后重试的单项及完整回归通过，远端复验单独跟踪。
+
+最终本地完整 Rust suite 为 **153 passed / 0 failed / 3 原有 ignored**，实际测试 48.55 秒；该次为新编译产物，EXE SHA256 为 `4721242aeddea038b055d25a19a924c687d0e1d3991bdbc66257e3d89708b246`。locked/offline check、严格 Clippy `-D warnings`、fmt、`npm run check`、前端构建和 diff 检查通过。测试前后五份源码/锁文件 SHA 相同，RED 与修复后产物分别封存。合成快捷方式及运行目录测试没有运行 fixture EXE。
+
+另在独立 worktree 将既有两路校验候选移植到 `525258b`，兼容候选为 `ef782ad750f587ab708f64306b8c63c1e79a3cb3`。四个原提交三方合并无冲突，完整测试 **160 passed / 0 failed / 3 原有 ignored**（59.24 秒），包含测试代码的严格 Clippy 通过；十一项关键安全函数/测试逐段核对保留。其测试 EXE SHA256 为 `ddcc235fa4745ef1f1767a7da1e2c7bd62b63f92ad00173005218f15e6e841dd`，与主线测试产物分开封存。两路实现仍未合入 main；此项兼容回归不替代真实 Native 备份/恢复对照或性能验收，旧冻结候选保持。
+
+本节仅证明文件库后端及受控 Windows 权限行为，没有启动 ImageLore GUI，也未构建或推广桌面 EXE、安装包、签名或 updater。真实桌面/性能/安装升级与阶段 A 退出标准保持待验收；现有桌面运行时仍绑定其原构建来源。
+
 ## 2026-10-15 离线补充验证
 
 基于 `main / 69299a4` 补充故障回归并修复已提交恢复的临时不可用分支。最终测试源码的 `backup.rs` SHA256 为 `52b4f97aa3c1d488feee6429cd85acf66f27f8f4a956bd96bd48490b824b7a8c`，`migrations.rs` 为 `734741faa4ea886f921b133c829ddd2c6491a85283f26784c352630dda4330bd`。原始日志、失败现场和测试 EXE 保留在仓库外 `<private-evidence>/backup-permission-recovery-20261015-01`，不上传 GitHub。
@@ -24,7 +38,7 @@
 - 自动备份 async 包装调整后，完整 native 门禁通过：`cargo fmt --check`、`cargo check --locked`、`cargo clippy --locked -- -D warnings`、`cargo test --locked --lib`（95 passed / 1 ignored）。日志为 `<private-evidence>/backup-async-cargo-*-v026.txt`；此轮未重复运行已单独完成的 50k/75k ignored 规模用例。
 - 独立备份锁与预览缓存修复后的当前 `f61f59b`，完整 library suite 为 104 passed / 1 ignored；相关检查与 strict clippy 通过。日志为 `<private-evidence>/cargo-{clippy,test}-perf-final-v026.txt` 和 `startup-backup-lock-{check,clippy}.txt`。历史 50k/75k ignored 用例的查询/排序代码未变，证据继续绑定其实际运行来源。
 
-恢复用例覆盖：真实未 checkpoint 的已提交 WAL 写入→独立备份→后续编辑→pending 恢复→重新打开回读；最新坏备份跳过选择较旧有效库；无有效备份停止；空/普通 SQLite、未来 schema、孤儿关系、截断候选拒绝；五个恢复步骤的 IO/rename/磁盘失败注入后原件可读且 pending 可重试；原 DB/WAL/SHM 保全失败必须中止；独占锁及活跃 WAL writer 不发生替换；中断预留回滚。自动备份覆盖 8 个并发请求只生成 1 份、24h 前后边界、坏文件不能推迟有效备份、失败后重试、手动备份独立名称、保留 10 份有效备份。
+恢复用例覆盖：真实未 checkpoint 的已提交 WAL 写入→独立备份→后续编辑→pending 恢复→重新打开回读；最新坏备份跳过选择较旧有效库，最新临时不可用则停止并在解锁后重试同一最新候选；无有效备份停止；空/普通 SQLite、未来 schema、孤儿关系、截断候选拒绝；五个恢复步骤的 IO/rename/磁盘失败注入后原件可读且 pending 可重试；原 DB/WAL/SHM 保全失败必须中止；独占锁及活跃 WAL writer 不发生替换；中断预留回滚。自动备份覆盖 8 个并发请求只生成 1 份、24h 前后边界、坏文件不能推迟有效备份、失败后重试、手动备份独立名称、保留 10 份有效备份。
 
 故障注入及中断用例是临时文件库上的受控状态模拟；没有声称真实磁盘耗尽、物理断电或隔离 Windows 安装器升级已验收。
 
