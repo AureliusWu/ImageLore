@@ -27,6 +27,12 @@
 
 最终完整本地测试为 **157 passed / 0 failed / 3 原有 ignored**（71.48 秒），locked/offline check、包含测试代码的 strict Clippy `--lib --tests -- -D warnings`、fmt、diff 及敏感信息扫描通过。扩大 Clippy 范围时实际发现两条既有测试写法警告，等价改用布尔断言及 `is_multiple_of` 后复测，失败日志保持。最终 `backup.rs` SHA256 为 `d6081ffa387d18cfbe6cc170413ae4ab0a1c376cbe40eed09b57e2d2b81549aa`，新编译测试 EXE 为 `9fcd63ca1bba3bc93a12aa492aa24890b90abb566c0d5f0768b0aaab1de9fa96`；源码、RED/GREEN、完整日志和产物封存在仓库外 `<private-evidence>/backup-discovery-errors-20261018-01`。该项修复的远端 CI 待验证，不计为桌面或灾难恢复整项验收通过。
 
+### 未关闭：最终检查与替换之间的并发修复
+
+以 `48689a6` 的恢复逻辑，在独立 worktree 增加仅测试用的最终写入检查后钩子。真实 schema 11 文件通过 `BEGIN IMMEDIATE`、版本查询并实际报告索引完整性损坏，独立普通恢复控制先成功；随后在检查结束、预留文件之前，将活动库修复为有效库，提交新的业务哨兵和第二项资产后关闭连接。实际恢复返回 `Ok(())`，业务哨兵却被旧备份覆盖，保全回归 **0 passed / 1 failed**，退出码 101。此结果证明受控调度下真实文件的数据丢失，不代表已启动第二个应用进程或完成真实桌面并发测试。
+
+该检查的 Windows 独占句柄及 SQLite 事务均未跨越完整替换过程。仅再检查一次不能证明检查之后的安全；普通重命名可能替换新建目标，回滚也需保护来源不明的新活动库。此问题仍为 **A1/A2 未关闭的数据保全门槛**，没有计入上述通过项，不发布或推广候选。失败源码、现场、测试 EXE 及回执保留在仓库外 `<private-evidence>/restore-final-check-race-20261018-01`，待实现跨替换阶段的保护并补充冲突回归。
+
 本节仅证明文件库后端及受控 Windows 权限行为，没有启动 ImageLore GUI，也未构建或推广桌面 EXE、安装包、签名或 updater。真实桌面/性能/安装升级与阶段 A 退出标准保持待验收；现有桌面运行时仍绑定其原构建来源。
 
 ## 2026-10-15 离线补充验证
