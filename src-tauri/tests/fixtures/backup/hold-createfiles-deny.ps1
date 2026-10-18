@@ -52,6 +52,8 @@ try{
 }finally{
   # EOF after a controller failure also restores the independently retained ACL.
   $cleanupStage='RESTORE_ACCESS'
+  # Mark the original Access section for persistence without changing its SDDL.
+  $originalAcl.SetSecurityDescriptorSddlForm($originalAccess,$access)
   Set-Acl -LiteralPath $target -AclObject $originalAcl
   $cleanupStage='VERIFY_RESTORED_ACCESS'
   $restored=Get-Acl -LiteralPath $target
