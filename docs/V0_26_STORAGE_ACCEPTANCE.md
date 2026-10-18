@@ -25,7 +25,9 @@
 
 最小修复逐项传播枚举错误及 mtime 读取错误，不再丢弃失败项或把读取失败当作时间 0；保留早于 Unix epoch 时间的既有回退、成功清单排序和十份有效备份策略。修复后四项 GREEN 为 **4 passed / 0 failed**：错误发生后全部原件字节、mtime 和目录名称保持，原因不丢失；移除注入后均在同一目录成功重试，并核对最新恢复点或正确保留的十份候选。
 
-最终完整本地测试为 **157 passed / 0 failed / 3 原有 ignored**（71.48 秒），locked/offline check、包含测试代码的 strict Clippy `--lib --tests -- -D warnings`、fmt、diff 及敏感信息扫描通过。扩大 Clippy 范围时实际发现两条既有测试写法警告，等价改用布尔断言及 `is_multiple_of` 后复测，失败日志保持。最终 `backup.rs` SHA256 为 `d6081ffa387d18cfbe6cc170413ae4ab0a1c376cbe40eed09b57e2d2b81549aa`，新编译测试 EXE 为 `9fcd63ca1bba3bc93a12aa492aa24890b90abb566c0d5f0768b0aaab1de9fa96`；源码、RED/GREEN、完整日志和产物封存在仓库外 `<private-evidence>/backup-discovery-errors-20261018-01`。该项修复的远端 CI 待验证，不计为桌面或灾难恢复整项验收通过。
+最终完整本地测试为 **157 passed / 0 failed / 3 原有 ignored**（71.48 秒），locked/offline check、包含测试代码的 strict Clippy `--lib --tests -- -D warnings`、fmt、diff 及敏感信息扫描通过。扩大 Clippy 范围时实际发现两条既有测试写法警告，等价改用布尔断言及 `is_multiple_of` 后复测，失败日志保持。最终 `backup.rs` SHA256 为 `d6081ffa387d18cfbe6cc170413ae4ab0a1c376cbe40eed09b57e2d2b81549aa`，新编译测试 EXE 为 `9fcd63ca1bba3bc93a12aa492aa24890b90abb566c0d5f0768b0aaab1de9fa96`；源码、RED/GREEN、完整日志和产物封存在仓库外 `<private-evidence>/backup-discovery-errors-20261018-01`。
+
+该项同源码候选 `9f6da5bdaf10f025d1655a373ed8efdc74c99d95` 的[Native CI](https://github.com/AureliusWu/ImageLore/actions/runs/39103518879)完整 Rust 测试为 **157 passed / 0 failed / 3 原有 ignored**（405.95 秒），四个 discovery 用例实际通过；[快速 CI](https://github.com/AureliusWu/ImageLore/actions/runs/39103520348)及[敏感信息门禁](https://github.com/AureliusWu/ImageLore/actions/runs/39103483976)均成功。快速 CI 中默认和 Legacy 两项真实 ACL 生命周期均通过。后续仅追加本节远端结果，不改变已验证源码；上述结果不计为桌面或灾难恢复整项验收通过。
 
 ### 未关闭：最终检查与替换之间的并发修复
 
