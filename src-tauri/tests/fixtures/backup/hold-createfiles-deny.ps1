@@ -25,6 +25,23 @@ if([IO.File]::ReadAllText((Join-Path $root '.imagelore-raw-acl-test')) -cne "Ima
   throw 'Exact owned ACL test marker is missing'
 }
 
+$stage='LOAD_LEGACY_DACL_RESTORE'
+# SetFileSecurity is obsolete; this test-only fallback restores a legacy DACL
+# AutoInherited=false bit which Set-Acl normalizes. Never write owner or SACL.
+# Compile before applying deny so a compiler failure cannot prevent restoration.
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class ImageLoreOwnedRawAclNative {
+  [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  private static extern bool SetFileSecurityW(string path, uint information, byte[] descriptor);
+  public static bool RestoreLegacyDacl(string path, byte[] descriptor) {
+    return SetFileSecurityW(path, 4, descriptor);
+  }
+}
+'@
+
 $access=[Security.AccessControl.AccessControlSections]::Access
 $stage='CAPTURE_ORIGINAL_ACCESS'
 $originalAcl=Get-Acl -LiteralPath $target
@@ -59,6 +76,16 @@ try{
   Set-Acl -LiteralPath $target -AclObject $originalAcl
   $cleanupStage='VERIFY_RESTORED_ACCESS'
   $restored=Get-Acl -LiteralPath $target
+  $originalRaw=[Security.AccessControl.RawSecurityDescriptor]::new($originalBinary,0)
+  if($restored.GetSecurityDescriptorSddlForm($access) -cne $originalAccess -and
+     -not ($originalRaw.ControlFlags -band [Security.AccessControl.ControlFlags]::DiscretionaryAclAutoInherited)){
+    $cleanupStage='RESTORE_LEGACY_DACL'
+    if(-not [ImageLoreOwnedRawAclNative]::RestoreLegacyDacl($target,$originalBinary)){
+      throw [ComponentModel.Win32Exception]::new([Runtime.InteropServices.Marshal]::GetLastWin32Error())
+    }
+    $cleanupStage='VERIFY_RESTORED_ACCESS'
+    $restored=Get-Acl -LiteralPath $target
+  }
   if($restored.GetSecurityDescriptorSddlForm($access) -cne $originalAccess){
     try{
       # Descriptor and ACE encodings stay in memory. Only bounded scalars reach stderr.
