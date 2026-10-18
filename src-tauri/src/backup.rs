@@ -552,19 +552,28 @@ fn records(dir: &Path) -> Result<Vec<BackupRecord>, String> {
     let _records = tests::phase_profile::enter("records.enumerate", None);
     fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let mut out = Vec::new();
-    for entry in fs::read_dir(dir)
-        .map_err(|e| e.to_string())?
-        .filter_map(Result::ok)
-    {
+    let entries = fs::read_dir(dir).map_err(|e| e.to_string())?;
+    #[cfg(test)]
+    let entries = tests::discovery_entries(dir, entries);
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("无法读取备份目录项：{error}"))?;
         let path = entry.path();
         if path.extension().and_then(|x| x.to_str()) != Some("sqlite3") {
             continue;
         }
         let meta = entry.metadata().map_err(|e| e.to_string())?;
-        let created = meta
-            .modified()
+        let modified = meta.modified();
+        #[cfg(test)]
+        let modified = tests::discovery_modified(&path, modified);
+        let created = modified
+            .map_err(|error| {
+                format!(
+                    "无法读取备份 {} 的修改时间：{error}",
+                    path.file_name().unwrap_or_default().to_string_lossy()
+                )
+            })?
+            .duration_since(UNIX_EPOCH)
             .ok()
-            .and_then(|x| x.duration_since(UNIX_EPOCH).ok())
             .map(|x| x.as_secs() as i64)
             .unwrap_or(0);
         out.push(BackupRecord {
@@ -1329,6 +1338,132 @@ mod tests {
         });
         let _reset = ResetHook;
         action()
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum DiscoveryFault {
+        DirectoryEntry,
+        ModifiedTime,
+    }
+
+    impl DiscoveryFault {
+        fn cause(self) -> &'static str {
+            match self {
+                Self::DirectoryEntry => "controlled discovery directory-entry IO failure",
+                Self::ModifiedTime => "controlled discovery modified-time IO failure",
+            }
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, Default)]
+    struct DiscoveryObservations {
+        injected: usize,
+        older_collected: usize,
+        older_before_error: usize,
+    }
+
+    struct DiscoveryHook {
+        directory: PathBuf,
+        newest: PathBuf,
+        fault: DiscoveryFault,
+        observations: std::rc::Rc<std::cell::Cell<DiscoveryObservations>>,
+    }
+
+    thread_local! {
+        static DISCOVERY_HOOK: std::cell::RefCell<Option<DiscoveryHook>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    // Only an explicitly armed fixture consumes/sorts real DirEntry values.
+    // The injected result is a controlled boundary error, not an OS disk failure.
+    pub(super) fn discovery_entries(
+        directory: &Path,
+        entries: fs::ReadDir,
+    ) -> Box<dyn Iterator<Item = std::io::Result<fs::DirEntry>>> {
+        let armed = DISCOVERY_HOOK.with(|slot| {
+            slot.borrow().as_ref().is_some_and(|hook| {
+                hook.directory == directory && hook.observations.get().injected == 0
+            })
+        });
+        if !armed {
+            return Box::new(entries);
+        }
+        let directory = directory.to_path_buf();
+        let mut actual = entries.collect::<std::io::Result<Vec<_>>>().unwrap();
+        actual.sort_by_key(|entry| entry.file_name());
+        Box::new(actual.into_iter().map(move |entry| {
+            DISCOVERY_HOOK.with(|slot| {
+                if let Some(hook) = slot.borrow().as_ref() {
+                    let mut observed = hook.observations.get();
+                    if hook.directory == directory
+                        && hook.newest == entry.path()
+                        && hook.fault == DiscoveryFault::DirectoryEntry
+                        && observed.injected == 0
+                    {
+                        assert!(observed.older_collected > 0);
+                        observed.injected += 1;
+                        observed.older_before_error = observed.older_collected;
+                        hook.observations.set(observed);
+                        return Err(std::io::Error::other(hook.fault.cause()));
+                    }
+                }
+                Ok(entry)
+            })
+        }))
+    }
+
+    pub(super) fn discovery_modified(
+        path: &Path,
+        modified: std::io::Result<SystemTime>,
+    ) -> std::io::Result<SystemTime> {
+        DISCOVERY_HOOK.with(|slot| {
+            if let Some(hook) = slot.borrow().as_ref() {
+                let mut observed = hook.observations.get();
+                if path.parent() == Some(hook.directory.as_path()) && observed.injected == 0 {
+                    assert!(modified.is_ok(), "The real fixture mtime read must succeed");
+                    if path == hook.newest && hook.fault == DiscoveryFault::ModifiedTime {
+                        assert!(observed.older_collected > 0);
+                        observed.injected += 1;
+                        observed.older_before_error = observed.older_collected;
+                        hook.observations.set(observed);
+                        return Err(std::io::Error::other(hook.fault.cause()));
+                    }
+                    if path != hook.newest {
+                        observed.older_collected += 1;
+                        hook.observations.set(observed);
+                    }
+                }
+            }
+            modified
+        })
+    }
+
+    fn with_discovery_fault<T>(
+        directory: &Path,
+        newest: &Path,
+        fault: DiscoveryFault,
+        action: impl FnOnce() -> T,
+    ) -> (T, DiscoveryObservations) {
+        struct ResetHook;
+        impl Drop for ResetHook {
+            fn drop(&mut self) {
+                drop(DISCOVERY_HOOK.with(|slot| slot.borrow_mut().take()));
+            }
+        }
+        let observations = std::rc::Rc::new(std::cell::Cell::new(DiscoveryObservations::default()));
+        DISCOVERY_HOOK.with(|slot| {
+            let mut current = slot.borrow_mut();
+            assert!(current.is_none(), "A discovery hook is already installed");
+            *current = Some(DiscoveryHook {
+                directory: directory.to_path_buf(),
+                newest: newest.to_path_buf(),
+                fault,
+                observations: std::rc::Rc::clone(&observations),
+            });
+        });
+        let _reset = ResetHook;
+        let result = action();
+        (result, observations.get())
     }
 
     // The production spans are inert unless this one thread explicitly captures
@@ -2309,6 +2444,234 @@ mod tests {
                 .any(|entry| { fs::read(entry.unwrap().path()).unwrap() == originals[0].1 }));
             fs::remove_dir_all(root).unwrap();
         }
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum DiscoveryOperation {
+        Recovery,
+        Rotation,
+    }
+
+    struct DiscoveryOriginal {
+        path: PathBuf,
+        bytes: Vec<u8>,
+        modified: SystemTime,
+    }
+
+    struct DiscoveryFixture {
+        root: PathBuf,
+        backups: PathBuf,
+        database: PathBuf,
+        candidates: Vec<(PathBuf, String)>,
+        originals: Vec<DiscoveryOriginal>,
+        root_names: Vec<std::ffi::OsString>,
+        backup_names: Vec<std::ffi::OsString>,
+    }
+
+    fn discovery_names(directory: &Path) -> Vec<std::ffi::OsString> {
+        let mut names: Vec<_> = fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        names.sort();
+        names
+    }
+
+    fn assert_discovery_original(original: &DiscoveryOriginal) {
+        assert!(
+            original.path.is_file(),
+            "Source disappeared: {:?}",
+            original.path
+        );
+        assert!(
+            fs::read(&original.path).unwrap() == original.bytes,
+            "Source bytes changed: {:?}",
+            original.path
+        );
+        assert_eq!(
+            fs::metadata(&original.path).unwrap().modified().unwrap(),
+            original.modified,
+            "Source mtime changed: {:?}",
+            original.path
+        );
+    }
+
+    impl DiscoveryFixture {
+        fn new(operation: DiscoveryOperation) -> Self {
+            let root = test_root("discovery-controlled-error");
+            let backups = root.join("backups");
+            let database = root.join("library.sqlite3");
+            let sentinel = root.join("fixture.marker");
+            fs::write(&database, b"synthetic corrupt active discovery library").unwrap();
+            fs::write(&sentinel, b"synthetic discovery preservation sentinel").unwrap();
+            let count = match operation {
+                DiscoveryOperation::Recovery => 2,
+                DiscoveryOperation::Rotation => MAX_BACKUPS + 2,
+            };
+            let mut candidates = Vec::new();
+            for ordinal in 0..count {
+                let path = backups.join(format!("candidate-{ordinal:02}.sqlite3"));
+                let marker = format!("synthetic discovery candidate {ordinal:02}");
+                let conn = seed(&path, &marker);
+                let mode: String = conn
+                    .query_row("PRAGMA journal_mode=DELETE", [], |row| row.get(0))
+                    .unwrap();
+                assert_eq!(mode, "delete");
+                drop(conn);
+                validate_typed(&path).unwrap();
+                assert_eq!(read_marker(&path), marker);
+                File::options()
+                    .write(true)
+                    .open(&path)
+                    .unwrap()
+                    .set_times(std::fs::FileTimes::new().set_modified(
+                        UNIX_EPOCH
+                            + std::time::Duration::from_secs(1_700_000_000 + ordinal as u64 * 60),
+                    ))
+                    .unwrap();
+                candidates.push((path, marker));
+            }
+            let expected_newest = candidates.last().unwrap().0.file_name().unwrap();
+            let ordered = records(&backups).unwrap();
+            assert_eq!(ordered.len(), count);
+            assert_eq!(std::ffi::OsStr::new(&ordered[0].name), expected_newest);
+            let originals = [&database, &sentinel]
+                .into_iter()
+                .chain(candidates.iter().map(|(path, _)| path))
+                .map(|path| DiscoveryOriginal {
+                    path: path.clone(),
+                    bytes: fs::read(path).unwrap(),
+                    modified: fs::metadata(path).unwrap().modified().unwrap(),
+                })
+                .collect();
+            let root_names = discovery_names(&root);
+            let backup_names = discovery_names(&backups);
+            assert_eq!(backup_names.len(), count);
+            Self {
+                root,
+                backups,
+                database,
+                candidates,
+                originals,
+                root_names,
+                backup_names,
+            }
+        }
+
+        fn run(&self, operation: DiscoveryOperation) -> Result<Option<BackupRecord>, String> {
+            match operation {
+                DiscoveryOperation::Recovery => recover_latest_valid_backup(
+                    &self.database,
+                    &self.root,
+                    &self.backups,
+                    "synthetic discovery recovery",
+                ),
+                DiscoveryOperation::Rotation => rotate(&self.backups).map(|()| None),
+            }
+        }
+
+        fn assert_unchanged(&self) {
+            // Inspect sources before the error result: RED must expose actual
+            // replacement/removal rather than stop at an unexpected Ok result.
+            for original in &self.originals {
+                assert_discovery_original(original);
+            }
+            assert_eq!(discovery_names(&self.root), self.root_names);
+            assert_eq!(discovery_names(&self.backups), self.backup_names);
+        }
+
+        fn assert_success(
+            &self,
+            operation: DiscoveryOperation,
+            result: Result<Option<BackupRecord>, String>,
+        ) {
+            let selected = result.unwrap();
+            assert_discovery_original(&self.originals[1]);
+            let retained = match operation {
+                DiscoveryOperation::Recovery => {
+                    let (path, marker) = self.candidates.last().unwrap();
+                    assert_eq!(
+                        std::ffi::OsStr::new(&selected.unwrap().name),
+                        path.file_name().unwrap()
+                    );
+                    assert_eq!(read_marker(&self.database), *marker);
+                    assert!(fs::read_dir(self.root.join("recovery"))
+                        .unwrap()
+                        .any(|entry| fs::read(entry.unwrap().path()).unwrap()
+                            == self.originals[0].bytes));
+                    &self.candidates[..]
+                }
+                DiscoveryOperation::Rotation => {
+                    assert!(selected.is_none());
+                    assert_discovery_original(&self.originals[0]);
+                    assert_eq!(self.candidates.len(), 12);
+                    assert!(!self.candidates[0].0.exists());
+                    assert!(!self.candidates[1].0.exists());
+                    assert_eq!(discovery_names(&self.root), self.root_names);
+                    &self.candidates[2..]
+                }
+            };
+            let mut expected_names = Vec::new();
+            for (path, marker) in retained {
+                let original = self
+                    .originals
+                    .iter()
+                    .find(|original| original.path == *path)
+                    .unwrap();
+                assert_discovery_original(original);
+                assert_eq!(read_marker(path), *marker);
+                expected_names.push(path.file_name().unwrap().to_os_string());
+            }
+            expected_names.sort();
+            assert_eq!(discovery_names(&self.backups), expected_names);
+        }
+    }
+
+    fn check_discovery_failure(operation: DiscoveryOperation, fault: DiscoveryFault) {
+        // Complete the real unarmed control before a deliberately unsafe
+        // production implementation can fail the preservation assertions.
+        let control = DiscoveryFixture::new(operation);
+        control.assert_success(operation, control.run(operation));
+        fs::remove_dir_all(control.root).unwrap();
+        println!("discovery independent control passed: {operation:?}, {fault:?}");
+
+        let fixture = DiscoveryFixture::new(operation);
+        let (result, observed) = with_discovery_fault(
+            &fixture.backups,
+            &fixture.candidates.last().unwrap().0,
+            fault,
+            || fixture.run(operation),
+        );
+        println!("discovery controlled injection observations: {observed:?}");
+        fixture.assert_unchanged();
+        assert_eq!(observed.injected, 1);
+        assert!(observed.older_before_error > 0);
+        assert!(DISCOVERY_HOOK.with(|slot| slot.borrow().is_none()));
+        let error = result.unwrap_err();
+        assert!(error.contains(fault.cause()), "Cause lost: {error}");
+
+        fixture.assert_success(operation, fixture.run(operation));
+        fs::remove_dir_all(fixture.root).unwrap();
+    }
+
+    #[test]
+    fn discovery_recovery_entry_error_preserves_files_and_retries() {
+        check_discovery_failure(DiscoveryOperation::Recovery, DiscoveryFault::DirectoryEntry);
+    }
+
+    #[test]
+    fn discovery_recovery_mtime_error_preserves_files_and_retries() {
+        check_discovery_failure(DiscoveryOperation::Recovery, DiscoveryFault::ModifiedTime);
+    }
+
+    #[test]
+    fn discovery_rotation_entry_error_preserves_files_and_retries() {
+        check_discovery_failure(DiscoveryOperation::Rotation, DiscoveryFault::DirectoryEntry);
+    }
+
+    #[test]
+    fn discovery_rotation_mtime_error_preserves_files_and_retries() {
+        check_discovery_failure(DiscoveryOperation::Rotation, DiscoveryFault::ModifiedTime);
     }
 
     fn test_root(label: &str) -> PathBuf {

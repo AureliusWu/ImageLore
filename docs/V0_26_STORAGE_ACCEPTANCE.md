@@ -17,6 +17,16 @@
 
 另在独立 worktree 将既有两路校验候选移植到 `525258b`，兼容候选为 `ef782ad750f587ab708f64306b8c63c1e79a3cb3`。四个原提交三方合并无冲突，完整测试 **160 passed / 0 failed / 3 原有 ignored**（59.24 秒），包含测试代码的严格 Clippy 通过；十一项关键安全函数/测试逐段核对保留。其测试 EXE SHA256 为 `ddcc235fa4745ef1f1767a7da1e2c7bd62b63f92ad00173005218f15e6e841dd`，与主线测试产物分开封存。两路实现仍未合入 main；此项兼容回归不替代真实 Native 备份/恢复对照或性能验收，旧冻结候选保持。
 
+上一批修复同步至 `main / 48689a62631f85fb30a0a2de28ee681e918b5fe2` 后，[Native CI](https://github.com/AureliusWu/ImageLore/actions/runs/39102234537)、[快速 CI](https://github.com/AureliusWu/ImageLore/actions/runs/39102234647)及[敏感信息门禁](https://github.com/AureliusWu/ImageLore/actions/runs/39102234595)均成功。该次实际远端 Rust 测试为 **153 passed / 0 failed / 3 原有 ignored**（332.67 秒），与此前失败及候选分支的结果分别保留；下述清单修复有独立验证身份。
+
+### 备份清单 IO 错误传播
+
+在独立合成目录的真实 SQLite 文件上，对目录逐项枚举和 mtime 读取边界分别注入受控 IO 错误，并调用正式自动恢复与轮转入口。四个独立无故障控制均通过；旧实现的四项保全回归为 **0 passed / 4 failed**，恢复实际替换了活动库，轮转实际删除了候选，原始失败现场保留。这里复现的是受控输入下的真实文件副作用，不是操作系统磁盘或目录枚举故障的现场复现。
+
+最小修复逐项传播枚举错误及 mtime 读取错误，不再丢弃失败项或把读取失败当作时间 0；保留早于 Unix epoch 时间的既有回退、成功清单排序和十份有效备份策略。修复后四项 GREEN 为 **4 passed / 0 failed**：错误发生后全部原件字节、mtime 和目录名称保持，原因不丢失；移除注入后均在同一目录成功重试，并核对最新恢复点或正确保留的十份候选。
+
+最终完整本地测试为 **157 passed / 0 failed / 3 原有 ignored**（71.48 秒），locked/offline check、包含测试代码的 strict Clippy `--lib --tests -- -D warnings`、fmt、diff 及敏感信息扫描通过。扩大 Clippy 范围时实际发现两条既有测试写法警告，等价改用布尔断言及 `is_multiple_of` 后复测，失败日志保持。最终 `backup.rs` SHA256 为 `d6081ffa387d18cfbe6cc170413ae4ab0a1c376cbe40eed09b57e2d2b81549aa`，新编译测试 EXE 为 `9fcd63ca1bba3bc93a12aa492aa24890b90abb566c0d5f0768b0aaab1de9fa96`；源码、RED/GREEN、完整日志和产物封存在仓库外 `<private-evidence>/backup-discovery-errors-20261018-01`。该项修复的远端 CI 待验证，不计为桌面或灾难恢复整项验收通过。
+
 本节仅证明文件库后端及受控 Windows 权限行为，没有启动 ImageLore GUI，也未构建或推广桌面 EXE、安装包、签名或 updater。真实桌面/性能/安装升级与阶段 A 退出标准保持待验收；现有桌面运行时仍绑定其原构建来源。
 
 ## 2026-10-15 离线补充验证

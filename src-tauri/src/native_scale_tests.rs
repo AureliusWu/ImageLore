@@ -380,7 +380,7 @@ fn page_cases(count: i64) -> Vec<PageCase> {
 fn stats(samples: &[f64]) -> Value {
     let mut sorted = samples.to_vec();
     sorted.sort_by(f64::total_cmp);
-    let median = if sorted.len() % 2 == 0 {
+    let median = if sorted.len().is_multiple_of(2) {
         (sorted[sorted.len() / 2 - 1] + sorted[sorted.len() / 2]) / 2.0
     } else {
         sorted[sorted.len() / 2]
