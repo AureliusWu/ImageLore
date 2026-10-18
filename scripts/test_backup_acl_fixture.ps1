@@ -1,3 +1,4 @@
+param([switch]$LegacyDacl)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
@@ -15,6 +16,8 @@ $restoreRequested = $false
 $restoreObserved = $false
 $deniedObserved = $false
 $restoredWriteObserved = $false
+$legacyPrepared = $false
+$parentSddlEqual = $false
 $markerText = "ImageLore raw ACL test v1`n"
 $tempBase = ''
 $rootName = 'imagelore-raw-acl-preservation-' + [Guid]::NewGuid().ToString('N')
@@ -92,6 +95,19 @@ function Get-SafeChildDiagnostics([string]$Output) {
 }
 
 try {
+  if ($LegacyDacl -and -not ('ImageLore.AclFixtureBaseline' -as [type])) {
+    $stage = 'COMPILE_BASELINE_HELPER'
+    Add-Type -TypeDefinition @'
+using System.Runtime.InteropServices;
+namespace ImageLore {
+    public static class AclFixtureBaseline {
+        [DllImport("advapi32.dll", ExactSpelling = true, CharSet = CharSet.Unicode, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool SetFileSecurityW(string path, uint securityInformation, byte[] descriptor);
+    }
+}
+'@
+  }
   $tempBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
   $root = Join-Path $tempBase $rootName
   $backups = Join-Path $root 'backups'
@@ -117,6 +133,39 @@ try {
   Assert-OrdinaryPath $backups
   $stage = 'VERIFY_INITIAL_WRITE'
   Write-Control
+
+  $access = [Security.AccessControl.AccessControlSections]::Access
+  if ($LegacyDacl) {
+    $stage = 'PREPARE_LEGACY_DACL'
+    $original = Get-Acl -LiteralPath $backups
+    $descriptor = [Security.AccessControl.RawSecurityDescriptor]::new($original.GetSecurityDescriptorBinaryForm(), 0)
+    Assert-Condition ($null -ne $descriptor.DiscretionaryAcl)
+    $daclBefore = [byte[]]::new($descriptor.DiscretionaryAcl.BinaryLength)
+    $descriptor.DiscretionaryAcl.GetBinaryForm($daclBefore, 0)
+    $expectedFlags = ([int]$descriptor.ControlFlags -band 0x150C) -band (-bnot 0x400)
+    $descriptor.SetFlags([Security.AccessControl.ControlFlags]([int]$descriptor.ControlFlags -band (-bnot 0x400)))
+    $encoded = [byte[]]::new($descriptor.BinaryLength)
+    $descriptor.GetBinaryForm($encoded, 0)
+    # This native call prepares only the owned test baseline. Never select an
+    # external path or request Owner, Group, SACL or protection changes.
+    Assert-OwnedCleanup
+    Assert-Condition ([IO.Path]::GetFullPath($backups) -ceq (Join-Path $root 'backups'))
+    if (-not [ImageLore.AclFixtureBaseline]::SetFileSecurityW($backups, 4, $encoded)) {
+      throw [ComponentModel.Win32Exception]::new([Runtime.InteropServices.Marshal]::GetLastWin32Error())
+    }
+    $stage = 'VERIFY_LEGACY_DACL'
+    $prepared = Get-Acl -LiteralPath $backups
+    $readback = [Security.AccessControl.RawSecurityDescriptor]::new($prepared.GetSecurityDescriptorBinaryForm(), 0)
+    Assert-Condition ($null -ne $readback.DiscretionaryAcl)
+    $daclAfter = [byte[]]::new($readback.DiscretionaryAcl.BinaryLength)
+    $readback.DiscretionaryAcl.GetBinaryForm($daclAfter, 0)
+    Assert-Condition ([Convert]::ToBase64String($daclBefore) -ceq [Convert]::ToBase64String($daclAfter))
+    Assert-Condition (([int]$readback.ControlFlags -band 0x150C) -eq $expectedFlags)
+    $legacyPrepared = ([int]$readback.ControlFlags -band 0x400) -eq 0
+    Assert-Condition $legacyPrepared
+  }
+  $stage = 'CAPTURE_PARENT_ORACLE'
+  $parentAccess = (Get-Acl -LiteralPath $backups).GetSecurityDescriptorSddlForm($access)
 
   $stage = 'START_FIXTURE'
   $start = [Diagnostics.ProcessStartInfo]::new()
@@ -163,6 +212,9 @@ try {
   Assert-Condition $childExited
   $childExitCode = [string]$child.ExitCode
   Assert-Condition ($child.ExitCode -eq 0)
+  $stage = 'VERIFY_PARENT_ORACLE'
+  $parentSddlEqual = (Get-Acl -LiteralPath $backups).GetSecurityDescriptorSddlForm($access) -ceq $parentAccess
+  Assert-Condition $parentSddlEqual
   $stage = 'VERIFY_RESTORED_WRITE'
   Write-Control
   $restoredWriteObserved = $true
@@ -197,11 +249,12 @@ if ($success) {
 
 if (-not $success) {
   $details = Get-SafeChildDiagnostics $childStderr
-  $message = 'ImageLore ACL fixture: FAIL stage={0} exception={1} ready={2} denied={3} restoreRequested={4} restoreObserved={5} childExited={6} childExit={7} restoredWrite={8} droppedChildLines={9}' -f $stage,$failureType,$readyObserved,$deniedObserved,$restoreRequested,$restoreObserved,$childExited,$childExitCode,$restoredWriteObserved,$details.dropped
+  $message = 'ImageLore ACL fixture: FAIL stage={0} exception={1} ready={2} denied={3} restoreRequested={4} restoreObserved={5} childExited={6} childExit={7} restoredWrite={8} droppedChildLines={9} legacy={10} legacyPrepared={11} parentSddlEqual={12}' -f $stage,$failureType,$readyObserved,$deniedObserved,$restoreRequested,$restoreObserved,$childExited,$childExitCode,$restoredWriteObserved,$details.dropped,$LegacyDacl.IsPresent,$legacyPrepared,$parentSddlEqual
   if ($details.text) { $message += "`n" + $details.text }
   # All accepted text is ASCII; reserve two bytes for WriteLine's CRLF.
   if ($message.Length -gt 4094) { $message = $message.Substring(0,4094) }
   [Console]::Error.WriteLine($message)
   exit 1
 }
-Write-Output 'ImageLore ACL fixture: PASS (initial write, real denial, strict restore ACK, exit 0, restored write, owned cleanup)'
+Write-Output ('ImageLore ACL fixture: PASS legacy={0} (initial write, real denial, strict restore ACK, exit 0, independent parent ACL oracle, restored write, owned cleanup)' -f $LegacyDacl.IsPresent)
+exit 0

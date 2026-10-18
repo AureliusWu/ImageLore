@@ -22,7 +22,10 @@ jobs:
 
       - name: Verify owned Windows ACL fixture lifecycle
         shell: pwsh
-        run: ./scripts/test_backup_acl_fixture.ps1
+        run: |
+          ./scripts/test_backup_acl_fixture.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./scripts/test_backup_acl_fixture.ps1 -LegacyDacl
 
       - uses: actions/setup-node@v4
         with:
