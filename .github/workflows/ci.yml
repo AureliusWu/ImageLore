@@ -20,6 +20,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Verify owned Windows ACL fixture lifecycle
+        shell: pwsh
+        run: ./scripts/test_backup_acl_fixture.ps1
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
