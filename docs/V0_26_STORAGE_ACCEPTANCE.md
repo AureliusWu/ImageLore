@@ -29,6 +29,12 @@
 
 该项同源码候选 `9f6da5bdaf10f025d1655a373ed8efdc74c99d95` 的[Native CI](https://github.com/AureliusWu/ImageLore/actions/runs/39103518879)完整 Rust 测试为 **157 passed / 0 failed / 3 原有 ignored**（405.95 秒），四个 discovery 用例实际通过；[快速 CI](https://github.com/AureliusWu/ImageLore/actions/runs/39103520348)及[敏感信息门禁](https://github.com/AureliusWu/ImageLore/actions/runs/39103483976)均成功。快速 CI 中默认和 Legacy 两项真实 ACL 生命周期均通过。后续仅追加本节远端结果，不改变已验证源码；上述结果不计为桌面或灾难恢复整项验收通过。
 
+### 两路候选与清单修复的隔离兼容验证
+
+将清单错误传播修复与上述未关闭竞态记录移植到既有两路候选，得到独立 `82bb027bba3f4073105b0f79e4128263d014dfcc`；旧候选和旧证据保持不变。重新采集全部 32 份编译输入及 3 份 fixture/gate 输入和原字节快照，新编译完整本地测试为 **164 passed / 0 failed / 3 原有 ignored**，包含测试代码的严格 Clippy、check 通过。新测试 EXE SHA256 为 `19d18bfc61af4a3daf89208d80650be3156105095ca5d0803f3571107346d8c1`，`backup.rs` 为 `9bd34c3c07ebf635d076291cb10dbd04a209ee0a0fec766b7d2990c2422d8e49`。
+
+同一新产物再实际执行两项 profile 导出，四份新报告由字节未变的固定消费者验证，得到 13 个 session、7 次完整 validator 调用；全部 35 份输入、二进制与报告身份保持。新回执保存在仓库外 `<private-evidence>/backup-worker-discovery-compat-20261018-01`，不继承旧产物或报告的运行结果。此候选仍未合入 main 或推广为桌面程序，未关闭真实 Native 对照、性能和下述并发恢复门槛。
+
 ### 未关闭：最终检查与替换之间的并发修复
 
 以 `48689a6` 的恢复逻辑，在独立 worktree 增加仅测试用的最终写入检查后钩子。真实 schema 11 文件通过 `BEGIN IMMEDIATE`、版本查询并实际报告索引完整性损坏，独立普通恢复控制先成功；随后在检查结束、预留文件之前，将活动库修复为有效库，提交新的业务哨兵和第二项资产后关闭连接。实际恢复返回 `Ok(())`，业务哨兵却被旧备份覆盖，保全回归 **0 passed / 1 failed**，退出码 101。此结果证明受控调度下真实文件的数据丢失，不代表已启动第二个应用进程或完成真实桌面并发测试。
