@@ -45,4 +45,28 @@ Windows 的 apply、recover 和 stage 在首次查询或续作前取得数据目
 
 上述原始日志与现场均位于 `<private-evidence>/pending-stage-safety-20261020-01`。所有 Cargo 门禁使用 `--offline --locked --jobs 1`，没有启动 GUI 或构建应用 EXE/安装包。远端检查以本轮实际源码提交另行绑定，不能借用基线 193 项 CI 的通过结论。
 
-上述锁只串行遵守新协议的恢复操作；备份创建/轮换仍有其既有 AppState 锁和源文件保护，旧程序也不识别新接管记录，不能声称跨旧版并发或降级兼容已经验证。旧 `restore.rollback` 仍需保留并人工核对。真实进程异常退出矩阵、物理磁盘耗尽、桌面重启、安装升级、规模与长期内存仍须独立验收。所有原始现场、邮箱、凭据及本机路径留在仓库外。
+源码 `01b5697eb01dc4be1a3f9ffdd66e312ff77ba685` 的[候选 Native CI](https://github.com/AureliusWu/ImageLore/actions/runs/39392292515)实际为 **221 passed / 0 failed / 3 ignored**（818.78 秒），format/check/Clippy 均成功；[快速 CI](https://github.com/AureliusWu/ImageLore/actions/runs/39392304237)及[敏感信息门禁](https://github.com/AureliusWu/ImageLore/actions/runs/39392245399)也成功。源码随后正常 fast-forward 同步 main，推送前 1293 项检查与默认 Gitleaks 通过，没有创建 PR 或调整保护规则。原始 CI 日志分别保存在同一私有证据目录的 `ci-candidate-01b5697-{native,fast}.log`。下列强制中断新增测试与该 221 项源码身份分别绑定。
+
+## 真实 Windows 子进程强制终止矩阵
+
+后续在同一生产逻辑上添加仅测试编译的持久步骤钩子，使用实际测试 EXE 启动独立子进程。子进程取得真实操作锁、执行真实事务，在指定边界写入并同步位于数据目录外的 ready 记录后暂停。父进程核对 nonce、PID、操作与边界，确认子进程仍存活且操作锁实际 Busy，再调用 `Child.kill()` 并 wait/reap；不使用回调 Err、panic、正常退出或 Rust Drop 代替强制终止。
+
+| 边界 | 应用 pending | 暂存 pending |
+| --- | --- | --- |
+| Prepared 已同步，尚未移动原件 | 通过 | 通过 |
+| 原件三角色已预留 | 通过 | 通过 |
+| staged 已安装，尚无 Commit | 通过 | 通过 |
+| Commit 已同步，尚未清理 | 通过 | 通过 |
+| 已删除第一份保留区原件 | 通过 | 通过 |
+| 已消费 pending 主库，侧车仍在 | 通过 | 不消费源备份，不适用 |
+| Prepared 已删除，只剩自含 Commit | 通过 | 通过 |
+
+最终定向记录 `conflicts-matrix-20261020-02` 共实际终止 **13 个子进程**，退出码均为 Windows `1`；逐案 PID、退出码及数据断言 PASS 保存在原始输出中，耗时 25.24 秒。两个父测试完成全部 13 案；另一个普通测试计数是 exact child 入口在未设置子进程参数时的空操作，不重复计作额外强杀案例。
+
+每案均使用实际 DB/WAL/SHM：在唯一播种连接保持空闲时复制已提交、未 checkpoint 的三角色，然后关闭播种连接。独立 main-only 副本仍为旧 marker/1 个资产，而完整 DB/WAL 副本读出新 marker/2 个资产，证明业务提交确实依赖 WAL。检查只打开数据目录外的一次性副本；不会在待比较原件上通过 SQLite 重建 SHM。
+
+强杀后核实持久操作锁完整指纹未变且可以重新获取，核实真实 journal 所处边界、原件/候选/安装角色及 raw 三角色。未提交状态续作后精确恢复原件完整指纹；已提交状态继续清理而保留安装库。raw 字节、指纹与已提交业务保持；暂存不消费源备份、不改活动库。随后正常 apply/stage 重试和第二次启动再次回读业务与完整指纹，pending 消费后不会复活。
+
+完整套件 `full-matrix-20261020-02` 为 **224 passed / 0 failed / 3 原有 ignored**（149.14 秒），65 项编译/include 输入前后相同。它沿用最终定向门禁实际新编译的同一测试 EXE，SHA-256 为 `01b8c14eb75b2f1fd1c8c74e7e3079f15bb07834db04a20c6e1b87e9c626f082`，另有独立产物与逐文件源码归档；没有声称 full 又编译了一次。严格 Clippy `clippy-matrix-20261020-02` 通过。原始证据保存于 `<private-evidence>/restore-process-interruption-20261020-01`，先前定向通过、Clippy 命名警告及修正后的复跑均保留，未降低警告等级。
+
+上述锁只串行遵守新协议的恢复操作；备份创建/轮换仍有其既有 AppState 锁和源文件保护，旧程序也不识别新接管记录，不能声称跨旧版并发或降级兼容已经验证。旧 `restore.rollback` 仍需保留并人工核对。上述 13 案是后端测试进程的强制终止；物理断电/磁盘耗尽、桌面进程重启、安装升级、规模与长期内存仍须独立验收。所有原始现场、邮箱、凭据及本机路径留在仓库外。

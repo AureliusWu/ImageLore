@@ -761,8 +761,12 @@ enum RestoreStep {
     Probed,
     #[cfg(test)]
     WriteChecked,
+    #[cfg(all(test, windows))]
+    Prepared,
     Reserved,
     Installed,
+    #[cfg(all(test, windows))]
+    Committed,
     #[cfg(all(test, windows))]
     Released,
 }
@@ -1599,6 +1603,11 @@ mod tests {
     #[cfg(windows)]
     mod pending_safety_tests {
         include!("backup/pending_safety_tests.rs");
+    }
+
+    #[cfg(windows)]
+    pub(super) mod restore_process_exit_tests {
+        include!("backup/restore_process_exit_tests.rs");
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -513,6 +513,8 @@ impl Attempt {
             .write_created(&prepared_bytes)
             .map_err(io)?;
         self.recorded = true;
+        #[cfg(test)]
+        hook(RestoreStep::Prepared)?;
         originals.check_missing_sidecars().map_err(io)?;
         for (original, label) in originals.files_mut().iter_mut().zip(LABELS) {
             if let Some(original) = original {
@@ -553,6 +555,8 @@ impl Attempt {
             WindowsExclusiveFile::create_new(&directory.path().join("COMMITTED")).map_err(io)?;
         commit.write_created(&commit_bytes).map_err(io)?;
         self.committed = Some(commit);
+        #[cfg(test)]
+        hook(RestoreStep::Committed)?;
         Ok(())
     }
 

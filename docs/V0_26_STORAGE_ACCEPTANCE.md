@@ -6,6 +6,8 @@
 
 后续 pending 暂存修复已完成本地 **221 passed / 0 failed / 3 原有 ignored**（116.88 秒），64 项编译输入及实际新编译测试产物分别绑定，严格 Clippy 通过。暂存复用同一所有权事务，新增持久操作锁与旧 previous 接管记录；覆盖外来 pending、释放后的真实新提交、消费后防重放及混合事务保全。完整证据和边界见 [pending 暂存安全](V0_26_PENDING_STAGE_SAFETY.md)。下列 193 项及“三个 RED 待处理”段落保留为先前基线，不能代替后续结果；真实进程中断与桌面等未验项目仍开放。
 
+后续补充真实 Windows 后端子进程强制终止：应用/暂存两种事务的 13 个持久与部分清理边界均通过，实际 DB/WAL/SHM 保留未 checkpoint 业务提交，父进程核对存活/占锁后强杀并验证续作、raw、重试和第二次启动。完整库测试 **224 passed / 0 failed / 3 原有 ignored**（149.14 秒），65 项输入前后相同，严格 Clippy 通过；[完整范围](V0_26_PENDING_STAGE_SAFETY.md)保留各源码身份，不能转记为物理断电、桌面或安装验收。
+
 Windows 恢复替换现已接入持续独占句柄、禁止覆盖的同句柄移动和持久身份记录。新协议使用 `restore.transaction`，不复用缺少对象身份的旧 `restore.rollback`。完整协议、旧格式处理和验证边界见[Windows 恢复事务](V0_26_RESTORE_TRANSACTION.md)；下文旧替换流程保留为历史记录，不能据此推断当前 Windows 的清理行为。
 
 隔离候选实际新编译的完整 library suite 为 **193 passed / 0 failed / 3 原有 ignored**（89.67 秒），61 项构建输入在检查前后保持一致，封存测试 EXE SHA256 为 `a03d2b50d1b6b5444fb720ee7ac2060ca8b05866c1280fde270bfaacc042b898`。当前源码的 locked/offline check、包含测试代码的严格 Clippy `--lib --tests -- -D warnings`、fmt 和 diff 检查通过。原始输出、源码绑定、失败现场及测试 EXE 均在仓库外 `<private-evidence>/restore-guarded-transaction-20261018-01`；最终记录为 `full-full-20261020-05`、`clippy-clippy-20261020-05`、`check-check-20261020-04`。

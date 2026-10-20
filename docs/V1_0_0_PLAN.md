@@ -22,6 +22,8 @@ Library、Metadata、Generation Explorer、Semantic Recall、Visual DNA、Image 
 
 ## 2. 接手基线的证据与缺口
 
+2026-10-20 后端进程中断补充：实际父进程强制终止 13 个子进程，覆盖 apply/stage 的 Prepared、预留、安装、Commit 与部分清理；完整回归 **224/0/3**、严格 Clippy 通过，65 项编译输入稳定。另已确认 `01b5697` 候选 Native **221/0/3**、Fast 与敏感门禁成功并正常快进 main。详见 [pending 暂存与进程终止记录](V0_26_PENDING_STAGE_SAFETY.md)。物理故障、桌面与性能等剩余退出标准继续保留。
+
 下表保留接手时的能力盘点；后续实现和验收进度以独立验收记录为准，不能把原始缺口当作当前仍未修复的清单。真实 CLIP 的三图集成及历史`2276de1`的5k/50k合成图库编码、warm检索、关闭重启持久核验已完成，见[模型验收](V0_26_MODEL_ACCEPTANCE.md)；自然召回、三次可比冷测及其他阶段A门槛保留。
 
 | 领域 | 当前已有能力与证据 | v1.0 前仍需补齐 |

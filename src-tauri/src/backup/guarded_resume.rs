@@ -21,6 +21,89 @@ const STAGED: &str = "staged";
 const LABELS: [&str; 3] = ["database", "wal", "shm"];
 const NAMES: [&str; 6] = [PREPARED, COMMITTED, STAGED, "database", "wal", "shm"];
 
+#[cfg(all(test, windows))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ResumeStep {
+    Original,
+    Pending,
+    Prepared,
+}
+
+#[cfg(all(test, windows))]
+struct ResumeHook {
+    directory: PathBuf,
+    step: ResumeStep,
+    action: Box<dyn FnOnce()>,
+}
+
+#[cfg(all(test, windows))]
+thread_local! {
+    static RESUME_HOOK: std::cell::RefCell<Option<ResumeHook>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+
+/// Restrict a one-shot interruption callback to one exact transaction directory.
+/// The parent exists at registration; the transaction itself may be created by
+/// `run`. Scope exit restores the previous registration, including on unwind.
+#[cfg(all(test, windows))]
+pub(super) fn with_resume_hook<T>(
+    directory: &Path,
+    step: ResumeStep,
+    action: impl FnOnce() + 'static,
+    run: impl FnOnce() -> T,
+) -> T {
+    struct ResetHook {
+        previous: Option<ResumeHook>,
+    }
+    impl Drop for ResetHook {
+        fn drop(&mut self) {
+            RESUME_HOOK.with(|current| current.replace(self.previous.take()));
+        }
+    }
+
+    assert!(
+        directory.is_absolute(),
+        "resume hook requires an absolute directory"
+    );
+    let directory = fs::canonicalize(directory.parent().expect("resume hook needs a parent"))
+        .expect("resume hook parent must exist")
+        .join(
+            directory
+                .file_name()
+                .expect("resume hook needs a directory basename"),
+        );
+    let previous = RESUME_HOOK.with(|current| {
+        current.replace(Some(ResumeHook {
+            directory,
+            step,
+            action: Box::new(action),
+        }))
+    });
+    let _reset = ResetHook { previous };
+    run()
+}
+
+#[cfg(all(test, windows))]
+fn resume_boundary(directory: &Path, step: ResumeStep) {
+    let action = RESUME_HOOK.with(|current| {
+        let mut current = current.borrow_mut();
+        if current
+            .as_ref()
+            .is_some_and(|hook| hook.directory == directory && hook.step == step)
+        {
+            current.take().map(|hook| hook.action)
+        } else {
+            None
+        }
+    });
+    // Remove the hook and release the RefCell borrow before calling external
+    // test code. Nested registration or unwind cannot repeat this callback.
+    if let Some(action) = action {
+        action();
+    }
+}
+
 fn io(error: std::io::Error) -> String {
     error.to_string()
 }
@@ -301,6 +384,8 @@ impl State {
         self.check_unheld_names()?;
         if let Some(record) = self.prepared.take() {
             record.delete()?;
+            #[cfg(test)]
+            resume_boundary(self.directory.path(), ResumeStep::Prepared);
         }
         self.check_unheld_names()?;
         let identity = self.directory.identity().map_err(io)?;
@@ -314,6 +399,8 @@ impl State {
             self.check_unheld_names()?;
             if let Some(original) = self.reserved[ordinal].take() {
                 original.delete()?;
+                #[cfg(test)]
+                resume_boundary(self.directory.path(), ResumeStep::Original);
             }
         }
         for ordinal in 0..3 {
@@ -324,11 +411,15 @@ impl State {
                 .and_then(|roles| roles[ordinal].take())
             {
                 pending.delete()?;
+                #[cfg(test)]
+                resume_boundary(self.directory.path(), ResumeStep::Pending);
             }
         }
         self.check_unheld_names()?;
         if let Some(record) = self.prepared.take() {
             record.delete()?;
+            #[cfg(test)]
+            resume_boundary(self.directory.path(), ResumeStep::Prepared);
         }
         self.check_unheld_names()?;
         // COMMITTED is self-contained and always removed last. A crash after
