@@ -1,6 +1,6 @@
 # Windows 恢复事务：对象所有权与中断续作
 
-日期：2026-10-20（Asia/Shanghai）。本文记录 v0.26.0 独立候选源码的 Windows 后端修复与本地验收。它没有发布新的桌面程序，也不代表 main、远程 CI、安装升级或真实桌面恢复验收已经完成。
+日期：2026-10-20（Asia/Shanghai）。本文记录 v0.26.0 源码提交 `7aacb97727ae91e876427d24bac0c2b49c7821be` 的 Windows 后端修复与验收。该提交已通过候选远端门禁并同步 main；没有发布新的桌面程序，也不代表安装升级或真实桌面恢复验收已经完成。
 
 本修复覆盖最终资料库替换与新协议事务续作。`finish_pending_stage`、`stage_restore_at` 的旧候选暂存入口尚未完成相同的所有权事务与并发修复；下文四个原始反例不覆盖这两个入口。恢复安全的 A1/A2 门槛继续开放。
 
@@ -74,6 +74,18 @@ B/C 的回归除检查实际 marker、额外资产和错误结果外，还收集
 三个 ignored 是原有忽略项，本轮没有启用它们，也没有把它们记为通过。独立子进程结果由父回归核验，不重复计入完整套件数量。首轮 full 的 **184 passed / 7 failed / 3 ignored** 和原始日志继续保留；它们暴露的真实目录 `LIST_DIRECTORY` 共享冲突，以及重命名缓冲区问题，随后分别修正。重命名信息现在显式写入 UTF-16 NUL，并用独立回归覆盖 8 种目标长度对齐情况，没有通过忽略失败测试或放宽丢失断言得到本轮通过结果。
 
 本地 Cargo 编译与测试均使用 `--offline --locked --jobs 1`，只验证后端与库测试，没有启动 GUI、构建或推广应用 EXE/安装包，没有发布版本。
+
+## 同一源码提交的远端验证
+
+提交 `7aacb97` 的[Native CI](https://github.com/AureliusWu/ImageLore/actions/runs/39386940463)已完成，原始 job 日志实际为 **193 passed / 0 failed / 3 ignored**（496.45 秒），format、check、Clippy 与测试步骤均成功。[快速 CI](https://github.com/AureliusWu/ImageLore/actions/runs/39386940101)和[敏感信息门禁](https://github.com/AureliusWu/ImageLore/actions/runs/39386881359)均成功；快速 CI 的默认和 Legacy 两个真实 ACL 拒绝/严格恢复用例、项目检查及前端构建实际通过。
+
+源码以正常 fast-forward 同步 main，推送前 1275 项文件/历史对象检查及默认 Gitleaks 通过。未创建或合并 PR，未更改保护规则。Native 与快速 CI 的原始日志分别保存为私有目录中的 `ci-candidate-7aacb97-native.log` 和 `ci-candidate-7aacb97-fast.log`；当前桌面 EXE 与快捷方式仍绑定此前已验收的 0.26.0 产物。
+
+## pending-stage 新反例仍待修复
+
+在以 `7aacb97` 为基线的新隔离工作区，只为旧暂存入口增加 test-only 边界回调和三个真实 SQLite 保全回归。各回归先执行独立正常控制，普通连续换点和旧 previous 恢复成功；随后分别在缺失 pending 检查后放入新 pending、预留旧 pending 后放入外来 pending、清理 previous 前在同 File ID 上真实提交新编辑。旧路径实际覆盖前两份新候选，并删除第三份新提交，结果为 **0 passed / 3 failed**（3.34 秒，实际退出码 101）。
+
+失败现场、源码与测试 EXE 已封存在仓库外 `<private-evidence>/pending-stage-safety-20261020-01`：源码 SHA256 `a74011481112d2e43f5dba92acfe3c43b3ba5c5a705a340ddc22f1fd40cbb581`，测试 EXE SHA256 `7b23a847bfd8bf2d807217b7d32e9b4f663db9f7ccd62dbab6c5b8ff1888d2ac`。这些新增 RED 不属于上面 193 项已经通过的套件，不能用后者覆盖新发现的缺口；暂存入口实现、接管记录防重复回放及新的 GREEN 仍待完成。
 
 ## API 依据与证据范围
 

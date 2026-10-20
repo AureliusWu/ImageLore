@@ -16,6 +16,8 @@ Windows 恢复替换现已接入持续独占句柄、禁止覆盖的同句柄移
 
 这仍不关闭 A1/A2：旧 `finish_pending_stage` / `stage_restore_at` 的 pending/previous 入口还需要独立并发所有权保护；旧 `restore.rollback` 无身份记录时保留现场并要求人工核对。进程真实中断、物理断电、50k/75k 性能、桌面恢复、安装器及 updater 继续各自验收。没有构建或推广应用 EXE，也没有更改当前桌面快捷方式或默认用户资料库。
 
+源码提交 `7aacb97` 的[远端 Native](https://github.com/AureliusWu/ImageLore/actions/runs/39386940463)实际 **193 passed / 0 failed / 3 ignored**（496.45 秒）；[快速 CI](https://github.com/AureliusWu/ImageLore/actions/runs/39386940101)及[敏感信息门禁](https://github.com/AureliusWu/ImageLore/actions/runs/39386881359)均成功，随后正常 fast-forward 同步 main。另一个隔离工作区已取得 pending-stage 三个实际丢失 RED（0/3，3.34 秒），分别证明旧 previous 复原和新候选安装可覆盖外来 pending，旧清理可删除同 File ID 新提交；[完整边界记录](V0_26_RESTORE_TRANSACTION.md)保留失败身份，继续阻止阶段 A 退出。
+
 ## 2026-10-18 离线补充验证
 
 用户暂缓桌面验收期间，完成最新恢复候选临时不可用的文件库回归与修复。生产源码提交为 `525258bbbc71c1e2da382f034009a7d003aeec67`，`backup.rs` SHA256 为 `3cc0fc9460314565802d10a62ebdb5d9a639ec3ff25adc4273c6bb061a6e8dcc`。原始日志、RED/GREEN 源码、测试产物及终态回执保留在仓库外 `<private-evidence>/recovery-offline-20261018-01`。
