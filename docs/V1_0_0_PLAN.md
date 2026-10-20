@@ -12,6 +12,8 @@
 
 ## 1. 版本目标与范围
 
+2026-10-20 离线跟进：Windows pending 暂存已复用对象身份事务，并新增持久操作锁、previous 接管记录和同次操作防重放；本地完整回归 **221 passed / 0 failed / 3 原有 ignored**（116.88 秒），64 项编译输入前后相同，严格 Clippy 通过。详见 [pending 暂存安全](V0_26_PENDING_STAGE_SAFETY.md)。先前主分支恢复事务的 Native 复跑也实际完成 193/0/3；这两个源码身份的证据分别保留。阶段 A 仍待真实进程中断矩阵、规模与桌面等剩余门槛；应用与已验收桌面产物继续保持 0.26.0。
+
 v1.0.0 的目标是让已有的本地图片生成记忆库能够长期、安全、可维护地使用。沿用 ROADMAP 的 Stable Local Library 定位，以稳定性验收、可恢复性和可信 Windows 分发为主线。
 
 Library、Metadata、Generation Explorer、Semantic Recall、Visual DNA、Image to Prompt、Remix、Reference、Sidecar 和 Lineage 已有实现。本次规划不把这些能力重复列为待开发功能，也不重建测试框架、重写大模块或整体替换界面。保留简体中文与现有 Frutiger Aero 设计，优先改善错误提示、等待反馈和真实工作流的连续性。

@@ -13,6 +13,10 @@ mod guarded_restore;
 #[cfg(windows)]
 mod guarded_resume;
 #[cfg(windows)]
+mod legacy_pending;
+#[cfg(windows)]
+mod operation_lock;
+#[cfg(windows)]
 mod owned_handle;
 #[cfg(windows)]
 mod restore_journal;
@@ -23,6 +27,22 @@ const AUTO_INTERVAL: i64 = 24 * 3600;
 // avoids repeatedly reading them; it is released when the probe closes and
 // does not alter the live library's cache or any persistent database setting.
 const VALIDATION_CACHE_KIB: i64 = 32 * 1024;
+
+#[cfg(windows)]
+struct RestoreOperation {
+    _guard: operation_lock::OperationGuard,
+    adopted: std::cell::Cell<bool>,
+}
+
+#[cfg(windows)]
+impl RestoreOperation {
+    fn acquire(data_dir: &Path) -> Result<Self, String> {
+        Ok(Self {
+            _guard: operation_lock::acquire(data_dir)?,
+            adopted: std::cell::Cell::new(false),
+        })
+    }
+}
 
 // Test-only timing around the unchanged expression: no closure, duplicate
 // evaluation, altered ?/return behavior, or production logging/clock access.
@@ -638,6 +658,7 @@ fn rotate(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(any(not(windows), test))]
 fn vacuum_snapshot(source: &Path, target: &Path) -> Result<(), String> {
     #[cfg(test)]
     let _snapshot = tests::phase_profile::enter("snapshot.total", Some(source));
@@ -650,6 +671,7 @@ fn vacuum_snapshot(source: &Path, target: &Path) -> Result<(), String> {
     vacuum_snapshot_in_place(source, target)
 }
 
+#[cfg(any(not(windows), test))]
 fn vacuum_snapshot_in_place(source: &Path, target: &Path) -> Result<(), String> {
     let conn = Connection::open_with_flags(source, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|e| e.to_string())?;
@@ -788,7 +810,61 @@ fn rollback_dir(database: &Path) -> Result<PathBuf, String> {
 }
 
 #[cfg(windows)]
+fn recovery_path_present(path: &Path) -> Result<bool, String> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.raw_os_error() == Some(2) => Ok(false),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+// Inspect both namespaces before allowing either transaction to mutate files.
+// Old previous files must already have an adoption proof before active resume
+// can consume pending; otherwise a subsequent legacy promotion would replay it.
+#[cfg(windows)]
+fn recovery_preflight(data_dir: &Path, operation: &RestoreOperation) -> Result<(), String> {
+    use restore_journal::TargetKind;
+    let active =
+        recovery_path_present(&data_dir.join(TargetKind::ActiveLibrary.transaction_name()))?;
+    let pending =
+        recovery_path_present(&data_dir.join(TargetKind::PendingCandidate.transaction_name()))?;
+    if active && pending {
+        return Err("发现两个恢复事务同时占用，已保留全部文件，需要核对后处理".into());
+    }
+    let marker_present =
+        recovery_path_present(&data_dir.join("restore.pending.legacy-adopted.json"))?;
+    let adopted = legacy_pending::verify_adopted(data_dir)?;
+    if !adopted && (marker_present || operation.adopted.get()) {
+        return Err("本次恢复已观察的旧候选接管记录消失，已停止，禁止重新提升 previous".into());
+    }
+    if adopted {
+        operation.adopted.set(true);
+    }
+    if active {
+        let mut previous = false;
+        for role in companions(&data_dir.join("restore.pending.previous.sqlite3")) {
+            previous |= recovery_path_present(&role)?;
+        }
+        if previous && !adopted {
+            return Err("活动恢复事务与未标注旧候选并存，已保留全部文件以防重复恢复".into());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(all(windows, test))]
 fn finish_or_rollback(database: &Path, data_dir: &Path) -> Result<(), String> {
+    let guard = RestoreOperation::acquire(data_dir)?;
+    finish_or_rollback_locked(database, data_dir, &guard)
+}
+
+#[cfg(windows)]
+fn finish_or_rollback_locked(
+    database: &Path,
+    data_dir: &Path,
+    _guard: &RestoreOperation,
+) -> Result<(), String> {
+    recovery_preflight(data_dir, _guard)?;
     guarded_resume::finish(database, data_dir)?;
     let legacy = rollback_dir(database)?;
     if legacy.try_exists().map_err(|e| e.to_string())? {
@@ -1080,7 +1156,7 @@ fn check_restore_write_access(database: &Path, allow_corrupt: bool) -> Result<bo
     result
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, test))]
 fn replace_library(
     database: &Path,
     data_dir: &Path,
@@ -1090,14 +1166,42 @@ fn replace_library(
     is_pending: bool,
     hook: impl Fn(RestoreStep) -> Result<(), String>,
 ) -> Result<(), String> {
-    finish_or_rollback(database, data_dir)?;
+    let guard = RestoreOperation::acquire(data_dir)?;
+    replace_library_locked(
+        database,
+        data_dir,
+        source,
+        preserve_dir,
+        prefix,
+        (is_pending, hook),
+        &guard,
+    )
+}
+
+#[cfg(windows)]
+fn replace_library_locked(
+    database: &Path,
+    data_dir: &Path,
+    source: &Path,
+    preserve_dir: &Path,
+    prefix: &str,
+    operation: (bool, impl Fn(RestoreStep) -> Result<(), String>),
+    guard: &RestoreOperation,
+) -> Result<(), String> {
+    let (is_pending, hook) = operation;
+    finish_or_rollback_locked(database, data_dir, guard)?;
+    finish_pending_stage_locked(data_dir, guard)?;
     guarded_restore::replace(
         database,
         data_dir,
         source,
         preserve_dir,
         prefix,
-        is_pending,
+        if is_pending {
+            guarded_restore::RestorePurpose::ApplyPending
+        } else {
+            guarded_restore::RestorePurpose::RecoverCorrupt
+        },
         hook,
     )
 }
@@ -1196,12 +1300,33 @@ pub fn apply_pending_restore(
 ) -> Result<(), String> {
     #[cfg(test)]
     let _apply = tests::phase_profile::enter("restore.apply_pending_total", None);
-    finish_or_rollback(database_path, data_dir)?;
-    finish_pending_stage(data_dir)?;
+    #[cfg(windows)]
+    let guard = RestoreOperation::acquire(data_dir)?;
+    #[cfg(windows)]
+    {
+        finish_or_rollback_locked(database_path, data_dir, &guard)?;
+        finish_pending_stage_locked(data_dir, &guard)?;
+    }
+    #[cfg(not(windows))]
+    {
+        finish_or_rollback(database_path, data_dir)?;
+        finish_pending_stage(data_dir)?;
+    }
     let pending = data_dir.join("restore.pending.sqlite3");
     if !pending.exists() {
         return Ok(());
     }
+    #[cfg(windows)]
+    replace_library_locked(
+        database_path,
+        data_dir,
+        &pending,
+        backups_dir,
+        "pre-restore",
+        (true, |_| Ok(())),
+        &guard,
+    )?;
+    #[cfg(not(windows))]
     replace_library(
         database_path,
         data_dir,
@@ -1214,6 +1339,54 @@ pub fn apply_pending_restore(
     rotate(backups_dir)
 }
 
+#[cfg(all(windows, test))]
+fn finish_pending_stage(data_dir: &Path) -> Result<(), String> {
+    let guard = RestoreOperation::acquire(data_dir)?;
+    finish_pending_stage_locked(data_dir, &guard)
+}
+
+#[cfg(windows)]
+fn finish_pending_stage_locked(data_dir: &Path, _guard: &RestoreOperation) -> Result<(), String> {
+    recovery_preflight(data_dir, _guard)?;
+    let pending = data_dir.join("restore.pending.sqlite3");
+    guarded_resume::finish_target(
+        &pending,
+        data_dir,
+        restore_journal::TargetKind::PendingCandidate,
+    )?;
+    if _guard.adopted.get() {
+        if !legacy_pending::verify_adopted(data_dir)? {
+            return Err("本次恢复的旧候选接管记录消失，禁止重新提升 previous".into());
+        }
+        return Ok(());
+    }
+    let adopted = legacy_pending::finish(
+        data_dir,
+        |expected_source| {
+            guarded_restore::replace(
+                &pending,
+                data_dir,
+                &data_dir.join("restore.pending.previous.sqlite3"),
+                &data_dir.join("recovery/pending-stage"),
+                "legacy-pending",
+                guarded_restore::RestorePurpose::LegacyPromote {
+                    expected_source: Box::new(expected_source.clone()),
+                },
+                |_| Ok(()),
+            )
+        },
+        || {
+            #[cfg(test)]
+            tests::pending_stage_boundary(data_dir, tests::PendingStageStep::MissingPendingChecked);
+        },
+    )?;
+    if adopted {
+        _guard.adopted.set(true);
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
 fn finish_pending_stage(data_dir: &Path) -> Result<(), String> {
     let pending = data_dir.join("restore.pending.sqlite3");
     let previous = data_dir.join("restore.pending.previous.sqlite3");
@@ -1221,6 +1394,8 @@ fn finish_pending_stage(data_dir: &Path) -> Result<(), String> {
         return Ok(());
     }
     if !pending.exists() {
+        #[cfg(test)]
+        tests::pending_stage_boundary(data_dir, tests::PendingStageStep::MissingPendingChecked);
         return fs::rename(previous, pending).map_err(|e| e.to_string());
     }
     validate(&pending)?;
@@ -1233,6 +1408,14 @@ pub fn recover_latest_valid_backup(
     backups_dir: &Path,
     reason: &str,
 ) -> Result<Option<BackupRecord>, String> {
+    #[cfg(windows)]
+    let guard = RestoreOperation::acquire(data_dir)?;
+    #[cfg(windows)]
+    {
+        finish_or_rollback_locked(database_path, data_dir, &guard)?;
+        finish_pending_stage_locked(data_dir, &guard)?;
+    }
+    #[cfg(not(windows))]
     finish_or_rollback(database_path, data_dir)?;
     let mut selected = None;
     for item in records(backups_dir)? {
@@ -1254,6 +1437,17 @@ pub fn recover_latest_valid_backup(
         return Ok(None);
     };
     let recovery_dir = data_dir.join("recovery");
+    #[cfg(windows)]
+    replace_library_locked(
+        database_path,
+        data_dir,
+        Path::new(&selected.path),
+        &recovery_dir,
+        "startup-corrupt",
+        (false, |_| Ok(())),
+        &guard,
+    )?;
+    #[cfg(not(windows))]
     replace_library(
         database_path,
         data_dir,
@@ -1311,6 +1505,52 @@ pub async fn stage_restore(app: tauri::AppHandle, name: String) -> Result<bool, 
     .map_err(|e| e.to_string())?
 }
 
+#[cfg(windows)]
+fn stage_restore_at(state: &AppState, name: &str) -> Result<bool, String> {
+    let _operation = storage_phase!("stage.mutex_wait", None, state.backup_operation.lock())
+        .map_err(|e| e.to_string())?;
+    let guard = RestoreOperation::acquire(&state.data_dir)?;
+    finish_or_rollback_locked(&state.database_path, &state.data_dir, &guard)?;
+    finish_pending_stage_locked(&state.data_dir, &guard)?;
+    let file = PathBuf::from(name);
+    let base = file
+        .file_name()
+        .and_then(|x| x.to_str())
+        .ok_or("无效备份名称")?;
+    let source = state.backups_dir.join(base);
+    guarded_restore::replace(
+        &state.data_dir.join("restore.pending.sqlite3"),
+        &state.data_dir,
+        &source,
+        &state.data_dir.join("recovery/pending-stage"),
+        "pending-stage",
+        guarded_restore::RestorePurpose::StagePending,
+        |step| {
+            #[cfg(test)]
+            match step {
+                RestoreStep::Reserved => tests::pending_stage_boundary(
+                    &state.data_dir,
+                    tests::PendingStageStep::PreviousReserved,
+                ),
+                RestoreStep::Installed => tests::pending_stage_boundary(
+                    &state.data_dir,
+                    tests::PendingStageStep::PendingInstalled,
+                ),
+                RestoreStep::Released => tests::pending_stage_boundary(
+                    &state.data_dir,
+                    tests::PendingStageStep::Released,
+                ),
+                _ => (),
+            }
+            #[cfg(not(test))]
+            let _ = step;
+            Ok(())
+        },
+    )?;
+    Ok(true)
+}
+
+#[cfg(not(windows))]
 fn stage_restore_at(state: &AppState, name: &str) -> Result<bool, String> {
     // Protect candidates and pending files from creation/rotation. Staging
     // reads a backup, so it does not need the active library connection.
@@ -1334,6 +1574,8 @@ fn stage_restore_at(state: &AppState, name: &str) -> Result<bool, String> {
     let previous = state.data_dir.join("restore.pending.previous.sqlite3");
     if pending.exists() {
         fs::rename(&pending, &previous).map_err(|e| e.to_string())?;
+        #[cfg(test)]
+        tests::pending_stage_boundary(&state.data_dir, tests::PendingStageStep::PreviousReserved);
     }
     if let Err(error) = storage_phase!("stage.install_pending", None, fs::rename(&temp, &pending)) {
         if previous.exists() {
@@ -1342,6 +1584,8 @@ fn stage_restore_at(state: &AppState, name: &str) -> Result<bool, String> {
         }
         return Err(error.to_string());
     }
+    #[cfg(test)]
+    tests::pending_stage_boundary(&state.data_dir, tests::PendingStageStep::PendingInstalled);
     if previous.exists() {
         let _ = fs::remove_file(previous);
     }
@@ -1351,6 +1595,145 @@ fn stage_restore_at(state: &AppState, name: &str) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    mod pending_safety_tests {
+        include!("backup/pending_safety_tests.rs");
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(super) enum PendingStageStep {
+        MissingPendingChecked,
+        PreviousReserved,
+        PendingInstalled,
+        Released,
+    }
+
+    struct PendingStageHook {
+        directory: PathBuf,
+        step: PendingStageStep,
+        action: Box<dyn FnOnce()>,
+    }
+
+    thread_local! {
+        static PENDING_STAGE_HOOK: std::cell::RefCell<Option<PendingStageHook>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    // Hooks exist only in test builds, on the arming thread and exact data
+    // directory. Take before calling so a recursive boundary cannot fire twice.
+    pub(super) fn pending_stage_boundary(directory: &Path, step: PendingStageStep) {
+        let hook = PENDING_STAGE_HOOK.with(|slot| {
+            let mut current = slot.borrow_mut();
+            if current
+                .as_ref()
+                .is_some_and(|hook| hook.directory == directory && hook.step == step)
+            {
+                current.take()
+            } else {
+                None
+            }
+        });
+        if let Some(hook) = hook {
+            (hook.action)();
+        }
+    }
+
+    #[cfg(windows)]
+    fn with_pending_stage_hook<T>(
+        directory: &Path,
+        step: PendingStageStep,
+        hook: impl FnOnce() + 'static,
+        action: impl FnOnce() -> T,
+    ) -> T {
+        struct ResetHook;
+        impl Drop for ResetHook {
+            fn drop(&mut self) {
+                drop(PENDING_STAGE_HOOK.with(|slot| slot.borrow_mut().take()));
+            }
+        }
+        PENDING_STAGE_HOOK.with(|slot| {
+            let mut current = slot.borrow_mut();
+            assert!(
+                current.is_none(),
+                "A pending-stage hook is already installed"
+            );
+            *current = Some(PendingStageHook {
+                directory: directory.to_path_buf(),
+                step,
+                action: Box::new(hook),
+            });
+        });
+        let _reset = ResetHook;
+        action()
+    }
+
+    #[cfg(windows)]
+    #[derive(Debug)]
+    struct PendingStageSnapshot {
+        bytes: Vec<u8>,
+        modified: SystemTime,
+        fingerprint: super::owned_handle::FileFingerprint,
+    }
+
+    #[cfg(windows)]
+    fn pending_stage_snapshot(path: &Path) -> PendingStageSnapshot {
+        PendingStageSnapshot {
+            bytes: fs::read(path).unwrap(),
+            modified: fs::metadata(path).unwrap().modified().unwrap(),
+            fingerprint: super::owned_handle::WindowsExclusiveFile::lock_existing(path)
+                .unwrap()
+                .fingerprint()
+                .unwrap(),
+        }
+    }
+
+    #[cfg(windows)]
+    fn assert_pending_stage_snapshot(path: &Path, expected: &PendingStageSnapshot) {
+        let actual = pending_stage_snapshot(path);
+        assert_eq!(
+            actual.bytes,
+            expected.bytes,
+            "Candidate bytes changed: {}",
+            path.display()
+        );
+        assert_eq!(
+            actual.modified,
+            expected.modified,
+            "Candidate mtime changed: {}",
+            path.display()
+        );
+        assert_eq!(
+            actual.fingerprint,
+            expected.fingerprint,
+            "Candidate identity/content changed: {}",
+            path.display()
+        );
+    }
+
+    #[cfg(windows)]
+    fn pending_stage_marker(path: &Path) -> Option<String> {
+        // No CREATE: a missing/deleted candidate must remain observable as None.
+        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+        conn.query_row("SELECT value FROM marker", [], |row| row.get(0))
+            .ok()
+    }
+
+    #[cfg(windows)]
+    fn pending_stage_extra_asset(path: &Path) -> Option<String> {
+        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+        conn.query_row("SELECT name FROM assets WHERE id=2", [], |row| row.get(0))
+            .ok()
+    }
+
+    #[cfg(windows)]
+    fn pending_stage_insert_extra_asset(conn: &Connection, name: &str) {
+        conn.execute(
+            "INSERT INTO assets(id,path,name,portable_id,created_at,updated_at) VALUES(2,'synthetic/pending-stage-extra.png',?1,'pending-stage-extra-id',2,2)",
+            [name],
+        )
+        .unwrap();
+    }
 
     struct SchemaMarkerHook {
         path: PathBuf,
@@ -2596,6 +2979,12 @@ mod tests {
             let ordered = records(&backups).unwrap();
             assert_eq!(ordered.len(), count);
             assert_eq!(std::ffi::OsStr::new(&ordered[0].name), expected_newest);
+            #[cfg(windows)]
+            if matches!(operation, DiscoveryOperation::Recovery) {
+                // The persistent operation file belongs to the protocol, and
+                // must be in the before snapshot for exact no-change checks.
+                drop(operation_lock::acquire(&root).unwrap());
+            }
             let originals = [&database, &sentinel]
                 .into_iter()
                 .chain(candidates.iter().map(|(path, _)| path))
@@ -4094,8 +4483,415 @@ mod tests {
         drop(seed(&previous, "previous-candidate"));
         finish_pending_stage(&root).unwrap();
         assert_eq!(read_marker(&pending), "previous-candidate");
+        #[cfg(windows)]
+        {
+            assert_eq!(read_marker(&previous), "previous-candidate");
+            assert!(root.join("restore.pending.legacy-adopted.json").is_file());
+        }
+        #[cfg(not(windows))]
         assert!(!previous.exists());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    fn pending_stage_normal_replacement_control(label: &str) {
+        let root = test_root(label);
+        let state = test_state(&root);
+        let first = state.backups_dir.join("first.sqlite3");
+        let second = state.backups_dir.join("second.sqlite3");
+        drop(seed(&first, "normal-first-choice"));
+        drop(seed(&second, "normal-second-choice"));
+        let first_source = pending_stage_snapshot(&first);
+        let second_source = pending_stage_snapshot(&second);
+        let pending = root.join("restore.pending.sqlite3");
+
+        assert!(stage_restore_at(&state, "first.sqlite3").unwrap());
+        assert_eq!(read_marker(&pending), "normal-first-choice");
+        assert!(stage_restore_at(&state, "second.sqlite3").unwrap());
+        assert_eq!(read_marker(&pending), "normal-second-choice");
+        validate_typed(&pending).unwrap();
+        assert_pending_stage_snapshot(&first, &first_source);
+        assert_pending_stage_snapshot(&second, &second_source);
+        assert_eq!(read_marker(&state.database_path), "current");
+        // Previous may be retained by a later preservation-compatible protocol.
+        // The business result, readable pending, and untouched sources matter.
+        drop(state);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn pending_stage_conflict_legacy_previous_does_not_replace_new_pending() {
+        // Independent ordinary legacy recovery must succeed before injection.
+        let control = test_root("pending-stage-legacy-control");
+        let previous = control.join("restore.pending.previous.sqlite3");
+        let pending = control.join("restore.pending.sqlite3");
+        drop(seed(&previous, "normal-legacy-previous"));
+        let original = pending_stage_snapshot(&previous);
+        finish_pending_stage(&control).unwrap();
+        assert_eq!(read_marker(&pending), "normal-legacy-previous");
+        validate_typed(&pending).unwrap();
+        assert_pending_stage_snapshot(&previous, &original);
+        assert!(control
+            .join("restore.pending.legacy-adopted.json")
+            .is_file());
+        fs::remove_dir_all(control).unwrap();
+
+        let root = test_root("pending-stage-legacy-conflict");
+        let previous = root.join("restore.pending.previous.sqlite3");
+        let pending = root.join("restore.pending.sqlite3");
+        drop(seed(&previous, "legacy-original-choice"));
+        let previous_before = pending_stage_snapshot(&previous);
+        let injected = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let captured = std::rc::Rc::clone(&injected);
+        let injected_pending = pending.clone();
+        let result = with_pending_stage_hook(
+            &root,
+            PendingStageStep::MissingPendingChecked,
+            move || {
+                assert!(!injected_pending.exists());
+                let conn = seed(&injected_pending, "foreign-after-legacy-check");
+                conn.execute_batch("BEGIN IMMEDIATE;").unwrap();
+                pending_stage_insert_extra_asset(&conn, "legacy-race-committed-asset");
+                conn.execute_batch("COMMIT;").unwrap();
+                drop(conn);
+                validate_typed(&injected_pending).unwrap();
+                *captured.borrow_mut() = Some(pending_stage_snapshot(&injected_pending));
+            },
+            || finish_pending_stage(&root),
+        );
+        let foreign = injected
+            .borrow_mut()
+            .take()
+            .expect("Legacy boundary hook must run once");
+        println!(
+            "pending-stage legacy conflict: result={result:?}, pending_marker={:?}, previous_marker={:?}, fixture={}",
+            pending_stage_marker(&pending), pending_stage_marker(&previous), root.display()
+        );
+        // Report loss of the real new business value before return-status checks.
+        assert_eq!(pending_stage_marker(&pending).as_deref(), Some("foreign-after-legacy-check"), "Legacy recovery overwrote an independently committed pending library; result={result:?}");
+        assert_eq!(
+            pending_stage_extra_asset(&pending).as_deref(),
+            Some("legacy-race-committed-asset")
+        );
+        assert_pending_stage_snapshot(&pending, &foreign);
+        assert_eq!(
+            pending_stage_marker(&previous).as_deref(),
+            Some("legacy-original-choice")
+        );
+        assert_pending_stage_snapshot(&previous, &previous_before);
+        assert!(
+            result.is_err(),
+            "The occupied pending name must report a conflict"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn pending_stage_conflict_install_does_not_replace_foreign_pending() {
+        pending_stage_normal_replacement_control("pending-stage-install-control");
+
+        let root = test_root("pending-stage-install-conflict");
+        let state = test_state(&root);
+        let pending = root.join("restore.pending.sqlite3");
+        let previous = root.join("restore.pending.transaction/database");
+        let source = state.backups_dir.join("selected.sqlite3");
+        drop(seed(&pending, "old-pending-choice"));
+        drop(seed(&source, "selected-new-choice"));
+        let old_pending = pending_stage_snapshot(&pending);
+        let source_before = pending_stage_snapshot(&source);
+        let injected = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let captured = std::rc::Rc::clone(&injected);
+        let injected_pending = pending.clone();
+        let injected_previous = previous.clone();
+        let result = with_pending_stage_hook(
+            &root,
+            PendingStageStep::PreviousReserved,
+            move || {
+                assert!(!injected_pending.exists());
+                // The reserved original stays held; inspect it after return.
+                assert!(injected_previous.is_file());
+                let conn = seed(&injected_pending, "foreign-before-pending-install");
+                conn.execute_batch("BEGIN IMMEDIATE;").unwrap();
+                pending_stage_insert_extra_asset(&conn, "pending-install-committed-asset");
+                conn.execute_batch("COMMIT;").unwrap();
+                drop(conn);
+                validate_typed(&injected_pending).unwrap();
+                *captured.borrow_mut() = Some(pending_stage_snapshot(&injected_pending));
+            },
+            || stage_restore_at(&state, "selected.sqlite3"),
+        );
+        let foreign = injected
+            .borrow_mut()
+            .take()
+            .expect("Reservation boundary hook must run once");
+        println!(
+            "pending-stage install conflict: result={result:?}, pending_marker={:?}, previous_marker={:?}, fixture={}",
+            pending_stage_marker(&pending), pending_stage_marker(&previous), root.display()
+        );
+        assert_eq!(pending_stage_marker(&pending).as_deref(), Some("foreign-before-pending-install"), "Installing the new choice overwrote an independently committed pending library; result={result:?}");
+        assert_eq!(
+            pending_stage_extra_asset(&pending).as_deref(),
+            Some("pending-install-committed-asset")
+        );
+        assert_pending_stage_snapshot(&pending, &foreign);
+        assert_eq!(
+            pending_stage_marker(&previous).as_deref(),
+            Some("old-pending-choice")
+        );
+        assert_pending_stage_snapshot(&previous, &old_pending);
+        assert_eq!(read_marker(&source), "selected-new-choice");
+        assert_pending_stage_snapshot(&source, &source_before);
+        assert_eq!(read_marker(&state.database_path), "current");
+        assert!(
+            result.is_err(),
+            "The external pending object must stop installation"
+        );
+        drop(state);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn pending_stage_conflict_cleanup_keeps_new_commit_in_previous() {
+        pending_stage_normal_replacement_control("pending-stage-cleanup-control");
+
+        let root = test_root("pending-stage-cleanup-conflict");
+        let state = test_state(&root);
+        let pending = root.join("restore.pending.sqlite3");
+        let previous = root.join("restore.pending.transaction/database");
+        let source = state.backups_dir.join("selected.sqlite3");
+        drop(seed(&pending, "previous-before-new-commit"));
+        drop(seed(&source, "selected-before-cleanup"));
+        let original = pending_stage_snapshot(&pending);
+        let source_before = pending_stage_snapshot(&source);
+        let injected = std::rc::Rc::new(std::cell::Cell::new(false));
+        let captured = std::rc::Rc::clone(&injected);
+        let injected_previous = previous.clone();
+        let result = with_pending_stage_hook(
+            &root,
+            PendingStageStep::PendingInstalled,
+            move || {
+                // This exact write succeeded in the frozen RED. The reserved
+                // original is now held through cleanup, so SQLite must fail
+                // before it can begin or commit a transaction.
+                let opened = Connection::open_with_flags(
+                    &injected_previous,
+                    OpenFlags::SQLITE_OPEN_READ_WRITE,
+                );
+                assert!(opened.is_err(), "reserved original unexpectedly writable");
+                captured.set(true);
+            },
+            || stage_restore_at(&state, "selected.sqlite3"),
+        );
+        assert!(
+            injected.get(),
+            "Installed boundary hook must attempt the write"
+        );
+        assert!(result.unwrap());
+        assert_eq!(
+            pending_stage_marker(&pending).as_deref(),
+            Some("selected-before-cleanup")
+        );
+        let raw = fs::read_dir(root.join("recovery/pending-stage"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        assert!(
+            raw.iter()
+                .any(|path| fs::read(path).unwrap() == original.bytes),
+            "the original bytes must remain in raw preservation"
+        );
+        assert!(!previous.exists());
+        assert_eq!(read_marker(&source), "selected-before-cleanup");
+        assert_pending_stage_snapshot(&source, &source_before);
+        assert_eq!(read_marker(&state.database_path), "current");
+        drop(state);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn pending_stage_each_failure_rolls_back_exact_original_and_can_retry() {
+        for failpoint in [
+            RestoreStep::StageAllocated,
+            RestoreStep::Staged,
+            RestoreStep::Preserved,
+            RestoreStep::Probed,
+            RestoreStep::Reserved,
+            RestoreStep::Installed,
+        ] {
+            let root = test_root("pending-stage-phase-failure");
+            let state = test_state(&root);
+            let pending = root.join("restore.pending.sqlite3");
+            let source = state.backups_dir.join("choice.sqlite3");
+            drop(seed(&pending, "old-choice"));
+            drop(seed(&source, "new-choice"));
+            let old = pending_stage_snapshot(&pending);
+            let source_before = pending_stage_snapshot(&source);
+            let active_before = fs::read(&state.database_path).unwrap();
+            let active_modified = fs::metadata(&state.database_path)
+                .unwrap()
+                .modified()
+                .unwrap();
+            let guard = operation_lock::acquire(&root).unwrap();
+            let result = guarded_restore::replace(
+                &pending,
+                &root,
+                &source,
+                &root.join("recovery/pending-stage"),
+                "phase-fault",
+                guarded_restore::RestorePurpose::StagePending,
+                |step| {
+                    if step == failpoint {
+                        Err(format!("injected {step:?}"))
+                    } else {
+                        Ok(())
+                    }
+                },
+            );
+            assert!(result.is_err(), "{failpoint:?}: {result:?}");
+            assert_eq!(read_marker(&pending), "old-choice");
+            assert_pending_stage_snapshot(&pending, &old);
+            assert_pending_stage_snapshot(&source, &source_before);
+            assert_eq!(fs::read(&state.database_path).unwrap(), active_before);
+            assert_eq!(
+                fs::metadata(&state.database_path)
+                    .unwrap()
+                    .modified()
+                    .unwrap(),
+                active_modified
+            );
+            assert!(!root.join("restore.pending.transaction").exists());
+            drop(guard);
+            assert!(stage_restore_at(&state, "choice.sqlite3").unwrap());
+            assert_eq!(read_marker(&pending), "new-choice");
+            assert_pending_stage_snapshot(&source, &source_before);
+            assert_eq!(fs::read(&state.database_path).unwrap(), active_before);
+            assert_eq!(
+                fs::metadata(&state.database_path)
+                    .unwrap()
+                    .modified()
+                    .unwrap(),
+                active_modified
+            );
+            drop(state);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn pending_stage_busy_operation_preserves_all_choices_before_any_resume() {
+        let root = test_root("pending-stage-operation-busy");
+        let state = test_state(&root);
+        let pending = root.join("restore.pending.sqlite3");
+        let previous = root.join("restore.pending.previous.sqlite3");
+        let source = state.backups_dir.join("choice.sqlite3");
+        drop(seed(&pending, "pending-choice"));
+        drop(seed(&previous, "legacy-choice"));
+        drop(seed(&source, "backup-choice"));
+        let active_before = fs::read(&state.database_path).unwrap();
+        let active_modified = fs::metadata(&state.database_path)
+            .unwrap()
+            .modified()
+            .unwrap();
+        let snapshots = [&pending, &previous, &source].map(|path| pending_stage_snapshot(path));
+        let held = operation_lock::acquire(&root).unwrap();
+        assert!(stage_restore_at(&state, "choice.sqlite3")
+            .unwrap_err()
+            .contains("operation lock"));
+        assert!(
+            apply_pending_restore(&state.database_path, &root, &state.backups_dir)
+                .unwrap_err()
+                .contains("operation lock")
+        );
+        assert!(recover_latest_valid_backup(
+            &state.database_path,
+            &root,
+            &state.backups_dir,
+            "test"
+        )
+        .unwrap_err()
+        .contains("operation lock"));
+        assert!(!root.join("restore.pending.legacy-adopted.json").exists());
+        for (path, before) in [&pending, &previous, &source].into_iter().zip(&snapshots) {
+            assert_pending_stage_snapshot(path, before);
+        }
+        drop(held);
+        assert!(stage_restore_at(&state, "choice.sqlite3").unwrap());
+        assert_eq!(read_marker(&pending), "backup-choice");
+        assert_pending_stage_snapshot(&previous, &snapshots[1]);
+        assert_eq!(fs::read(&state.database_path).unwrap(), active_before);
+        assert_eq!(
+            fs::metadata(&state.database_path)
+                .unwrap()
+                .modified()
+                .unwrap(),
+            active_modified
+        );
+        drop(state);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn pending_stage_observed_adoption_cannot_fall_back_to_legacy_promotion() {
+        for consumed in [false, true] {
+            let root = test_root("pending-adoption-disappears");
+            let database = root.join("library.sqlite3");
+            let pending = root.join("restore.pending.sqlite3");
+            let previous = root.join("restore.pending.previous.sqlite3");
+            drop(seed(&database, "active current"));
+            drop(seed(&pending, "selected pending"));
+            drop(seed(&previous, "old forensic choice"));
+            finish_pending_stage(&root).unwrap();
+            let operation = RestoreOperation::acquire(&root).unwrap();
+            recovery_preflight(&root, &operation).unwrap();
+            assert!(operation.adopted.get());
+            if consumed {
+                replace_library_locked(
+                    &database,
+                    &root,
+                    &pending,
+                    &root.join("backups"),
+                    "pre-restore",
+                    (true, |_| Ok(())),
+                    &operation,
+                )
+                .unwrap();
+                assert!(!pending.exists());
+                assert_eq!(read_marker(&database), "selected pending");
+            }
+            // A non-cooperating external actor removes protocol metadata after the
+            // successful preflight. The same operation must remember its proof and
+            // cannot reinterpret previous as a new unadopted legacy selection.
+            fs::remove_file(root.join("restore.pending.legacy-adopted.json")).unwrap();
+            let mut paths = vec![&database, &previous];
+            if !consumed {
+                paths.push(&pending);
+            }
+            let snapshots = paths
+                .iter()
+                .map(|path| pending_stage_snapshot(path))
+                .collect::<Vec<_>>();
+            for _ in 0..2 {
+                assert!(finish_pending_stage_locked(&root, &operation)
+                    .unwrap_err()
+                    .contains("接管记录消失"));
+                assert!(finish_or_rollback_locked(&database, &root, &operation).is_err());
+                for (path, snapshot) in paths.iter().zip(&snapshots) {
+                    assert_pending_stage_snapshot(path, snapshot);
+                }
+                assert_eq!(pending.exists(), !consumed);
+                assert!(!root.join("restore.pending.legacy-adopted.json").exists());
+                assert!(!root.join("restore.transaction").exists());
+                assert!(!root.join("restore.pending.transaction").exists());
+            }
+            drop(operation);
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[cfg(windows)]

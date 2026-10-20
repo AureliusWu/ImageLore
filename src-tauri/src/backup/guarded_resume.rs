@@ -6,13 +6,14 @@ use super::companions;
 use super::owned_handle::{
     DirectoryGuard, DirectoryIdentity, FileFingerprint, WindowsExclusiveFile,
 };
-use super::restore_journal::{self, Mode, Prepared};
+use super::restore_journal::{self, Mode, Prepared, TargetKind};
 use std::{
     ffi::OsStr,
     fs,
     path::{Path, PathBuf},
 };
 
+#[cfg(test)]
 const TRANSACTION: &str = "restore.transaction";
 const PREPARED: &str = "PREPARED.json";
 const COMMITTED: &str = "COMMITTED";
@@ -340,6 +341,14 @@ impl State {
 }
 
 pub(super) fn finish(database: &Path, data_dir: &Path) -> Result<(), String> {
+    finish_target(database, data_dir, TargetKind::ActiveLibrary)
+}
+
+pub(super) fn finish_target(
+    database: &Path,
+    data_dir: &Path,
+    target: TargetKind,
+) -> Result<(), String> {
     if !database.is_absolute() || !data_dir.is_absolute() {
         return Err("恢复需要绝对资料库和数据目录路径".into());
     }
@@ -353,14 +362,13 @@ pub(super) fn finish(database: &Path, data_dir: &Path) -> Result<(), String> {
         .file_name()
         .and_then(OsStr::to_str)
         .ok_or("资料库名称编码无效")?;
-    if name.is_empty() || name.contains(['/', '\\', ':', '\0']) || name.ends_with(['.', ' ']) {
-        return Err("资料库名称无效".into());
-    }
-    let directory = match DirectoryGuard::lock_existing_mutable(&data.join(TRANSACTION)) {
-        Ok(directory) => directory,
-        Err(error) if error.raw_os_error() == Some(2) => return Ok(()),
-        Err(error) => return Err(io(error)),
-    };
+    target.validate_database_name(name)?;
+    let directory =
+        match DirectoryGuard::lock_existing_mutable(&data.join(target.transaction_name())) {
+            Ok(directory) => directory,
+            Err(error) if error.raw_os_error() == Some(2) => return Ok(()),
+            Err(error) => return Err(io(error)),
+        };
     if names(directory.path())? {
         // This fixed application-reserved directory contains no files at all.
         // The OS only deletes it if it is still empty, using its held identity.
@@ -386,6 +394,7 @@ pub(super) fn finish(database: &Path, data_dir: &Path) -> Result<(), String> {
     let prepared = from_prepared
         .or(from_commit)
         .ok_or("非空恢复目录缺少可验证记录，已保留")?;
+    target.validate_mode(&prepared.mode)?;
     if prepared.data_directory != data_guard.identity().map_err(io)?
         || prepared.transaction_directory != directory.identity().map_err(io)?
     {
@@ -453,10 +462,15 @@ mod tests {
         root: PathBuf,
         temporary: PathBuf,
         marker: Vec<u8>,
+        target: TargetKind,
     }
 
     impl Fixture {
         fn new() -> Self {
+            Self::new_target(TargetKind::ActiveLibrary)
+        }
+
+        fn new_target(target: TargetKind) -> Self {
             static NEXT: AtomicU64 = AtomicU64::new(0);
             let token = format!(
                 "{}-{}-{}",
@@ -478,11 +492,12 @@ mod tests {
             drop(file);
             fs::create_dir(root.join("data")).unwrap();
             fs::create_dir(root.join("data/recovery")).unwrap();
-            fs::create_dir(root.join("data/restore.transaction")).unwrap();
+            fs::create_dir(root.join("data").join(target.transaction_name())).unwrap();
             Self {
                 root: fs::canonicalize(root).unwrap(),
                 temporary,
                 marker,
+                target,
             }
         }
 
@@ -490,10 +505,13 @@ mod tests {
             self.root.join("data")
         }
         fn active(&self) -> PathBuf {
-            self.data().join("library.sqlite3")
+            self.data().join(match self.target {
+                TargetKind::ActiveLibrary => "library.sqlite3",
+                TargetKind::PendingCandidate => "restore.pending.sqlite3",
+            })
         }
         fn txn(&self, name: &str) -> PathBuf {
-            self.data().join(TRANSACTION).join(name)
+            self.data().join(self.target.transaction_name()).join(name)
         }
         fn pending(&self) -> PathBuf {
             self.data().join("restore.pending.sqlite3")
@@ -568,10 +586,12 @@ mod tests {
                 .unwrap()
                 .identity()
                 .unwrap(),
-            transaction_directory: DirectoryGuard::lock_existing(&fixture.data().join(TRANSACTION))
-                .unwrap()
-                .identity()
-                .unwrap(),
+            transaction_directory: DirectoryGuard::lock_existing(
+                &fixture.data().join(fixture.target.transaction_name()),
+            )
+            .unwrap()
+            .identity()
+            .unwrap(),
             mode: if pending {
                 Mode::Pending
             } else {
@@ -602,6 +622,157 @@ mod tests {
             &fixture.txn(PREPARED),
             &restore_journal::encode_prepared(record).unwrap(),
         );
+    }
+
+    fn setup_stage(fixture: &Fixture, installed: bool) -> Prepared {
+        assert_eq!(fixture.target, TargetKind::PendingCandidate);
+        let mut record = setup(fixture, installed, false);
+        record.mode = Mode::StagePending;
+        record.database_name = "restore.pending.sqlite3".into();
+        record
+    }
+
+    fn assert_fingerprint(path: &Path, expected: &FileFingerprint) {
+        let actual = WindowsExclusiveFile::lock_existing(path)
+            .unwrap()
+            .fingerprint()
+            .unwrap();
+        assert_eq!(&actual, expected);
+    }
+
+    #[test]
+    fn pending_stage_rollback_keeps_original_cohort_source_and_raw() {
+        let fixture = Fixture::new_target(TargetKind::PendingCandidate);
+        let mut record = setup_stage(&fixture, true);
+        record.originals[1] = Some(write_file(&fixture.txn("wal"), b"old pending WAL bytes"));
+        record.raw[1] = Some(RawRecord {
+            relative_path: "recovery/original-wal.raw".into(),
+            fingerprint: write_file(
+                &fixture.data().join("recovery/original-wal.raw"),
+                b"old pending WAL bytes",
+            ),
+        });
+        let active = fixture.data().join("library.sqlite3");
+        let source = fixture.data().join("backup-source.sqlite3");
+        let previous = fixture.data().join("restore.pending.previous.sqlite3");
+        let unchanged = [
+            (active, b"independent active library".as_slice()),
+            (source, b"independent source backup".as_slice()),
+            (previous, b"retained legacy previous".as_slice()),
+        ]
+        .map(|(path, bytes)| {
+            let fingerprint = write_file(&path, bytes);
+            (path, fingerprint)
+        });
+        prepared(&fixture, &record);
+        finish_target(&fixture.active(), &fixture.data(), fixture.target).unwrap();
+        assert_fingerprint(&fixture.active(), record.originals[0].as_ref().unwrap());
+        assert_fingerprint(
+            &companions(&fixture.active())[1],
+            record.originals[1].as_ref().unwrap(),
+        );
+        assert_eq!(fs::read(fixture.active()).unwrap(), b"original user bytes");
+        for (path, fingerprint) in unchanged {
+            assert_fingerprint(&path, &fingerprint);
+        }
+        for raw in record.raw.iter().flatten() {
+            assert_fingerprint(&fixture.data().join(&raw.relative_path), &raw.fingerprint);
+        }
+        assert!(!fixture
+            .data()
+            .join(fixture.target.transaction_name())
+            .exists());
+        finish_target(&fixture.active(), &fixture.data(), fixture.target).unwrap();
+        fixture.cleanup();
+    }
+
+    #[test]
+    fn pending_stage_commit_resumes_partial_cleanup_without_consuming_target() {
+        let fixture = Fixture::new_target(TargetKind::PendingCandidate);
+        let mut record = setup_stage(&fixture, true);
+        record.originals[1] = Some(write_file(&fixture.txn("wal"), b"old pending WAL bytes"));
+        record.raw[1] = Some(RawRecord {
+            relative_path: "recovery/original-wal.raw".into(),
+            fingerprint: write_file(
+                &fixture.data().join("recovery/original-wal.raw"),
+                b"old pending WAL bytes",
+            ),
+        });
+        let source = fixture.data().join("backup-source.sqlite3");
+        let source_fingerprint = write_file(&source, b"source remains after pending publication");
+        write_file(
+            &fixture.txn(COMMITTED),
+            &restore_journal::encode_commit(&record).unwrap(),
+        );
+        // Both the PREPARED record and one reserved role have already been
+        // cleaned. COMMITTED alone must identify the surviving WAL correctly.
+        fs::remove_file(fixture.txn("database")).unwrap();
+        finish_target(&fixture.active(), &fixture.data(), fixture.target).unwrap();
+        assert_fingerprint(&fixture.active(), &record.staged);
+        assert_eq!(
+            fs::read(fixture.active()).unwrap(),
+            b"restore candidate bytes"
+        );
+        assert_fingerprint(&source, &source_fingerprint);
+        for raw in record.raw.iter().flatten() {
+            assert_fingerprint(&fixture.data().join(&raw.relative_path), &raw.fingerprint);
+        }
+        assert!(!fixture
+            .data()
+            .join(fixture.target.transaction_name())
+            .exists());
+        finish_target(&fixture.active(), &fixture.data(), fixture.target).unwrap();
+        assert_fingerprint(&fixture.active(), &record.staged);
+        fixture.cleanup();
+    }
+
+    #[test]
+    fn pending_stage_preserves_foreign_target_sidecar_or_same_identity_commit() {
+        for conflict in ["main", "sidecar", "same_id"] {
+            let fixture = Fixture::new_target(TargetKind::PendingCandidate);
+            let installed = conflict != "main";
+            let record = setup_stage(&fixture, installed);
+            prepared(&fixture, &record);
+            if conflict == "sidecar" {
+                write_file(
+                    &fixture.txn(COMMITTED),
+                    &restore_journal::encode_commit(&record).unwrap(),
+                );
+            }
+            let foreign_path = if conflict == "sidecar" {
+                companions(&fixture.active())[1].clone()
+            } else {
+                fixture.active()
+            };
+            if conflict == "same_id" {
+                fs::write(&foreign_path, b"later pending candidate commit").unwrap();
+            } else {
+                write_file(&foreign_path, b"independent pending candidate bytes");
+            }
+            let foreign = WindowsExclusiveFile::lock_existing(&foreign_path)
+                .unwrap()
+                .fingerprint()
+                .unwrap();
+            if conflict == "same_id" {
+                assert_eq!(foreign.file_id, record.staged.file_id);
+                assert_ne!(foreign.sha256, record.staged.sha256);
+            }
+            let journal = fs::read(fixture.txn(PREPARED)).unwrap();
+            assert!(finish_target(&fixture.active(), &fixture.data(), fixture.target).is_err());
+            assert_fingerprint(&foreign_path, &foreign);
+            assert_fingerprint(
+                &fixture.txn("database"),
+                record.originals[0].as_ref().unwrap(),
+            );
+            assert_eq!(fs::read(fixture.txn(PREPARED)).unwrap(), journal);
+            for raw in record.raw.iter().flatten() {
+                assert_fingerprint(&fixture.data().join(&raw.relative_path), &raw.fingerprint);
+            }
+            if !installed {
+                assert_fingerprint(&fixture.txn(STAGED), &record.staged);
+            }
+            fixture.cleanup();
+        }
     }
 
     #[test]

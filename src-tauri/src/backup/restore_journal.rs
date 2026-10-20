@@ -9,11 +9,55 @@ use std::path::Path;
 pub(super) const MAX_JOURNAL_BYTES: usize = 128 * 1024;
 const FORMAT: u32 = 1;
 
+/// The caller chooses a fixed namespace before reading untrusted journal bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TargetKind {
+    ActiveLibrary,
+    PendingCandidate,
+}
+
+impl TargetKind {
+    pub(super) fn transaction_name(self) -> &'static str {
+        match self {
+            Self::ActiveLibrary => "restore.transaction",
+            Self::PendingCandidate => "restore.pending.transaction",
+        }
+    }
+
+    pub(super) fn validate_database_name(self, name: &str) -> Result<(), String> {
+        validate_component(name)?;
+        match self {
+            Self::PendingCandidate if name == "restore.pending.sqlite3" => Ok(()),
+            Self::PendingCandidate => {
+                Err("Pending transactions require the fixed pending database name".into())
+            }
+            Self::ActiveLibrary
+                if reserved_protocol_component(name)
+                    || reserved_roles(name, "restore.pending.sqlite3")
+                    || reserved_roles(name, "restore.pending.previous.sqlite3") =>
+            {
+                Err("The active database cannot use a reserved recovery protocol name".into())
+            }
+            Self::ActiveLibrary => Ok(()),
+        }
+    }
+
+    pub(super) fn validate_mode(self, mode: &Mode) -> Result<(), String> {
+        match (self, mode) {
+            (Self::PendingCandidate, Mode::StagePending)
+            | (Self::ActiveLibrary, Mode::Pending | Mode::Recovery) => Ok(()),
+            _ => Err("Recovery mode does not belong to this transaction namespace".into()),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase", deny_unknown_fields)]
 pub(super) enum Mode {
     Pending,
     Recovery,
+    #[serde(rename = "stage_pending")]
+    StagePending,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -117,12 +161,41 @@ fn same_component(left: &str, right: &str) -> bool {
         || left.to_uppercase() == right.to_uppercase()
 }
 
+fn reserved_roles(component: &str, name: &str) -> bool {
+    let main = Path::new(name);
+    [
+        main.to_path_buf(),
+        main.with_extension("sqlite3-wal"),
+        main.with_extension("sqlite3-shm"),
+    ]
+    .iter()
+    .any(|reserved| same_component(component, &reserved.to_string_lossy()))
+}
+
+fn reserved_protocol_component(component: &str) -> bool {
+    let lower = component.to_lowercase();
+    [
+        "restore.transaction",
+        "restore.pending.transaction",
+        "operation.lock",
+        "restore.operation.lock",
+        "legacy-adopted.json",
+        "restore.pending.legacy-adopted.json",
+    ]
+    .iter()
+    .any(|reserved| same_component(component, reserved))
+        || lower.starts_with("legacy-adopted.json.next")
+        || lower.starts_with("restore.pending.legacy-adopted.json.next")
+        || lower.starts_with("restore.pending.legacy-adopted.next-")
+        || lower.starts_with("restore.operation.next-")
+}
+
 fn validate_raw_path(relative: &str, database_name: &str) -> Result<(), String> {
     let components: Vec<_> = relative.split(['/', '\\']).collect();
     for component in &components {
         validate_component(component)?;
-        if same_component(component, "restore.transaction") {
-            return Err("Raw evidence cannot point into the recovery transaction".into());
+        if reserved_protocol_component(component) {
+            return Err("Raw evidence cannot point into a recovery protocol namespace".into());
         }
     }
     let first = components
@@ -130,18 +203,12 @@ fn validate_raw_path(relative: &str, database_name: &str) -> Result<(), String> 
         .ok_or_else(|| "A raw evidence path is required".to_string())?;
     for name in [
         database_name,
+        "library.sqlite3",
         "restore.pending.sqlite3",
         "restore.pending.previous.sqlite3",
     ] {
-        let main = Path::new(name);
-        for reserved in [
-            main.to_path_buf(),
-            main.with_extension("sqlite3-wal"),
-            main.with_extension("sqlite3-shm"),
-        ] {
-            if same_component(first, &reserved.to_string_lossy()) {
-                return Err("Raw evidence cannot point into active or pending paths".into());
-            }
+        if reserved_roles(first, name) {
+            return Err("Raw evidence cannot point into active or pending paths".into());
         }
     }
     Ok(())
@@ -158,6 +225,13 @@ fn validate_prepared(prepared: &Prepared, expected_database_name: &str) -> Resul
     if prepared.database_name != expected_database_name {
         return Err("Recovery journal names a different database".into());
     }
+    let target = if prepared.mode == Mode::StagePending {
+        TargetKind::PendingCandidate
+    } else {
+        TargetKind::ActiveLibrary
+    };
+    target.validate_database_name(expected_database_name)?;
+    target.validate_mode(&prepared.mode)?;
     validate_fingerprint(&prepared.staged)?;
     match (&prepared.mode, &prepared.pending) {
         (Mode::Pending, Some(pending)) if pending[0].is_some() => {
@@ -165,10 +239,10 @@ fn validate_prepared(prepared: &Prepared, expected_database_name: &str) -> Resul
                 validate_fingerprint(fingerprint)?;
             }
         }
-        (Mode::Recovery, None) => (),
+        (Mode::Recovery | Mode::StagePending, None) => (),
         _ => return Err("Recovery journal mode and pending bundle disagree".into()),
     }
-    if prepared.originals[0].is_none() && prepared.mode != Mode::Pending {
+    if prepared.originals[0].is_none() && prepared.mode == Mode::Recovery {
         return Err("Automatic recovery requires an original database".into());
     }
     for (original, raw) in prepared.originals.iter().zip(&prepared.raw) {
@@ -356,6 +430,82 @@ mod tests {
     }
 
     #[test]
+    fn pending_stage_journal_roundtrips_first_and_replacement_targets() {
+        let mut value = prepared();
+        value.mode = Mode::StagePending;
+        value.database_name = "restore.pending.sqlite3".into();
+        for has_original in [true, false] {
+            if !has_original {
+                value.originals = [None, None, None];
+                value.raw = [None, None, None];
+            }
+            let encoded = encode_prepared(&value).unwrap();
+            assert!(String::from_utf8(encoded.clone())
+                .unwrap()
+                .contains("stage_pending"));
+            assert_eq!(
+                decode_prepared(&encoded, "restore.pending.sqlite3").unwrap(),
+                value
+            );
+            let commit = encode_commit(&value).unwrap();
+            assert_eq!(
+                decode_commit(&commit, "restore.pending.sqlite3").unwrap(),
+                value
+            );
+            validate_commit(&commit, &value).unwrap();
+        }
+    }
+
+    #[test]
+    fn pending_stage_journal_rejects_crossed_modes_targets_and_consumption() {
+        for mode in [Mode::Pending, Mode::Recovery, Mode::StagePending] {
+            for target in [TargetKind::ActiveLibrary, TargetKind::PendingCandidate] {
+                assert_eq!(
+                    target.validate_mode(&mode).is_ok(),
+                    (target == TargetKind::PendingCandidate) == (mode == Mode::StagePending)
+                );
+            }
+            let mut value = prepared();
+            value.mode = mode.clone();
+            value.pending = (mode == Mode::Pending).then(|| [Some(fingerprint(4)), None, None]);
+            value.database_name = if mode == Mode::StagePending {
+                "library.sqlite3"
+            } else {
+                "restore.pending.sqlite3"
+            }
+            .into();
+            assert!(encode_prepared(&value).is_err());
+            assert!(decode_prepared(&unchecked_envelope(&value), &value.database_name).is_err());
+        }
+        let mut value = prepared();
+        value.mode = Mode::StagePending;
+        value.database_name = "restore.pending.sqlite3".into();
+        value.pending = Some([Some(fingerprint(4)), None, None]);
+        assert!(encode_prepared(&value).is_err());
+        assert!(decode_prepared(&unchecked_envelope(&value), &value.database_name).is_err());
+        for name in [
+            "restore.pending.sqlite3",
+            "RESTORE.PENDING.SQLITE3-WAL",
+            "restore.pending.previous.sqlite3-shm",
+            "restore.pending.transaction",
+            "restore.operation.lock",
+            "restore.operation.next-aaaa.lock",
+            "restore.pending.legacy-adopted.json.next-aaaa",
+            "restore.pending.legacy-adopted.next-aaaa.json",
+        ] {
+            assert!(TargetKind::ActiveLibrary
+                .validate_database_name(name)
+                .is_err());
+        }
+        assert!(TargetKind::ActiveLibrary
+            .validate_database_name("custom-library.sqlite3")
+            .is_ok());
+        assert!(TargetKind::PendingCandidate
+            .validate_database_name("RESTORE.PENDING.SQLITE3")
+            .is_err());
+    }
+
+    #[test]
     fn recovery_journal_rejects_bounds_truncation_future_unknown_and_checksum() {
         let value = prepared();
         let bytes = encode_prepared(&value).unwrap();
@@ -431,6 +581,14 @@ mod tests {
             "NUL.txt",
             "restore.transaction/raw",
             "nested/RESTORE.TRANSACTION/raw",
+            "restore.pending.transaction/raw",
+            "nested/RESTORE.PENDING.TRANSACTION/raw",
+            "nested/operation.lock/raw",
+            "nested/RESTORE.OPERATION.LOCK/raw",
+            "nested/RESTORE.OPERATION.NEXT-aaaa.LOCK/raw",
+            "restore.pending.legacy-adopted.json",
+            "nested/RESTORE.PENDING.LEGACY-ADOPTED.JSON.NEXT-aaaa/raw",
+            "nested/RESTORE.PENDING.LEGACY-ADOPTED.NEXT-aaaa.JSON/raw",
             "LIBRARY.SQLITE3",
             "library.sqlite3-wal",
             "library.sqlite3-shm",
@@ -445,6 +603,22 @@ mod tests {
                 "Rejected raw path: {path:?}"
             );
             assert!(decode_prepared(&unchecked_envelope(&value), "library.sqlite3").is_err());
+        }
+        for database in ["restore.pending.sqlite3", "custom.sqlite3"] {
+            for path in [
+                "LIBRARY.SQLITE3",
+                "library.sqlite3-wal",
+                "library.sqlite3-shm",
+            ] {
+                let mut value = prepared();
+                value.database_name = database.into();
+                if database == "restore.pending.sqlite3" {
+                    value.mode = Mode::StagePending;
+                }
+                value.raw[0].as_mut().unwrap().relative_path = path.into();
+                assert!(encode_prepared(&value).is_err());
+                assert!(decode_prepared(&unchecked_envelope(&value), database).is_err());
+            }
         }
         for database in [
             "",

@@ -2,7 +2,7 @@
 
 日期：2026-10-20（Asia/Shanghai）。本文记录 v0.26.0 源码提交 `7aacb97727ae91e876427d24bac0c2b49c7821be` 的 Windows 后端修复与验收。该提交已通过候选远端门禁并同步 main；没有发布新的桌面程序，也不代表安装升级或真实桌面恢复验收已经完成。
 
-本修复覆盖最终资料库替换与新协议事务续作。`finish_pending_stage`、`stage_restore_at` 的旧候选暂存入口尚未完成相同的所有权事务与并发修复；下文四个原始反例不覆盖这两个入口。恢复安全的 A1/A2 门槛继续开放。
+本修复覆盖最终资料库替换与新协议事务续作。下文四个原始反例不覆盖 `finish_pending_stage`、`stage_restore_at`；这两个入口的后续修复与独立证据见 [pending 暂存安全](V0_26_PENDING_STAGE_SAFETY.md)。恢复安全的 A1/A2 门槛继续开放。
 
 ## 已复现的四个丢失窗口
 
@@ -81,14 +81,16 @@ B/C 的回归除检查实际 marker、额外资产和错误结果外，还收集
 
 源码以正常 fast-forward 同步 main，推送前 1275 项文件/历史对象检查及默认 Gitleaks 通过。未创建或合并 PR，未更改保护规则。Native 与快速 CI 的原始日志分别保存为私有目录中的 `ci-candidate-7aacb97-native.log` 和 `ci-candidate-7aacb97-fast.log`；当前桌面 EXE 与快捷方式仍绑定此前已验收的 0.26.0 产物。
 
-## pending-stage 新反例仍待修复
+同一源码的 [main Native 复跑](https://github.com/AureliusWu/ImageLore/actions/runs/39388403485)也已完成，实际 **193 passed / 0 failed / 3 ignored**（503.98 秒），format、check、Clippy 均成功；原始 job 日志另存 `ci-main-7aacb97-native.log`。这与候选分支结果分别绑定，不能用后来不同源码的测试数量替换。
+
+## pending-stage 原始反例与后续记录
 
 在以 `7aacb97` 为基线的新隔离工作区，只为旧暂存入口增加 test-only 边界回调和三个真实 SQLite 保全回归。各回归先执行独立正常控制，普通连续换点和旧 previous 恢复成功；随后分别在缺失 pending 检查后放入新 pending、预留旧 pending 后放入外来 pending、清理 previous 前在同 File ID 上真实提交新编辑。旧路径实际覆盖前两份新候选，并删除第三份新提交，结果为 **0 passed / 3 failed**（3.34 秒，实际退出码 101）。
 
-失败现场、源码与测试 EXE 已封存在仓库外 `<private-evidence>/pending-stage-safety-20261020-01`：源码 SHA256 `a74011481112d2e43f5dba92acfe3c43b3ba5c5a705a340ddc22f1fd40cbb581`，测试 EXE SHA256 `7b23a847bfd8bf2d807217b7d32e9b4f663db9f7ccd62dbab6c5b8ff1888d2ac`。这些新增 RED 不属于上面 193 项已经通过的套件，不能用后者覆盖新发现的缺口；暂存入口实现、接管记录防重复回放及新的 GREEN 仍待完成。
+失败现场、源码与测试 EXE 已封存在仓库外 `<private-evidence>/pending-stage-safety-20261020-01`：源码 SHA256 `a74011481112d2e43f5dba92acfe3c43b3ba5c5a705a340ddc22f1fd40cbb581`，测试 EXE SHA256 `7b23a847bfd8bf2d807217b7d32e9b4f663db9f7ccd62dbab6c5b8ff1888d2ac`。这些新增 RED 不属于上面 193 项已经通过的套件，不能用后者覆盖新发现的缺口；暂存入口、接管记录防重复回放及新的 GREEN 单独见 [pending 暂存安全](V0_26_PENDING_STAGE_SAFETY.md)。
 
 ## API 依据与证据范围
 
 Microsoft 的 [NtCreateFile 官方说明](https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntcreatefile)定义了父目录句柄下的相对名称与 `FILE_CREATE` 的已有目标拒绝语义；[SetFileInformationByHandle 官方说明](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-setfileinformationbyhandle)列出了句柄上的 `FileRenameInfo`、`FileDispositionInfo` 及其访问要求。SQLite 的 [VACUUM / VACUUM INTO 官方说明](https://www.sqlite.org/lang_vacuum.html)解释了输出快照及输出目标的要求。源码使用这些 API；本机实际句柄排斥、同句柄重命名、目标冲突、缓冲区对齐与 SQLite 数据断言由上述测试证明，API 文档自身不证明 ImageLore 已通过验收。
 
-本记录只覆盖当前 Windows 候选的已列后端场景。旧 pending-stage 入口的所有权与并发修复、恢复矩阵剩余项目、真实进程异常退出与桌面重启、安装升级与数据保留、50k/75k 性能和长期内存、签名分发、自动更新及 v1.0.0 RC 仍需分别取得对应证据。参见 [v1.0.0 更新方案](V1_0_0_PLAN.md) 与 [当前运行时验收](V0_26_CURRENT_RUNTIME_ACCEPTANCE.md)；不得把本轮局部修复记作全部恢复安全或正式版本已经完成。
+本记录只覆盖当前 Windows 候选的已列后端场景。pending-stage 的后续验证、恢复矩阵剩余项目、真实进程异常退出与桌面重启、安装升级与数据保留、50k/75k 性能和长期内存、签名分发、自动更新及 v1.0.0 RC 仍需分别取得对应证据。参见 [v1.0.0 更新方案](V1_0_0_PLAN.md) 与 [当前运行时验收](V0_26_CURRENT_RUNTIME_ACCEPTANCE.md)；不得把本轮局部修复记作全部恢复安全或正式版本已经完成。

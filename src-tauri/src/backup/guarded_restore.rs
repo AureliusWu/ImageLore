@@ -4,7 +4,7 @@
 //! unrelated file at the active name.
 
 use super::owned_handle::{DirectoryGuard, ExclusiveBundle, FileFingerprint, WindowsExclusiveFile};
-use super::restore_journal::{self, Mode, Prepared, RawRecord};
+use super::restore_journal::{self, Mode, Prepared, RawRecord, TargetKind};
 use super::{
     companions, known_sqlite_damage, now_nanos, sql_path, supported_marker, validate_in_place,
     RestoreStep, VALIDATION_CACHE_KIB,
@@ -17,8 +17,43 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-const TRANSACTION: &str = "restore.transaction";
 const LABELS: [&str; 3] = ["database", "wal", "shm"];
+
+pub(super) enum RestorePurpose {
+    ApplyPending,
+    RecoverCorrupt,
+    StagePending,
+    LegacyPromote {
+        expected_source: Box<[Option<FileFingerprint>; 3]>,
+    },
+}
+
+impl RestorePurpose {
+    fn target(&self) -> TargetKind {
+        match self {
+            Self::ApplyPending | Self::RecoverCorrupt => TargetKind::ActiveLibrary,
+            Self::StagePending | Self::LegacyPromote { .. } => TargetKind::PendingCandidate,
+        }
+    }
+
+    fn mode(&self) -> Mode {
+        match self {
+            Self::ApplyPending => Mode::Pending,
+            Self::RecoverCorrupt => Mode::Recovery,
+            Self::StagePending | Self::LegacyPromote { .. } => Mode::StagePending,
+        }
+    }
+
+    fn check_target(&self, current: &[Option<FileFingerprint>; 3]) -> Result<(), String> {
+        if matches!(self, Self::RecoverCorrupt) && current[0].is_none() {
+            return Err("自动恢复时活动资料库已不存在，已保留备份候选".into());
+        }
+        if matches!(self, Self::LegacyPromote { .. }) && current.iter().any(Option::is_some) {
+            return Err("旧候选提升时 pending 名称已被占用，已保留双方".into());
+        }
+        Ok(())
+    }
+}
 
 fn io(error: std::io::Error) -> String {
     error.to_string()
@@ -187,7 +222,9 @@ impl Probe {
     }
 }
 
-fn fingerprints(bundle: &mut ExclusiveBundle) -> Result<[Option<FileFingerprint>; 3], String> {
+pub(super) fn fingerprints(
+    bundle: &mut ExclusiveBundle,
+) -> Result<[Option<FileFingerprint>; 3], String> {
     let mut values = [None, None, None];
     for (value, file) in values.iter_mut().zip(bundle.files_mut()) {
         *value = file
@@ -198,6 +235,11 @@ fn fingerprints(bundle: &mut ExclusiveBundle) -> Result<[Option<FileFingerprint>
     }
     bundle.check_missing_sidecars().map_err(io)?;
     Ok(values)
+}
+
+pub(super) fn validate_bundle(data_dir: &Path, bundle: &mut ExclusiveBundle) -> Result<(), String> {
+    let work = Workspace::open(&data_dir.join("library.sqlite3"), data_dir)?;
+    Probe::copy(&work, bundle)?.run(|probe| validate_in_place(probe).map_err(|e| e.to_string()))
 }
 
 fn probe_health(path: &Path) -> Result<bool, String> {
@@ -342,7 +384,7 @@ impl Attempt {
         &mut self,
         preserve_dir: &Path,
         prefix: &str,
-        is_pending: bool,
+        purpose: &RestorePurpose,
         hook: &impl Fn(RestoreStep) -> Result<(), String>,
     ) -> Result<(), String> {
         let directory = self.directory.as_ref().ok_or("恢复目录未持有")?;
@@ -380,10 +422,8 @@ impl Attempt {
 
         let mut originals =
             ExclusiveBundle::lock_optional_database(&self.work.database).map_err(io)?;
-        if originals.files_mut()[0].is_none() && !is_pending {
-            return Err("自动恢复时活动资料库已不存在，已保留备份候选".into());
-        }
         let initial = fingerprints(&mut originals)?;
+        purpose.check_target(&initial)?;
         let (mut raw, raw_files) = preserve(
             &self.work,
             &mut originals,
@@ -395,7 +435,7 @@ impl Attempt {
         hook(RestoreStep::Preserved)?;
         if initial[0].is_some() {
             let corrupt = Probe::copy(&self.work, &mut originals)?.run(probe_health)?;
-            if !is_pending && !corrupt {
+            if matches!(purpose, RestorePurpose::RecoverCorrupt) && !corrupt {
                 return Err("自动恢复最终复核未确认损坏，已保留当前资料库与备份候选".into());
             }
         }
@@ -408,9 +448,7 @@ impl Attempt {
         let mut originals =
             ExclusiveBundle::lock_optional_database(&self.work.database).map_err(io)?;
         let current = fingerprints(&mut originals)?;
-        if current[0].is_none() && !is_pending {
-            return Err("自动恢复最终锁内复核时原库缺失，已保留备份候选".into());
-        }
+        purpose.check_target(&current)?;
         if current != initial {
             let (updated, raw_files) = preserve(
                 &self.work,
@@ -424,7 +462,7 @@ impl Attempt {
         }
         if current[0].is_some() {
             let corrupt = Probe::copy(&self.work, &mut originals)?.run(probe_health)?;
-            if !is_pending && !corrupt {
+            if matches!(purpose, RestorePurpose::RecoverCorrupt) && !corrupt {
                 return Err("自动恢复原库锁内复核未确认损坏，已保留当前资料库与备份候选".into());
             }
             if !corrupt {
@@ -453,14 +491,10 @@ impl Attempt {
                 .to_owned(),
             data_directory: self.work.guard.identity().map_err(io)?,
             transaction_directory: directory.identity().map_err(io)?,
-            mode: if is_pending {
-                Mode::Pending
-            } else {
-                Mode::Recovery
-            },
+            mode: purpose.mode(),
             originals: current,
             staged: staged_fingerprint,
-            pending: if is_pending {
+            pending: if matches!(purpose, RestorePurpose::ApplyPending) {
                 Some(fingerprints(&mut self.source)?)
             } else {
                 None
@@ -546,24 +580,45 @@ pub(super) fn replace(
     source: &Path,
     preserve_dir: &Path,
     prefix: &str,
-    is_pending: bool,
+    purpose: RestorePurpose,
     hook: impl Fn(RestoreStep) -> Result<(), String>,
 ) -> Result<(), String> {
-    super::guarded_resume::finish(database, data_dir)?;
+    let target = purpose.target();
+    super::guarded_resume::finish_target(database, data_dir, target)?;
     let work = Workspace::open(database, data_dir)?;
+    target.validate_database_name(
+        work.database
+            .file_name()
+            .and_then(OsStr::to_str)
+            .ok_or("资料库名称无效")?,
+    )?;
     let _source_parents = DirectoryGuard::lock_ancestors(source).map_err(io)?;
-    if is_pending {
+    if matches!(
+        purpose,
+        RestorePurpose::ApplyPending | RestorePurpose::LegacyPromote { .. }
+    ) {
         let source_parent =
             fs::canonicalize(source.parent().ok_or("恢复候选缺少父目录")?).map_err(io)?;
+        let expected = if matches!(purpose, RestorePurpose::ApplyPending) {
+            "restore.pending.sqlite3"
+        } else {
+            "restore.pending.previous.sqlite3"
+        };
         if source_parent.join(source.file_name().ok_or("恢复候选名称无效")?)
-            != work.data.join("restore.pending.sqlite3")
+            != work.data.join(expected)
         {
-            return Err("待恢复事务的候选必须是数据目录中的 restore.pending.sqlite3".into());
+            return Err("恢复候选不属于当前操作的固定名称".into());
         }
     }
-    let source = ExclusiveBundle::lock_database(source).map_err(io)?;
+    let mut source = ExclusiveBundle::lock_database(source).map_err(io)?;
+    if let RestorePurpose::LegacyPromote { expected_source } = &purpose {
+        if fingerprints(&mut source)? != **expected_source {
+            return Err("旧候选在提升前发生变化，已保留双方".into());
+        }
+    }
     let directory =
-        DirectoryGuard::create_new_in(&work.guard, OsStr::new(TRANSACTION)).map_err(io)?;
+        DirectoryGuard::create_new_in(&work.guard, OsStr::new(target.transaction_name()))
+            .map_err(io)?;
     let mut attempt = Attempt {
         work,
         directory: Some(directory),
@@ -576,7 +631,7 @@ pub(super) fn replace(
         raw_directories: Vec::new(),
         recorded: false,
     };
-    let result = attempt.install(preserve_dir, prefix, is_pending, &hook);
+    let result = attempt.install(preserve_dir, prefix, &purpose, &hook);
     if !attempt.recorded {
         let cleanup = attempt.clean_unrecorded();
         drop(attempt);
@@ -599,7 +654,7 @@ pub(super) fn replace(
             (Ok(()), Ok(())) => Ok(()),
         }
     };
-    let finish = super::guarded_resume::finish(database, data_dir);
+    let finish = super::guarded_resume::finish_target(database, data_dir, target);
     match (result, finish) {
         (Ok(()), Ok(())) => Ok(()),
         (Err(error), Ok(())) => Err(error),
