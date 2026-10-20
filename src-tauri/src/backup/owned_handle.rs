@@ -1,15 +1,21 @@
-//! Process-local Windows primitives for an unconnected restore prototype.
+//! Process-local Windows primitives for guarded restore operations.
 //!
 //! Present objects remain exclusive while their handles live. Missing sidecar
-//! names and parent directory namespaces are not locked. There is no restart,
-//! COMMITTED, FileID-based ownership, installation or rollback authorization here.
+//! names are not locked. Directory guards prevent directory renames, not child
+//! creation. Fingerprints describe content and identity, never transaction
+//! authorization; the caller must validate its journal before destructive use.
+
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use std::{
     ffi::c_void,
     fs::{self, File, OpenOptions},
     io::{self, Read, Seek, SeekFrom, Write},
     mem::{offset_of, size_of},
-    os::windows::{ffi::OsStrExt, fs::MetadataExt, fs::OpenOptionsExt, io::AsRawHandle},
+    os::windows::{
+        ffi::OsStrExt, fs::MetadataExt, fs::OpenOptionsExt, io::AsRawHandle, io::FromRawHandle,
+    },
     path::{Path, PathBuf},
 };
 
@@ -18,6 +24,38 @@ const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
 const FILE_RENAME_INFO_CLASS: i32 = 3;
 const FILE_DISPOSITION_INFO_CLASS: i32 = 4;
+const FILE_ID_INFO_CLASS: i32 = 18;
+const FILE_READ_ATTRIBUTES: u32 = 0x80;
+const FILE_LIST_DIRECTORY: u32 = 0x1;
+const DELETE_ACCESS: u32 = 0x0001_0000;
+const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+const SHARE_READ_WRITE: u32 = 3;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct DirectoryIdentity {
+    pub(super) volume_serial: u64,
+    pub(super) file_id: [u8; 16],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct FileFingerprint {
+    pub(super) volume_serial: u64,
+    pub(super) file_id: [u8; 16],
+    pub(super) size: u64,
+    pub(super) modified: u64,
+    pub(super) sha256: String,
+}
+
+// SDK FILE_ID_INFO: ULONGLONG VolumeSerialNumber; FILE_ID_128 FileId.
+#[repr(C)]
+struct FileIdInfo {
+    volume_serial: u64,
+    file_id: [u8; 16],
+}
+
+const _: () = assert!(size_of::<FileIdInfo>() == 24);
 
 // Windows SDK winbase.h: the BOOLEAN/Flags union occupies one DWORD on current
 // Windows, followed by HANDLE, DWORD byte length, and a variable WCHAR array.
@@ -45,6 +83,104 @@ unsafe extern "system" {
         information: *const c_void,
         size: u32,
     ) -> i32;
+
+    #[link_name = "GetFileInformationByHandleEx"]
+    fn get_file_information_by_handle_ex(
+        handle: *mut c_void,
+        class: i32,
+        information: *mut c_void,
+        size: u32,
+    ) -> i32;
+}
+
+// Layouts checked against winternl.h, including the pointer-sized first union
+// of IO_STATUS_BLOCK. NtCreateFile returns NTSTATUS, not a Win32 last-error.
+#[repr(C)]
+struct UnicodeString {
+    length: u16,
+    maximum_length: u16,
+    buffer: *mut u16,
+}
+
+#[repr(C)]
+struct ObjectAttributes {
+    length: u32,
+    root_directory: *mut c_void,
+    object_name: *mut UnicodeString,
+    attributes: u32,
+    security_descriptor: *mut c_void,
+    security_quality_of_service: *mut c_void,
+}
+
+#[repr(C)]
+struct IoStatusBlock {
+    status_or_pointer: usize,
+    information: usize,
+}
+
+#[link(name = "ntdll")]
+unsafe extern "system" {
+    #[link_name = "NtCreateFile"]
+    fn nt_create_file(
+        handle: *mut *mut c_void,
+        desired_access: u32,
+        attributes: *mut ObjectAttributes,
+        status: *mut IoStatusBlock,
+        allocation_size: *mut i64,
+        file_attributes: u32,
+        share_access: u32,
+        disposition: u32,
+        options: u32,
+        ea_buffer: *mut c_void,
+        ea_length: u32,
+    ) -> i32;
+
+    #[link_name = "RtlNtStatusToDosError"]
+    fn rtl_nt_status_to_dos_error(status: i32) -> u32;
+}
+
+fn file_identity(file: &File) -> io::Result<DirectoryIdentity> {
+    let mut information = FileIdInfo {
+        volume_serial: 0,
+        file_id: [0; 16],
+    };
+    // SAFETY: the initialized SDK-sized buffer is writable for this synchronous
+    // query, and the owned File keeps the handle alive throughout the call.
+    let success = unsafe {
+        get_file_information_by_handle_ex(
+            file.as_raw_handle(),
+            FILE_ID_INFO_CLASS,
+            (&mut information as *mut FileIdInfo).cast(),
+            size_of::<FileIdInfo>() as u32,
+        )
+    };
+    if success == 0 {
+        let error = io::Error::last_os_error();
+        return Err(error);
+    }
+    Ok(DirectoryIdentity {
+        volume_serial: information.volume_serial,
+        file_id: information.file_id,
+    })
+}
+
+fn delete_held(file: &File) -> io::Result<()> {
+    let information = DispositionInfo { delete_file: 1 };
+    // SAFETY: one SDK BOOLEAN is passed while this DELETE-capable handle lives.
+    // The OS atomically rejects nonempty directories; this never recurses.
+    let success = unsafe {
+        set_file_information_by_handle(
+            file.as_raw_handle(),
+            FILE_DISPOSITION_INFO_CLASS,
+            (&information as *const DispositionInfo).cast(),
+            size_of::<DispositionInfo>() as u32,
+        )
+    };
+    if success == 0 {
+        let error = io::Error::last_os_error();
+        return Err(error);
+    }
+    Ok(())
 }
 
 fn invalid_input(message: &'static str) -> io::Error {
@@ -68,7 +204,7 @@ fn check_parent_paths(path: &Path) -> io::Result<()> {
 }
 
 #[derive(Debug)]
-struct WindowsExclusiveFile {
+pub(super) struct WindowsExclusiveFile {
     file: File,
     path: PathBuf,
     created_here: bool,
@@ -96,15 +232,15 @@ impl WindowsExclusiveFile {
         })
     }
 
-    fn lock_existing(path: &Path) -> io::Result<Self> {
+    pub(super) fn lock_existing(path: &Path) -> io::Result<Self> {
         Self::open(path, false)
     }
 
-    fn create_new(path: &Path) -> io::Result<Self> {
+    pub(super) fn create_new(path: &Path) -> io::Result<Self> {
         Self::open(path, true)
     }
 
-    fn write_created(&mut self, bytes: &[u8]) -> io::Result<()> {
+    pub(super) fn write_created(&mut self, bytes: &[u8]) -> io::Result<()> {
         if !self.created_here {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
@@ -125,13 +261,80 @@ impl WindowsExclusiveFile {
         Ok(input)
     }
 
+    #[cfg(test)]
     fn read_bytes(&mut self) -> io::Result<Vec<u8>> {
         let mut bytes = Vec::new();
         self.clone_at_start()?.read_to_end(&mut bytes)?;
         Ok(bytes)
     }
 
-    fn copy_to(&mut self, target: &Path) -> io::Result<Self> {
+    pub(super) fn read_limited(&mut self, max: usize) -> io::Result<Vec<u8>> {
+        let maximum = u64::try_from(max)
+            .map_err(|_| invalid_input("The metadata limit exceeds the file API length"))?;
+        if self.file.metadata()?.len() > maximum {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Metadata exceeds its limit",
+            ));
+        }
+        let limit = maximum
+            .checked_add(1)
+            .ok_or_else(|| invalid_input("The metadata limit overflows"))?;
+        let mut bytes = Vec::new();
+        self.clone_at_start()?.take(limit).read_to_end(&mut bytes)?;
+        if bytes.len() > max {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Metadata stream exceeds its limit",
+            ));
+        }
+        Ok(bytes)
+    }
+
+    /// A diagnostic path only; it must never authorize cleanup or replacement.
+    #[cfg(test)]
+    pub(super) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub(super) fn fingerprint(&mut self) -> io::Result<FileFingerprint> {
+        let before_identity = file_identity(&self.file)?;
+        let before = self.file.metadata()?;
+        let mut input = self.clone_at_start()?;
+        let mut digest = Sha256::new();
+        let mut buffer = [0_u8; 64 * 1024];
+        let mut count = 0_u64;
+        loop {
+            let size = input.read(&mut buffer)?;
+            if size == 0 {
+                break;
+            }
+            count = count
+                .checked_add(size as u64)
+                .ok_or_else(|| io::Error::other("File length overflow while fingerprinting"))?;
+            digest.update(&buffer[..size]);
+        }
+        let after_identity = file_identity(&self.file)?;
+        let after = self.file.metadata()?;
+        if before_identity != after_identity
+            || count != before.file_size()
+            || before.file_size() != after.file_size()
+            || before.last_write_time() != after.last_write_time()
+        {
+            return Err(io::Error::other(
+                "The held file changed while fingerprinting",
+            ));
+        }
+        Ok(FileFingerprint {
+            volume_serial: after_identity.volume_serial,
+            file_id: after_identity.file_id,
+            size: after.file_size(),
+            modified: after.last_write_time(),
+            sha256: format!("{:x}", digest.finalize()),
+        })
+    }
+
+    pub(super) fn copy_to(&mut self, target: &Path) -> io::Result<Self> {
         let mut output = Self::create_new(target)?;
         io::copy(&mut self.clone_at_start()?, &mut output.file)?;
         output.file.sync_all()?;
@@ -140,7 +343,12 @@ impl WindowsExclusiveFile {
         Ok(output)
     }
 
-    fn rename_no_replace(&mut self, target: &Path) -> io::Result<()> {
+    pub(super) fn rename_no_replace(&mut self, target: &Path) -> io::Result<()> {
+        self.path = Self::rename_held_no_replace(&self.file, target)?;
+        Ok(())
+    }
+
+    fn rename_held_no_replace(file: &File, target: &Path) -> io::Result<PathBuf> {
         check_parent_paths(target)?;
         let parent = fs::canonicalize(
             target
@@ -167,6 +375,10 @@ impl WindowsExclusiveFile {
         let offset = offset_of!(RenameInfo, file_name);
         let size = offset
             .checked_add(name_bytes)
+            // The public Win32 contract also describes FileName as NUL
+            // terminated. Reserve the terminator explicitly for every buffer
+            // alignment; allocator padding is not a string terminator.
+            .and_then(|bytes| bytes.checked_add(size_of::<u16>()))
             .ok_or_else(|| invalid_input("The rename buffer length overflows"))?
             .max(size_of::<RenameInfo>());
         let buffer_size = u32::try_from(size)
@@ -188,7 +400,7 @@ impl WindowsExclusiveFile {
                 name.len(),
             );
             if set_file_information_by_handle(
-                self.file.as_raw_handle(),
+                file.as_raw_handle(),
                 FILE_RENAME_INFO_CLASS,
                 info.cast(),
                 buffer_size,
@@ -197,56 +409,65 @@ impl WindowsExclusiveFile {
                 return Err(io::Error::last_os_error());
             }
         }
-        self.path = target;
-        Ok(())
+        Ok(target)
     }
 
-    fn delete_owned(self) -> io::Result<()> {
+    pub(super) fn delete_owned(self) -> io::Result<()> {
         if !self.created_here {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "A pre-existing object has no primitive cleanup authorization",
             ));
         }
-        let information = DispositionInfo { delete_file: 1 };
-        // SAFETY: the SDK FILE_DISPOSITION_INFO contains a single BOOLEAN. The
-        // DELETE-capable owned handle is still exclusive; no path is reopened,
-        // deleted or compared to infer ownership. Drop closes this exact object.
-        let success = unsafe {
-            set_file_information_by_handle(
-                self.file.as_raw_handle(),
-                FILE_DISPOSITION_INFO_CLASS,
-                (&information as *const DispositionInfo).cast(),
-                size_of::<DispositionInfo>() as u32,
-            )
-        };
-        if success == 0 {
-            return Err(io::Error::last_os_error());
+        delete_held(&self.file)
+    }
+
+    /// The caller must first prove transaction authorization and raw preservation.
+    /// Matching content/identity alone is not a journal or commit authorization.
+    pub(super) fn delete_matching(mut self, expected: &FileFingerprint) -> io::Result<()> {
+        if self.fingerprint()? != *expected {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "File fingerprint mismatch; original preserved",
+            ));
         }
-        Ok(())
+        delete_held(&self.file)
     }
 }
 
 #[derive(Debug)]
-struct ExclusiveBundle {
+pub(super) struct ExclusiveBundle {
     role_paths: [PathBuf; 3],
     files: [Option<WindowsExclusiveFile>; 3],
 }
 
 impl ExclusiveBundle {
-    fn lock_database(database: &Path) -> io::Result<Self> {
+    pub(super) fn lock_database(database: &Path) -> io::Result<Self> {
         Self::lock_mapped(super::companions(database))
     }
 
-    fn lock_mapped(role_paths: [PathBuf; 3]) -> io::Result<Self> {
-        let database = WindowsExclusiveFile::lock_existing(&role_paths[0])?;
-        let mut files = [Some(database), None, None];
-        for ordinal in 1..3 {
+    /// Only a pending first-install caller may authorize a missing DB role.
+    pub(super) fn lock_optional_database(database: &Path) -> io::Result<Self> {
+        Self::lock_roles(super::companions(database), true)
+    }
+
+    pub(super) fn lock_mapped(role_paths: [PathBuf; 3]) -> io::Result<Self> {
+        Self::lock_roles(role_paths, false)
+    }
+
+    fn lock_roles(role_paths: [PathBuf; 3], allow_missing_database: bool) -> io::Result<Self> {
+        let mut files = [None, None, None];
+        for ordinal in 0..3 {
             files[ordinal] = match WindowsExclusiveFile::lock_existing(&role_paths[ordinal]) {
                 Ok(file) => Some(file),
                 // Only FILE_NOT_FOUND represents an optional missing object;
                 // PATH_NOT_FOUND, sharing, permission and other errors abort.
-                Err(error) if error.raw_os_error() == Some(2) => None,
+                Err(error)
+                    if error.raw_os_error() == Some(2)
+                        && (ordinal != 0 || allow_missing_database) =>
+                {
+                    None
+                }
                 Err(error) => return Err(error),
             };
         }
@@ -260,7 +481,7 @@ impl ExclusiveBundle {
             .collect()
     }
 
-    fn check_missing_sidecars(&self) -> io::Result<()> {
+    pub(super) fn check_missing_sidecars(&self) -> io::Result<()> {
         for path in self.missing_sidecars() {
             match fs::symlink_metadata(path) {
                 Err(error) if error.raw_os_error() == Some(2) => (),
@@ -276,7 +497,23 @@ impl ExclusiveBundle {
         Ok(())
     }
 
-    fn copy_probe_into(&mut self, directory: &Path) -> io::Result<PathBuf> {
+    pub(super) fn files_mut(&mut self) -> &mut [Option<WindowsExclusiveFile>; 3] {
+        &mut self.files
+    }
+
+    #[cfg(test)]
+    pub(super) fn into_files(self) -> [Option<WindowsExclusiveFile>; 3] {
+        self.files
+    }
+
+    #[cfg(test)]
+    pub(super) fn copy_probe_into(&mut self, directory: &Path) -> io::Result<PathBuf> {
+        if self.files[0].is_none() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "No held DB role is available to probe",
+            ));
+        }
         self.check_missing_sidecars()?;
         check_parent_paths(directory)?;
         // The probe directory must not exist, including as someone else's
@@ -296,6 +533,220 @@ impl ExclusiveBundle {
         // completed output handles does not release any original bundle handle.
         drop(copies);
         Ok(database)
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct DirectoryGuard {
+    file: File,
+    path: PathBuf,
+    delete_capable: bool,
+    created_identity: Option<DirectoryIdentity>,
+}
+
+impl DirectoryGuard {
+    fn open_existing(path: &Path, delete_capable: bool) -> io::Result<Self> {
+        if !path.is_absolute() {
+            return Err(invalid_input("An absolute directory path is required"));
+        }
+        if path.file_name().is_some() {
+            check_parent_paths(path)?;
+        }
+        // Attribute-only opens are exempt from Windows sharing checks and do
+        // not prevent a concurrent directory rename. LIST_DIRECTORY participates
+        // as read access, so omitting SHARE_DELETE protects this directory.
+        let access = FILE_READ_ATTRIBUTES
+            | FILE_LIST_DIRECTORY
+            | if delete_capable { DELETE_ACCESS } else { 0 };
+        let file = OpenOptions::new()
+            .access_mode(access)
+            .share_mode(SHARE_READ_WRITE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path)?;
+        let metadata = file.metadata()?;
+        if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(invalid_input("A non-reparse directory is required"));
+        }
+        file_identity(&file)?;
+        Ok(Self {
+            file,
+            path: path.to_path_buf(),
+            delete_capable,
+            created_identity: None,
+        })
+    }
+
+    pub(super) fn lock_existing(path: &Path) -> io::Result<Self> {
+        Self::open_existing(path, false)
+    }
+
+    /// A validated journal must authorize every destructive use of this guard.
+    pub(super) fn lock_existing_mutable(path: &Path) -> io::Result<Self> {
+        Self::open_existing(path, true)
+    }
+
+    pub(super) fn lock_ancestors(path: &Path) -> io::Result<Vec<Self>> {
+        if !path.is_absolute() {
+            return Err(invalid_input("An absolute guarded path is required"));
+        }
+        let mut ancestors: Vec<_> = path.ancestors().skip(1).collect();
+        ancestors.reverse();
+        ancestors.into_iter().map(Self::lock_existing).collect()
+    }
+
+    /// Atomically create a directory and receive its handle. A path-based
+    /// CreateDirectory followed by open would not prove creation ownership.
+    #[cfg(test)]
+    pub(super) fn create_new(path: &Path) -> io::Result<Self> {
+        check_parent_paths(path)?;
+        let parent = Self::lock_existing(
+            path.parent()
+                .ok_or_else(|| invalid_input("Missing directory parent"))?,
+        )?;
+        Self::create_new_in(
+            &parent,
+            path.file_name()
+                .ok_or_else(|| invalid_input("A single directory basename is required"))?,
+        )
+    }
+
+    /// Reuse a held parent, including a DELETE-capable transaction directory.
+    /// Reopening that parent with share3 would conflict with its own guard.
+    pub(super) fn create_new_in(parent: &Self, basename: &std::ffi::OsStr) -> io::Result<Self> {
+        let mut name: Vec<u16> = basename.encode_wide().collect();
+        if basename == std::ffi::OsStr::new(".")
+            || basename == std::ffi::OsStr::new("..")
+            || name.is_empty()
+            || name.iter().any(|value| matches!(*value, 0 | 47 | 58 | 92))
+        {
+            return Err(invalid_input(
+                "The directory basename is not a single NT name",
+            ));
+        }
+        let length = name
+            .len()
+            .checked_mul(size_of::<u16>())
+            .and_then(|bytes| u16::try_from(bytes).ok())
+            .ok_or_else(|| invalid_input("The directory basename exceeds UNICODE_STRING"))?;
+        let mut unicode = UnicodeString {
+            length,
+            maximum_length: length,
+            buffer: name.as_mut_ptr(),
+        };
+        let mut attributes = ObjectAttributes {
+            length: size_of::<ObjectAttributes>() as u32,
+            root_directory: parent.file.as_raw_handle(),
+            object_name: &mut unicode,
+            attributes: 0x40, // OBJ_CASE_INSENSITIVE
+            security_descriptor: std::ptr::null_mut(),
+            security_quality_of_service: std::ptr::null_mut(),
+        };
+        let mut status_block = IoStatusBlock {
+            status_or_pointer: 0,
+            information: 0,
+        };
+        let mut handle = std::ptr::null_mut();
+        // SAFETY: all SDK-layout inputs and their UTF-16 backing storage live
+        // for the synchronous call. RootDirectory is held, ObjectName is exactly
+        // one basename, FILE_CREATE cannot adopt or replace an existing object.
+        // No OPEN_REPARSE_POINT option is needed for an atomically NEW object;
+        // the held non-reparse parent and post-open metadata are still checked.
+        let status = unsafe {
+            nt_create_file(
+                &mut handle,
+                FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY | DELETE_ACCESS | 0x0010_0000, // SYNCHRONIZE
+                &mut attributes,
+                &mut status_block,
+                std::ptr::null_mut(),
+                0x80, // FILE_ATTRIBUTE_NORMAL
+                SHARE_READ_WRITE,
+                2,        // FILE_CREATE
+                1 | 0x20, // FILE_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if status < 0 {
+            // NtCreateFile returns NTSTATUS; GetLastError here would be stale.
+            let error = unsafe { rtl_nt_status_to_dos_error(status) };
+            return Err(io::Error::from_raw_os_error(error as i32));
+        }
+        if handle.is_null() || handle as isize == -1 {
+            return Err(io::Error::other(
+                "NT creation returned no owned directory handle",
+            ));
+        }
+        // SAFETY: a successful NT call transferred this newly opened handle to
+        // the caller. File is its unique Rust owner and closes every error path.
+        let file = unsafe { File::from_raw_handle(handle) };
+        if status_block.information != 2 {
+            // FILE_CREATED
+            return Err(io::Error::other(
+                "NT creation did not prove FILE_CREATED ownership",
+            ));
+        }
+        let metadata = file.metadata()?;
+        if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(invalid_input(
+                "The new directory handle is not an ordinary directory",
+            ));
+        }
+        let created_identity = file_identity(&file)?;
+        Ok(Self {
+            file,
+            path: parent.path.join(basename),
+            delete_capable: true,
+            created_identity: Some(created_identity),
+        })
+    }
+
+    pub(super) fn identity(&self) -> io::Result<DirectoryIdentity> {
+        file_identity(&self.file)
+    }
+
+    /// Diagnostic only: directory identity and journal authorization are separate.
+    pub(super) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    #[cfg(test)]
+    fn rename_no_replace(&mut self, target: &Path) -> io::Result<()> {
+        if !self.delete_capable {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Directory guard has no rename authorization",
+            ));
+        }
+        self.path = WindowsExclusiveFile::rename_held_no_replace(&self.file, target)?;
+        Ok(())
+    }
+
+    pub(super) fn delete_owned_empty(self, expected: &DirectoryIdentity) -> io::Result<()> {
+        if self.created_identity.as_ref() != Some(expected) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Directory was not atomically created by this guard",
+            ));
+        }
+        self.delete_matching_empty(expected)
+    }
+
+    /// Matching identity is necessary, never sufficient transaction authority.
+    /// The caller must validate the persistent journal before calling this.
+    pub(super) fn delete_matching_empty(self, expected: &DirectoryIdentity) -> io::Result<()> {
+        if !self.delete_capable {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Read-only directory guard cannot delete",
+            ));
+        }
+        if self.identity()? != *expected {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Directory identity mismatch; directory preserved",
+            ));
+        }
+        delete_held(&self.file)
     }
 }
 
@@ -710,5 +1161,244 @@ mod tests {
         fs::rename(&displaced, &original.root).unwrap();
         remove_fixture(&original).unwrap();
         remove_fixture(&other).unwrap();
+    }
+
+    #[test]
+    fn fingerprint_detects_a_real_commit_on_the_same_file_id_and_guards_deletion() {
+        let root = fixture("fingerprint");
+        let database = root.join("versioned.sqlite3");
+        let conn = Connection::open(&database).unwrap();
+        conn.execute_batch("CREATE TABLE marker(value TEXT); INSERT INTO marker VALUES('before'); CREATE TABLE payload(value BLOB); INSERT INTO payload VALUES(zeroblob(200000));").unwrap();
+        drop(conn);
+        let mut first = WindowsExclusiveFile::lock_existing(&database).unwrap();
+        let before = first.fingerprint().unwrap();
+        assert!(before.size > 64 * 1024);
+        assert_eq!(before, first.fingerprint().unwrap());
+        assert_eq!(first.path(), database);
+        drop(first);
+
+        let conn = Connection::open(&database).unwrap();
+        conn.execute_batch("BEGIN IMMEDIATE; UPDATE marker SET value='after-real-commit'; COMMIT;")
+            .unwrap();
+        drop(conn);
+        let mut updated = WindowsExclusiveFile::lock_existing(&database).unwrap();
+        let after = updated.fingerprint().unwrap();
+        assert_eq!(before.volume_serial, after.volume_serial);
+        assert_eq!(before.file_id, after.file_id);
+        assert_ne!(before.sha256, after.sha256);
+        assert_eq!(
+            updated.delete_matching(&before).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        let conn =
+            Connection::open_with_flags(&database, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        assert_eq!(
+            conn.query_row("SELECT value FROM marker", [], |row| row
+                .get::<_, String>(0))
+                .unwrap(),
+            "after-real-commit"
+        );
+        drop(conn);
+        let preserved = root.join("preserved.raw");
+        fs::copy(&database, &preserved).unwrap();
+        let preserved_bytes = fs::read(&preserved).unwrap();
+        assert_eq!(
+            format!("{:x}", Sha256::digest(&preserved_bytes)),
+            after.sha256
+        );
+        let current = WindowsExclusiveFile::lock_existing(&database).unwrap();
+        current.delete_matching(&after).unwrap();
+        assert!(!database.exists());
+        assert_eq!(fs::read(&preserved).unwrap(), preserved_bytes);
+        remove_fixture(&root).unwrap();
+    }
+
+    #[test]
+    fn held_metadata_reads_enforce_the_explicit_limit() {
+        let root = fixture("limited-read");
+        let path = root.join("manifest.json");
+        let mut held = WindowsExclusiveFile::create_new(&path).unwrap();
+        held.write_created(b"12345").unwrap();
+        assert_eq!(
+            held.read_limited(4).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(held.read_limited(5).unwrap(), b"12345");
+        held.write_created(b"").unwrap();
+        assert!(held.read_limited(0).unwrap().is_empty());
+        held.delete_owned().unwrap();
+        remove_fixture(&root).unwrap();
+    }
+
+    #[test]
+    fn optional_database_still_locks_existing_sidecars_and_transfers_only_held_roles() {
+        let root = fixture("optional-db");
+        let database = root.join("missing.sqlite3");
+        let wal = database.with_extension("sqlite3-wal");
+        let moved = root.join("held-wal.raw");
+        fs::write(&wal, b"existing sidecar without a main file").unwrap();
+        let mut bundle = ExclusiveBundle::lock_optional_database(&database).unwrap();
+        assert!(bundle.files_mut()[0].is_none());
+        sharing_denied(File::open(&wal).unwrap_err());
+        assert_eq!(
+            bundle
+                .copy_probe_into(&root.join("no-db-probe"))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotFound
+        );
+        assert!(!root.join("no-db-probe").exists());
+        bundle.check_missing_sidecars().unwrap();
+        bundle.files_mut()[1]
+            .as_mut()
+            .unwrap()
+            .rename_no_replace(&moved)
+            .unwrap();
+        let mut held_roles = bundle.into_files();
+        assert_eq!(
+            held_roles[1].as_mut().unwrap().read_bytes().unwrap(),
+            b"existing sidecar without a main file"
+        );
+        sharing_denied(File::open(&moved).unwrap_err());
+        fs::write(&wal, b"foreign new sidecar at the old name").unwrap();
+        drop(held_roles);
+        assert_eq!(
+            fs::read(&moved).unwrap(),
+            b"existing sidecar without a main file"
+        );
+        assert_eq!(
+            fs::read(&wal).unwrap(),
+            b"foreign new sidecar at the old name"
+        );
+        remove_fixture(&root).unwrap();
+    }
+
+    #[test]
+    fn directory_and_ancestor_guards_block_rename_but_allow_child_creation() {
+        let root = fixture("directory-guard");
+        let directory = root.join("existing");
+        let moved = root.join("renamed-existing");
+        fs::create_dir(&directory).unwrap();
+        let guard = DirectoryGuard::lock_existing(&directory).unwrap();
+        let identity = guard.identity().unwrap();
+        assert_eq!(guard.path(), directory);
+        sharing_denied(fs::rename(&directory, &moved).unwrap_err());
+        fs::write(
+            directory.join("new-child"),
+            b"a directory guard is not a namespace lock",
+        )
+        .unwrap();
+        sharing_denied(DirectoryGuard::lock_existing_mutable(&directory).unwrap_err());
+        assert_eq!(
+            guard.delete_matching_empty(&identity).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        let ancestors = DirectoryGuard::lock_ancestors(&directory.join("planned.sqlite3")).unwrap();
+        assert_eq!(ancestors.last().unwrap().path(), directory);
+        sharing_denied(fs::rename(&directory, &moved).unwrap_err());
+        fs::write(
+            directory.join("another-child"),
+            b"new child remains possible",
+        )
+        .unwrap();
+        drop(ancestors);
+        fs::rename(&directory, &moved).unwrap();
+        assert_eq!(
+            fs::read(moved.join("new-child")).unwrap(),
+            b"a directory guard is not a namespace lock"
+        );
+        remove_fixture(&root).unwrap();
+    }
+
+    #[test]
+    fn rename_targets_of_every_utf16_buffer_alignment_are_exact() {
+        let root = fixture("rename-alignment");
+        for padding in 0..8 {
+            let source = root.join(format!("source-{padding}"));
+            let target_name = format!("精确目标-{}", "x".repeat(padding));
+            let target = root.join(&target_name);
+            let mut file = WindowsExclusiveFile::create_new(&source).unwrap();
+            file.write_created(b"alignment sentinel").unwrap();
+            let before = file.fingerprint().unwrap();
+            file.rename_no_replace(&target).unwrap();
+            assert_eq!(file.fingerprint().unwrap(), before);
+            drop(file);
+            assert_eq!(fs::read(&target).unwrap(), b"alignment sentinel");
+            assert!(fs::read_dir(&root.root)
+                .unwrap()
+                .any(|entry| entry.unwrap().file_name() == std::ffi::OsStr::new(&target_name)));
+            assert!(!source.exists());
+        }
+        assert_eq!(fs::read_dir(&root.root).unwrap().count(), 9);
+        remove_fixture(&root).unwrap();
+    }
+
+    #[test]
+    fn atomic_directory_creation_refuses_existing_names_and_empty_cleanup_is_guarded() {
+        let root = fixture("atomic-directory");
+        let foreign = root.join("foreign");
+        fs::create_dir(&foreign).unwrap();
+        fs::write(foreign.join("sentinel"), b"foreign directory contents").unwrap();
+        existing_target(DirectoryGuard::create_new(&foreign).unwrap_err());
+        let borrowed = DirectoryGuard::lock_existing_mutable(&foreign).unwrap();
+        let foreign_identity = borrowed.identity().unwrap();
+        assert_eq!(
+            borrowed
+                .delete_owned_empty(&foreign_identity)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(
+            fs::read(foreign.join("sentinel")).unwrap(),
+            b"foreign directory contents"
+        );
+        let blocked_parent = root.join("ordinary-file-parent");
+        fs::write(&blocked_parent, b"must not adopt or change this file").unwrap();
+        assert!(DirectoryGuard::create_new(&blocked_parent.join("child")).is_err());
+        assert_eq!(
+            fs::read(&blocked_parent).unwrap(),
+            b"must not adopt or change this file"
+        );
+
+        let owned = root.join("owned");
+        let renamed = root.join("owned-renamed");
+        let mut guard = DirectoryGuard::create_new(&owned).unwrap();
+        let identity = guard.identity().unwrap();
+        existing_target(guard.rename_no_replace(&foreign).unwrap_err());
+        guard.rename_no_replace(&renamed).unwrap();
+        assert_eq!(guard.identity().unwrap(), identity);
+        fs::write(
+            renamed.join("child"),
+            b"nonempty must survive deletion attempt",
+        )
+        .unwrap();
+        assert!(guard.delete_owned_empty(&identity).is_err());
+        assert_eq!(
+            fs::read(renamed.join("child")).unwrap(),
+            b"nonempty must survive deletion attempt"
+        );
+        fs::remove_file(renamed.join("child")).unwrap();
+        let journal_authorized = DirectoryGuard::lock_existing_mutable(&renamed).unwrap();
+        journal_authorized.delete_matching_empty(&identity).unwrap();
+        assert!(!renamed.exists());
+        let empty = root.join("owned-empty");
+        let owned_empty = DirectoryGuard::create_new(&empty).unwrap();
+        let empty_identity = owned_empty.identity().unwrap();
+        owned_empty.delete_owned_empty(&empty_identity).unwrap();
+        assert!(!empty.exists());
+        let owned_parent = DirectoryGuard::create_new(&root.join("owned-parent")).unwrap();
+        let parent_identity = owned_parent.identity().unwrap();
+        let owned_child =
+            DirectoryGuard::create_new_in(&owned_parent, std::ffi::OsStr::new("owned-child"))
+                .unwrap();
+        let child_identity = owned_child.identity().unwrap();
+        owned_child.delete_owned_empty(&child_identity).unwrap();
+        owned_parent.delete_owned_empty(&parent_identity).unwrap();
+        assert_eq!(
+            fs::read(foreign.join("sentinel")).unwrap(),
+            b"foreign directory contents"
+        );
+        remove_fixture(&root).unwrap();
     }
 }

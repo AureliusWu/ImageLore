@@ -2,6 +2,20 @@
 
 日期：2026-09-30；执行更新：2026-10-01（Asia/Shanghai）。范围：A1 启动保护、A2 备份/恢复、A3 历史迁移、A4 自动备份后端。全部故障库与哨兵数据位于独立临时目录，未打开用户正常资料库。
 
+## 2026-10-20 Windows 恢复事务离线验证
+
+Windows 恢复替换现已接入持续独占句柄、禁止覆盖的同句柄移动和持久身份记录。新协议使用 `restore.transaction`，不复用缺少对象身份的旧 `restore.rollback`。完整协议、旧格式处理和验证边界见[Windows 恢复事务](V0_26_RESTORE_TRANSACTION.md)；下文旧替换流程保留为历史记录，不能据此推断当前 Windows 的清理行为。
+
+隔离候选实际新编译的完整 library suite 为 **193 passed / 0 failed / 3 原有 ignored**（89.67 秒），61 项构建输入在检查前后保持一致，封存测试 EXE SHA256 为 `a03d2b50d1b6b5444fb720ee7ac2060ca8b05866c1280fde270bfaacc042b898`。当前源码的 locked/offline check、包含测试代码的严格 Clippy `--lib --tests -- -D warnings`、fmt 和 diff 检查通过。原始输出、源码绑定、失败现场及测试 EXE 均在仓库外 `<private-evidence>/restore-guarded-transaction-20261018-01`；最终记录为 `full-full-20261020-05`、`clippy-clippy-20261020-05`、`check-check-20261020-04`。
+
+先前四项真实文件丢失 RED 的冻结源码和产物继续保留。GREEN 区分两类结果：最终守卫取得前修复的健康库会阻止自动恢复；守卫取得后的原件修复、安装库写入及改名被实际拒绝，不能声称此时产生了新提交。Reserved 后真实创建的外来库或 WAL 则保留双方，并证明重复两次重启处理仍不改变全部活动/预留/暂存/pending/raw/记录文件的字节与 mtime。独立测试进程实际尝试 SQLite 打开、文件写入、改名和 raw 父目录改名均被拒绝；正常恢复结束后实际写入成功。
+
+补充直接覆盖释放句柄后的间隙：在提交前失败与已写入提交记录两种状态下，真实 SQLite 对同一已安装文件提交新 marker 和资产，确认 File ID 不变、SHA 改变。正式续作与两次再次启动均拒绝删除或回退这些新编辑，活动库、pending、原件、raw 和记录保持。此前 `full-full-20261020-03` 的 192 项通过及独立产物继续作为中间结果保留。
+
+首轮完整测试 **184 passed / 7 failed / 3 ignored** 单独保留，暴露属性访问目录句柄没有阻止改名、部分 UTF-16 长度下重命名目标错误及原件保全错误缺少上下文。修复加入真正参与共享检查的目录读取权限、显式字符串终止空间和八种中文目标长度回归；未通过放宽数据保全断言消除失败。
+
+这仍不关闭 A1/A2：旧 `finish_pending_stage` / `stage_restore_at` 的 pending/previous 入口还需要独立并发所有权保护；旧 `restore.rollback` 无身份记录时保留现场并要求人工核对。进程真实中断、物理断电、50k/75k 性能、桌面恢复、安装器及 updater 继续各自验收。没有构建或推广应用 EXE，也没有更改当前桌面快捷方式或默认用户资料库。
+
 ## 2026-10-18 离线补充验证
 
 用户暂缓桌面验收期间，完成最新恢复候选临时不可用的文件库回归与修复。生产源码提交为 `525258bbbc71c1e2da382f034009a7d003aeec67`，`backup.rs` SHA256 为 `3cc0fc9460314565802d10a62ebdb5d9a639ec3ff25adc4273c6bb061a6e8dcc`。原始日志、RED/GREEN 源码、测试产物及终态回执保留在仓库外 `<private-evidence>/recovery-offline-20261018-01`。

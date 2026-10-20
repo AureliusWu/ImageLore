@@ -8,9 +8,14 @@ use std::{
 };
 use tauri::{Manager, State};
 
-// Isolated Windows primitive prototype; the restore transaction does not use it.
-#[cfg(all(test, windows))]
+#[cfg(windows)]
+mod guarded_restore;
+#[cfg(windows)]
+mod guarded_resume;
+#[cfg(windows)]
 mod owned_handle;
+#[cfg(windows)]
+mod restore_journal;
 
 const MAX_BACKUPS: usize = 10;
 const AUTO_INTERVAL: i64 = 24 * 3600;
@@ -727,11 +732,17 @@ fn ensure_auto_at(state: &AppState, timestamp: i64) -> Result<Option<BackupRecor
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RestoreStep {
+    #[cfg(all(test, windows))]
+    StageAllocated,
     Staged,
     Preserved,
     Probed,
+    #[cfg(test)]
+    WriteChecked,
     Reserved,
     Installed,
+    #[cfg(all(test, windows))]
+    Released,
 }
 
 fn companions(database: &Path) -> [PathBuf; 3] {
@@ -742,6 +753,7 @@ fn companions(database: &Path) -> [PathBuf; 3] {
     ]
 }
 
+#[cfg(not(windows))]
 fn preserve_originals(database: &Path, dir: &Path, prefix: &str) -> Result<(), String> {
     #[cfg(test)]
     let _preserve = tests::phase_profile::enter("restore.preserve_originals", Some(database));
@@ -775,6 +787,22 @@ fn rollback_dir(database: &Path) -> Result<PathBuf, String> {
     Ok(parent.join("restore.rollback"))
 }
 
+#[cfg(windows)]
+fn finish_or_rollback(database: &Path, data_dir: &Path) -> Result<(), String> {
+    guarded_resume::finish(database, data_dir)?;
+    let legacy = rollback_dir(database)?;
+    if legacy.try_exists().map_err(|e| e.to_string())? {
+        // The legacy format has no recorded identities. It cannot authorize
+        // deleting a new active library or consuming an unrelated pending DB.
+        if database.try_exists().map_err(|e| e.to_string())? {
+            reject_unsupported_readable_schema(database)?;
+        }
+        return Err("发现旧版 restore.rollback 恢复事务，缺少原件身份记录；已保留活动库、预留原件及待恢复候选，需要人工核对后处理".into());
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
 fn finish_or_rollback(database: &Path, data_dir: &Path) -> Result<(), String> {
     #[cfg(test)]
     let _finish = tests::phase_profile::enter("restore.finish_or_rollback", None);
@@ -926,6 +954,7 @@ pub(crate) fn integrity_probe_copy(database: &Path) -> rusqlite::Result<String> 
     result
 }
 
+#[cfg(any(test, not(windows)))]
 fn integrity_is_corrupt(database: &Path) -> bool {
     match integrity_probe_copy(database) {
         Ok(status) => status != "ok",
@@ -992,6 +1021,7 @@ fn supported_marker(value: &str) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(any(test, not(windows)))]
 fn check_restore_write_access(database: &Path, allow_corrupt: bool) -> Result<bool, String> {
     #[cfg(test)]
     let _access = tests::phase_profile::enter("restore.write_access", Some(database));
@@ -1050,6 +1080,29 @@ fn check_restore_write_access(database: &Path, allow_corrupt: bool) -> Result<bo
     result
 }
 
+#[cfg(windows)]
+fn replace_library(
+    database: &Path,
+    data_dir: &Path,
+    source: &Path,
+    preserve_dir: &Path,
+    prefix: &str,
+    is_pending: bool,
+    hook: impl Fn(RestoreStep) -> Result<(), String>,
+) -> Result<(), String> {
+    finish_or_rollback(database, data_dir)?;
+    guarded_restore::replace(
+        database,
+        data_dir,
+        source,
+        preserve_dir,
+        prefix,
+        is_pending,
+        hook,
+    )
+}
+
+#[cfg(not(windows))]
 fn replace_library(
     database: &Path,
     data_dir: &Path,
@@ -1086,6 +1139,10 @@ fn replace_library(
             let actual_corrupt = check_restore_write_access(database, corrupt)?;
             if !is_pending && !actual_corrupt {
                 return Err("自动恢复原库锁内复核未确认损坏，已保留当前资料库与备份候选".into());
+            }
+            #[cfg(test)]
+            if actual_corrupt {
+                hook(RestoreStep::WriteChecked)?;
             }
             if !actual_corrupt {
                 validate(database)?;
@@ -3337,13 +3394,16 @@ mod tests {
 
     #[test]
     fn all_restore_failure_steps_keep_original_readable_and_pending_retryable() {
-        for failpoint in [
+        let mut failpoints = vec![
             RestoreStep::Staged,
             RestoreStep::Preserved,
             RestoreStep::Probed,
             RestoreStep::Reserved,
             RestoreStep::Installed,
-        ] {
+        ];
+        #[cfg(windows)]
+        failpoints.push(RestoreStep::StageAllocated);
+        for failpoint in failpoints {
             let root = test_root("restore-failure");
             let database = root.join("library.sqlite3");
             let pending = root.join("restore.pending.sqlite3");
@@ -3387,12 +3447,39 @@ mod tests {
         fs::create_dir(&reservation).unwrap();
         fs::rename(&database, reservation.join("database")).unwrap();
         fs::copy(&pending, &database).unwrap(); // Process died after installation, before commit.
-        finish_or_rollback(&database, &root).unwrap();
-        assert_eq!(read_marker(&database), "original");
-        assert_eq!(read_marker(&pending), "candidate");
-        apply_pending_restore(&database, &root, &root.join("backups")).unwrap();
-        assert_eq!(read_marker(&database), "candidate");
-        fs::remove_dir_all(root).unwrap();
+        #[cfg(windows)]
+        {
+            let tracked = [&database, &pending, &reservation.join("database")];
+            let before: Vec<_> = tracked
+                .iter()
+                .map(|path| {
+                    (
+                        fs::read(path).unwrap(),
+                        fs::metadata(path).unwrap().modified().unwrap(),
+                    )
+                })
+                .collect();
+            assert!(finish_or_rollback(&database, &root)
+                .unwrap_err()
+                .contains("旧版 restore.rollback"));
+            assert!(apply_pending_restore(&database, &root, &root.join("backups")).is_err());
+            for (path, (bytes, modified)) in tracked.iter().zip(before) {
+                assert_eq!(fs::read(path).unwrap(), bytes);
+                assert_eq!(fs::metadata(path).unwrap().modified().unwrap(), modified);
+            }
+            assert_eq!(read_marker(&database), "candidate");
+            assert_eq!(read_marker(&reservation.join("database")), "original");
+            fs::remove_dir_all(root).unwrap();
+        }
+        #[cfg(not(windows))]
+        {
+            finish_or_rollback(&database, &root).unwrap();
+            assert_eq!(read_marker(&database), "original");
+            assert_eq!(read_marker(&pending), "candidate");
+            apply_pending_restore(&database, &root, &root.join("backups")).unwrap();
+            assert_eq!(read_marker(&database), "candidate");
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[test]
@@ -4152,6 +4239,479 @@ mod tests {
     }
 
     #[test]
+    fn automatic_recovery_keeps_a_library_repaired_after_final_write_check() {
+        // Prove ordinary recovery independently before the unsafe race assertion.
+        for repair_after_check in [false, true] {
+            let root = test_root("auto-recovery-final-check-race");
+            let database = root.join("library.sqlite3");
+            let backup = root.join("backups/candidate.sqlite3");
+            let conn = seed(&database, "initial-integrity-damage");
+            let mode: String = conn
+                .query_row("PRAGMA journal_mode=DELETE", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(mode, "delete");
+            // Reuse the real single-row index damage from the future-schema test,
+            // keeping the complete supported schema readable instead of NOTADB.
+            conn.execute_batch("CREATE TABLE final_check_sentinel(value INTEGER); INSERT INTO final_check_sentinel VALUES(123); CREATE INDEX final_check_index ON final_check_sentinel(value);").unwrap();
+            let page_size: usize = conn
+                .query_row("PRAGMA page_size", [], |row| row.get(0))
+                .unwrap();
+            let root_page: usize = conn
+                .query_row(
+                    "SELECT rootpage FROM sqlite_master WHERE name='final_check_index'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            drop(conn);
+            let mut damaged = fs::read(&database).unwrap();
+            let page = (root_page - 1) * page_size;
+            assert_eq!(damaged[page], 10);
+            let cell = u16::from_be_bytes([damaged[page + 8], damaged[page + 9]]) as usize;
+            assert_eq!(&damaged[page + cell..page + cell + 5], &[4, 3, 1, 9, 123]);
+            damaged[page + cell + 4] = 124;
+            fs::write(&database, &damaged).unwrap();
+
+            // A real write transaction can read schema 11 and report integrity
+            // damage. The production check must take its integrity path, not an
+            // early DatabaseCorrupt/NotADatabase return while opening or locking.
+            let probe =
+                Connection::open_with_flags(&database, OpenFlags::SQLITE_OPEN_READ_WRITE).unwrap();
+            probe.execute_batch("BEGIN IMMEDIATE;").unwrap();
+            assert_eq!(
+                probe
+                    .query_row(
+                        "SELECT value FROM app_meta WHERE key='schema_version'",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .unwrap(),
+                "11"
+            );
+            probe
+                .pragma_update(None, "cache_size", -VALIDATION_CACHE_KIB)
+                .unwrap();
+            let integrity: String = probe
+                .query_row("PRAGMA integrity_check(1)", [], |row| row.get(0))
+                .unwrap();
+            assert_ne!(integrity, "ok");
+            probe.execute_batch("ROLLBACK;").unwrap();
+            drop(probe);
+            assert!(check_restore_write_access(&database, true).unwrap());
+            assert_eq!(fs::read(&database).unwrap(), damaged);
+            drop(seed(&backup, "old-backup"));
+            let candidate = fs::read(&backup).unwrap();
+            let candidate_modified = fs::metadata(&backup).unwrap().modified().unwrap();
+            let repaired: std::cell::RefCell<Option<(Vec<u8>, SystemTime)>> =
+                std::cell::RefCell::new(None);
+            #[cfg(windows)]
+            let repair_blocked = std::cell::Cell::new(false);
+
+            let result = replace_library(
+                &database,
+                &root,
+                &backup,
+                &root.join("recovery"),
+                "final-check-race",
+                false,
+                |step| {
+                    if repair_after_check && step == RestoreStep::WriteChecked {
+                        #[cfg(windows)]
+                        {
+                            let error = fs::remove_file(&database).unwrap_err();
+                            assert!(matches!(error.raw_os_error(), Some(5 | 32)));
+                            let error = Connection::open_with_flags(
+                                &database,
+                                OpenFlags::SQLITE_OPEN_READ_WRITE,
+                            )
+                            .unwrap_err();
+                            assert!(matches!(error, rusqlite::Error::SqliteFailure(_, _)));
+                            repair_blocked.set(true);
+                            return Ok(());
+                        }
+                        #[cfg(not(windows))]
+                        {
+                            fs::remove_file(&database).unwrap();
+                            let conn = seed(&database, "repaired-after-write-check");
+                            conn.execute("INSERT INTO assets(id,path,name,portable_id,created_at,updated_at) VALUES(2,'synthetic/post-check.png','post-check-write','post-check-id',2,2)", []).unwrap();
+                            drop(conn);
+                            validate_typed(&database).unwrap();
+                            *repaired.borrow_mut() = Some((
+                                fs::read(&database).unwrap(),
+                                fs::metadata(&database).unwrap().modified().unwrap(),
+                            ));
+                        }
+                    }
+                    Ok(())
+                },
+            );
+            #[cfg(windows)]
+            if repair_after_check {
+                assert!(
+                    repair_blocked.get(),
+                    "The real post-check repair attempt must be denied by the held original"
+                );
+                result.unwrap();
+                assert_eq!(read_marker(&database), "old-backup");
+                assert_eq!(fs::read(&backup).unwrap(), candidate);
+                assert_eq!(
+                    fs::metadata(&backup).unwrap().modified().unwrap(),
+                    candidate_modified
+                );
+                assert!(fs::read_dir(root.join("recovery"))
+                    .unwrap()
+                    .any(|entry| fs::read(entry.unwrap().path()).unwrap() == damaged));
+                assert!(!root.join("restore.transaction").exists());
+                fs::remove_dir_all(root).unwrap();
+                continue;
+            }
+            if !repair_after_check {
+                result.unwrap();
+                assert_eq!(read_marker(&database), "old-backup");
+                assert_eq!(fs::read(&backup).unwrap(), candidate);
+                assert_eq!(
+                    fs::metadata(&backup).unwrap().modified().unwrap(),
+                    candidate_modified
+                );
+                assert!(fs::read_dir(root.join("recovery"))
+                    .unwrap()
+                    .any(|entry| fs::read(entry.unwrap().path()).unwrap() == damaged));
+                fs::remove_dir_all(root).unwrap();
+                continue;
+            }
+
+            let (repaired_bytes, repaired_modified) = repaired
+                .into_inner()
+                .expect("The final write-check repair hook must run");
+            // Show any actual loss of the new business value before asserting the
+            // return status; a generic error alone is not preservation evidence.
+            assert_eq!(
+                read_marker(&database),
+                "repaired-after-write-check",
+                "The library repaired after the final write check was overwritten; result={result:?}"
+            );
+            assert!(fs::read(&database).unwrap() == repaired_bytes);
+            assert_eq!(
+                fs::metadata(&database).unwrap().modified().unwrap(),
+                repaired_modified
+            );
+            let conn =
+                Connection::open_with_flags(&database, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+            assert_eq!(
+                conn.query_row("SELECT name FROM assets WHERE id=2", [], |row| row
+                    .get::<_, String>(0))
+                    .unwrap(),
+                "post-check-write"
+            );
+            drop(conn);
+            assert!(result.is_err());
+            assert_eq!(fs::read(&backup).unwrap(), candidate);
+            assert_eq!(
+                fs::metadata(&backup).unwrap().modified().unwrap(),
+                candidate_modified
+            );
+            assert!(!rollback_dir(&database).unwrap().exists());
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn restore_conflict_reserved_new_library_survives_install_attempt() {
+        for create_foreign in [false, true] {
+            let root = test_root("restore-conflict-reserved-install");
+            let database = root.join("library.sqlite3");
+            let pending = root.join("restore.pending.sqlite3");
+            drop(seed(&database, "original-before-restore"));
+            drop(seed(&pending, "restore-candidate"));
+            let candidate = fs::read(&pending).unwrap();
+            let candidate_modified = fs::metadata(&pending).unwrap().modified().unwrap();
+            let foreign = std::cell::RefCell::new(None);
+            let result = replace_library(
+                &database,
+                &root,
+                &pending,
+                &root.join("backups"),
+                "reserved-conflict",
+                true,
+                |step| {
+                    if create_foreign && step == RestoreStep::Reserved {
+                        assert!(!database.exists());
+                        #[cfg(windows)]
+                        assert!(root.join("restore.transaction/database").is_file());
+                        #[cfg(not(windows))]
+                        assert!(rollback_dir(&database).unwrap().join("database").is_file());
+                        let conn = seed(&database, "foreign-after-reserve-ok");
+                        conn.execute_batch("BEGIN IMMEDIATE;").unwrap();
+                        conn.execute("INSERT INTO assets(id,path,name,portable_id,created_at,updated_at) VALUES(2,'synthetic/foreign-install.png','foreign-install-write','foreign-install-id',2,2)", []).unwrap();
+                        conn.execute_batch("COMMIT;").unwrap();
+                        drop(conn);
+                        validate_typed(&database).unwrap();
+                        *foreign.borrow_mut() = Some((
+                            fs::read(&database).unwrap(),
+                            fs::metadata(&database).unwrap().modified().unwrap(),
+                        ));
+                    }
+                    Ok(())
+                },
+            );
+            if !create_foreign {
+                // Prove the independent ordinary pending restore first.
+                result.unwrap();
+                assert_eq!(read_marker(&database), "restore-candidate");
+                assert!(!pending.exists());
+                fs::remove_dir_all(root).unwrap();
+                continue;
+            }
+
+            let (foreign_bytes, foreign_modified) = foreign
+                .into_inner()
+                .expect("The Reserved hook must commit the foreign library");
+            assert_eq!(
+                read_marker(&database),
+                "foreign-after-reserve-ok",
+                "Installation overwrote the newly committed foreign library; result={result:?}"
+            );
+            assert!(fs::read(&database).unwrap() == foreign_bytes);
+            assert_eq!(
+                fs::metadata(&database).unwrap().modified().unwrap(),
+                foreign_modified
+            );
+            let conn =
+                Connection::open_with_flags(&database, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+            assert_eq!(
+                conn.query_row("SELECT name FROM assets WHERE id=2", [], |row| row
+                    .get::<_, String>(0))
+                    .unwrap(),
+                "foreign-install-write"
+            );
+            drop(conn);
+            assert!(fs::read(&pending).unwrap() == candidate);
+            assert_eq!(
+                fs::metadata(&pending).unwrap().modified().unwrap(),
+                candidate_modified
+            );
+            assert!(result.is_err());
+            #[cfg(windows)]
+            assert_guarded_conflict_retains_every_file_on_restart(&root);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn restore_conflict_reserved_new_library_survives_rollback_error() {
+        for create_foreign in [false, true] {
+            let root = test_root("restore-conflict-reserved-rollback");
+            let database = root.join("library.sqlite3");
+            let pending = root.join("restore.pending.sqlite3");
+            drop(seed(&database, "original-before-restore"));
+            drop(seed(&pending, "restore-candidate"));
+            let candidate = fs::read(&pending).unwrap();
+            let candidate_modified = fs::metadata(&pending).unwrap().modified().unwrap();
+            let foreign = std::cell::RefCell::new(None);
+            let result = replace_library(
+                &database,
+                &root,
+                &pending,
+                &root.join("backups"),
+                "rollback-conflict",
+                true,
+                |step| {
+                    if create_foreign && step == RestoreStep::Reserved {
+                        assert!(!database.exists());
+                        #[cfg(windows)]
+                        assert!(root.join("restore.transaction/database").is_file());
+                        #[cfg(not(windows))]
+                        assert!(rollback_dir(&database).unwrap().join("database").is_file());
+                        let conn = seed(&database, "foreign-before-rollback");
+                        conn.execute_batch("BEGIN IMMEDIATE;").unwrap();
+                        conn.execute("INSERT INTO assets(id,path,name,portable_id,created_at,updated_at) VALUES(2,'synthetic/foreign-rollback.png','foreign-rollback-write','foreign-rollback-id',2,2)", []).unwrap();
+                        conn.execute_batch("COMMIT;").unwrap();
+                        drop(conn);
+                        validate_typed(&database).unwrap();
+                        *foreign.borrow_mut() = Some((
+                            fs::read(&database).unwrap(),
+                            fs::metadata(&database).unwrap().modified().unwrap(),
+                        ));
+                        return Err("injected error after foreign Reserved commit".into());
+                    }
+                    Ok(())
+                },
+            );
+            if !create_foreign {
+                result.unwrap();
+                assert_eq!(read_marker(&database), "restore-candidate");
+                assert!(!pending.exists());
+                fs::remove_dir_all(root).unwrap();
+                continue;
+            }
+
+            let (foreign_bytes, foreign_modified) = foreign
+                .into_inner()
+                .expect("The Reserved hook must commit the foreign library before failing");
+            assert_eq!(
+                read_marker(&database),
+                "foreign-before-rollback",
+                "Rollback overwrote the newly committed foreign library; result={result:?}"
+            );
+            assert!(fs::read(&database).unwrap() == foreign_bytes);
+            assert_eq!(
+                fs::metadata(&database).unwrap().modified().unwrap(),
+                foreign_modified
+            );
+            let conn =
+                Connection::open_with_flags(&database, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+            assert_eq!(
+                conn.query_row("SELECT name FROM assets WHERE id=2", [], |row| row
+                    .get::<_, String>(0))
+                    .unwrap(),
+                "foreign-rollback-write"
+            );
+            drop(conn);
+            assert!(fs::read(&pending).unwrap() == candidate);
+            assert_eq!(
+                fs::metadata(&pending).unwrap().modified().unwrap(),
+                candidate_modified
+            );
+            assert!(result
+                .unwrap_err()
+                .contains("injected error after foreign Reserved commit"));
+            #[cfg(windows)]
+            assert_guarded_conflict_retains_every_file_on_restart(&root);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn restore_conflict_installed_new_commit_survives_rollback_error() {
+        for commit_after_install in [false, true] {
+            let root = test_root("restore-conflict-installed-update");
+            let database = root.join("library.sqlite3");
+            let pending = root.join("restore.pending.sqlite3");
+            drop(seed(&database, "original-before-restore"));
+            drop(seed(&pending, "restore-candidate"));
+            let candidate = fs::read(&pending).unwrap();
+            let candidate_modified = fs::metadata(&pending).unwrap().modified().unwrap();
+            let updated: std::cell::RefCell<Option<(Vec<u8>, SystemTime)>> =
+                std::cell::RefCell::new(None);
+            #[cfg(windows)]
+            let commit_blocked = std::cell::Cell::new(false);
+            #[cfg(windows)]
+            let original_bytes = fs::read(&database).unwrap();
+            let result = replace_library(
+                &database,
+                &root,
+                &pending,
+                &root.join("backups"),
+                "installed-conflict",
+                true,
+                |step| {
+                    if commit_after_install && step == RestoreStep::Installed {
+                        #[cfg(windows)]
+                        {
+                            let error = Connection::open_with_flags(
+                                &database,
+                                OpenFlags::SQLITE_OPEN_READ_WRITE,
+                            )
+                            .unwrap_err();
+                            assert!(matches!(error, rusqlite::Error::SqliteFailure(_, _)));
+                            let error = fs::remove_file(&database).unwrap_err();
+                            assert!(matches!(error.raw_os_error(), Some(5 | 32)));
+                            commit_blocked.set(true);
+                            return Err("injected error after blocked installed-file write".into());
+                        }
+                        #[cfg(not(windows))]
+                        {
+                            assert_eq!(read_marker(&database), "restore-candidate");
+                            // Open the already installed file without CREATE. There
+                            // is no remove, rename, VACUUM or replacement here.
+                            let conn = Connection::open_with_flags(
+                                &database,
+                                OpenFlags::SQLITE_OPEN_READ_WRITE,
+                            )
+                            .unwrap();
+                            conn.execute_batch("BEGIN IMMEDIATE;").unwrap();
+                            conn.execute("UPDATE marker SET value='new-commit-after-install'", [])
+                                .unwrap();
+                            conn.execute("INSERT INTO assets(id,path,name,portable_id,created_at,updated_at) VALUES(2,'synthetic/installed-update.png','installed-new-write','installed-new-id',2,2)", []).unwrap();
+                            conn.execute_batch("COMMIT;").unwrap();
+                            drop(conn);
+                            validate_typed(&database).unwrap();
+                            *updated.borrow_mut() = Some((
+                                fs::read(&database).unwrap(),
+                                fs::metadata(&database).unwrap().modified().unwrap(),
+                            ));
+                            return Err("injected error after installed-file new commit".into());
+                        }
+                    }
+                    Ok(())
+                },
+            );
+            #[cfg(windows)]
+            if commit_after_install {
+                assert!(
+                    commit_blocked.get(),
+                    "Installed-file new writes must be denied while the transaction owns it"
+                );
+                assert_eq!(read_marker(&database), "original-before-restore");
+                assert_eq!(fs::read(&database).unwrap(), original_bytes);
+                assert_eq!(fs::read(&pending).unwrap(), candidate);
+                assert_eq!(
+                    fs::metadata(&pending).unwrap().modified().unwrap(),
+                    candidate_modified
+                );
+                assert!(result
+                    .unwrap_err()
+                    .contains("injected error after blocked installed-file write"));
+                assert!(!root.join("restore.transaction").exists());
+                apply_pending_restore(&database, &root, &root.join("backups")).unwrap();
+                assert_eq!(read_marker(&database), "restore-candidate");
+                assert!(!pending.exists());
+                fs::remove_dir_all(root).unwrap();
+                continue;
+            }
+            if !commit_after_install {
+                result.unwrap();
+                assert_eq!(read_marker(&database), "restore-candidate");
+                assert!(!pending.exists());
+                fs::remove_dir_all(root).unwrap();
+                continue;
+            }
+
+            let (updated_bytes, updated_modified) = updated
+                .into_inner()
+                .expect("The Installed hook must commit new data in the installed file");
+            assert_eq!(
+                read_marker(&database),
+                "new-commit-after-install",
+                "Rollback discarded the installed file's later commit; result={result:?}"
+            );
+            assert!(fs::read(&database).unwrap() == updated_bytes);
+            assert_eq!(
+                fs::metadata(&database).unwrap().modified().unwrap(),
+                updated_modified
+            );
+            let conn =
+                Connection::open_with_flags(&database, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+            assert_eq!(
+                conn.query_row("SELECT name FROM assets WHERE id=2", [], |row| row
+                    .get::<_, String>(0))
+                    .unwrap(),
+                "installed-new-write"
+            );
+            drop(conn);
+            assert!(fs::read(&pending).unwrap() == candidate);
+            assert_eq!(
+                fs::metadata(&pending).unwrap().modified().unwrap(),
+                candidate_modified
+            );
+            assert!(result
+                .unwrap_err()
+                .contains("injected error after installed-file new commit"));
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
     fn committed_restore_unavailable_validation_keeps_originals_and_retries() {
         for state in ["pending", "recovery"] {
             let root = test_root("committed-restore-locked");
@@ -4198,19 +4758,39 @@ mod tests {
                     path
                 );
             }
+            #[cfg(not(windows))]
             assert!(result.unwrap_err().contains(&failure.to_string()));
+            #[cfg(windows)]
+            assert!(result.unwrap_err().contains("旧版 restore.rollback"));
 
             conn.execute_batch("ROLLBACK;").unwrap();
             drop(conn);
-            finish_or_rollback(&database, &root).unwrap();
-            assert_eq!(fs::read(&database).unwrap(), before[0].0);
-            assert_eq!(read_marker(&database), "installed-candidate");
-            assert!(!reservation.exists());
-            assert_eq!(pending.exists(), state == "recovery");
-            if pending.exists() {
-                assert_eq!(fs::read(&pending).unwrap(), before[1].0);
+            #[cfg(windows)]
+            {
+                assert!(finish_or_rollback(&database, &root)
+                    .unwrap_err()
+                    .contains("旧版 restore.rollback"));
+                for (path, (bytes, modified)) in tracked.iter().zip(&before) {
+                    assert_eq!(fs::read(path).unwrap(), *bytes);
+                    assert_eq!(fs::metadata(path).unwrap().modified().unwrap(), *modified);
+                }
+                assert_eq!(read_marker(&database), "installed-candidate");
+                assert_eq!(read_marker(&reserved), "reserved-original");
+                fs::remove_dir_all(root).unwrap();
+                continue;
             }
-            fs::remove_dir_all(root).unwrap();
+            #[cfg(not(windows))]
+            {
+                finish_or_rollback(&database, &root).unwrap();
+                assert_eq!(fs::read(&database).unwrap(), before[0].0);
+                assert_eq!(read_marker(&database), "installed-candidate");
+                assert!(!reservation.exists());
+                assert_eq!(pending.exists(), state == "recovery");
+                if pending.exists() {
+                    assert_eq!(fs::read(&pending).unwrap(), before[1].0);
+                }
+                fs::remove_dir_all(root).unwrap();
+            }
         }
     }
 
@@ -4236,12 +4816,36 @@ mod tests {
                     ));
                 }
 
-                finish_or_rollback(&database, &root).unwrap();
-                assert_eq!(fs::read(&database).unwrap(), original);
-                assert_eq!(read_marker(&database), "reserved-original");
-                assert_eq!(fs::read(&pending).unwrap(), candidate);
-                assert!(!reservation.exists());
-                fs::remove_dir_all(root).unwrap();
+                #[cfg(windows)]
+                {
+                    let installed = if missing {
+                        None
+                    } else {
+                        Some(fs::read(&database).unwrap())
+                    };
+                    let marker = fs::read(reservation.join("COMMITTED")).unwrap();
+                    assert!(finish_or_rollback(&database, &root)
+                        .unwrap_err()
+                        .contains("旧版 restore.rollback"));
+                    assert_eq!(fs::read(reservation.join("database")).unwrap(), original);
+                    assert_eq!(fs::read(&pending).unwrap(), candidate);
+                    assert_eq!(fs::read(reservation.join("COMMITTED")).unwrap(), marker);
+                    assert_eq!(database.exists(), !missing);
+                    if let Some(bytes) = installed {
+                        assert_eq!(fs::read(&database).unwrap(), bytes);
+                    }
+                    fs::remove_dir_all(root).unwrap();
+                    continue;
+                }
+                #[cfg(not(windows))]
+                {
+                    finish_or_rollback(&database, &root).unwrap();
+                    assert_eq!(fs::read(&database).unwrap(), original);
+                    assert_eq!(read_marker(&database), "reserved-original");
+                    assert_eq!(fs::read(&pending).unwrap(), candidate);
+                    assert!(!reservation.exists());
+                    fs::remove_dir_all(root).unwrap();
+                }
             }
         }
     }
@@ -4274,6 +4878,265 @@ mod tests {
             assert_eq!(fs::read(reservation.join("database")).unwrap(), reserved);
             assert_eq!(reservation.join("COMMITTED").exists(), committed);
             assert_eq!(read_marker(&database), "future-current");
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn guarded_writer_child_process() {
+        let Some(path) = std::env::var_os("IMAGELORE_GUARDED_WRITER_CHILD") else {
+            return;
+        };
+        let database = PathBuf::from(path);
+        assert!(database.is_absolute());
+        assert_eq!(database.file_name().unwrap(), "library.sqlite3");
+        let parent = fs::canonicalize(database.parent().unwrap()).unwrap();
+        let temporary = fs::canonicalize(std::env::temp_dir()).unwrap();
+        assert_eq!(parent.parent(), Some(temporary.as_path()));
+        assert!(parent
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("imagelore-guarded-child-"));
+        assert_eq!(
+            fs::read(parent.join("child-fixture.marker")).unwrap(),
+            b"synthetic guarded restore child fixture\n"
+        );
+        let sqlite =
+            Connection::open_with_flags(&database, OpenFlags::SQLITE_OPEN_READ_WRITE).unwrap_err();
+        assert_eq!(
+            sqlite.sqlite_error_code(),
+            Some(rusqlite::ErrorCode::CannotOpen)
+        );
+        let write = OpenOptions::new().write(true).open(&database).unwrap_err();
+        assert!(matches!(write.raw_os_error(), Some(5 | 32)));
+        let rename = fs::rename(&database, parent.join("foreign-rename.sqlite3")).unwrap_err();
+        assert!(matches!(rename.raw_os_error(), Some(5 | 32)));
+        let rename_raw_parent =
+            fs::rename(parent.join("backups"), parent.join("foreign-backups")).unwrap_err();
+        assert!(matches!(rename_raw_parent.raw_os_error(), Some(5 | 32)));
+        println!("Independent process: SQLite open, write and rename all denied by the live restore guard");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn guarded_restore_denies_an_independent_writer_until_commit() {
+        use std::os::windows::process::CommandExt;
+        let root = test_root("guarded-child");
+        let database = root.join("library.sqlite3");
+        let pending = root.join("restore.pending.sqlite3");
+        drop(seed(&database, "original-before-child"));
+        drop(seed(&pending, "candidate-after-child"));
+        fs::write(
+            root.join("child-fixture.marker"),
+            b"synthetic guarded restore child fixture\n",
+        )
+        .unwrap();
+        let observed = std::cell::Cell::new(false);
+        replace_library(
+            &database,
+            &root,
+            &pending,
+            &root.join("backups"),
+            "child-proof",
+            true,
+            |step| {
+                if step == RestoreStep::Installed {
+                    let output = std::process::Command::new(std::env::current_exe().unwrap())
+                        .args([
+                            "--exact",
+                            "backup::tests::guarded_writer_child_process",
+                            "--nocapture",
+                        ])
+                        .env("IMAGELORE_GUARDED_WRITER_CHILD", &database)
+                        .creation_flags(0x0800_0000)
+                        .output()
+                        .unwrap();
+                    assert!(
+                        output.status.success(),
+                        "child stdout={} stderr={}",
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                    assert!(String::from_utf8_lossy(&output.stdout)
+                        .contains("Independent process: SQLite open, write and rename all denied"));
+                    observed.set(true);
+                }
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(observed.get());
+        assert_eq!(read_marker(&database), "candidate-after-child");
+        assert!(!pending.exists() && !root.join("restore.transaction").exists());
+        let conn =
+            Connection::open_with_flags(&database, OpenFlags::SQLITE_OPEN_READ_WRITE).unwrap();
+        conn.execute("UPDATE marker SET value='write-after-commit'", [])
+            .unwrap();
+        drop(conn);
+        assert_eq!(read_marker(&database), "write-after-commit");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    fn assert_guarded_conflict_retains_every_file_on_restart(root: &Path) {
+        let database = root.join("library.sqlite3");
+        let reserved = root.join("restore.transaction/database");
+        assert_eq!(read_marker(&reserved), "original-before-restore");
+        let mut paths: Vec<PathBuf> = companions(&database)
+            .into_iter()
+            .filter(|path| path.exists())
+            .collect();
+        paths.push(root.join("restore.pending.sqlite3"));
+        for directory in [root.join("restore.transaction"), root.join("backups")] {
+            paths.extend(
+                fs::read_dir(directory)
+                    .unwrap()
+                    .map(|entry| entry.unwrap().path()),
+            );
+        }
+        paths.sort();
+        let before: Vec<_> = paths
+            .iter()
+            .map(|path| {
+                (
+                    fs::read(path).unwrap(),
+                    fs::metadata(path).unwrap().modified().unwrap(),
+                )
+            })
+            .collect();
+        for _ in 0..2 {
+            assert!(finish_or_rollback(&database, root).is_err());
+            for (path, (bytes, modified)) in paths.iter().zip(&before) {
+                assert_eq!(fs::read(path).unwrap(), *bytes, "{}", path.display());
+                assert_eq!(
+                    fs::metadata(path).unwrap().modified().unwrap(),
+                    *modified,
+                    "{}",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn restore_conflict_new_sidecar_after_reservation_is_retained() {
+        let root = test_root("guarded-sidecar-conflict");
+        let database = root.join("library.sqlite3");
+        let pending = root.join("restore.pending.sqlite3");
+        drop(seed(&database, "original-before-restore"));
+        drop(seed(&pending, "restore-candidate"));
+        let source = fs::read(&pending).unwrap();
+        let wal = database.with_extension("sqlite3-wal");
+        let sentinel = b"unowned WAL appeared after reservation";
+        let result = replace_library(
+            &database,
+            &root,
+            &pending,
+            &root.join("backups"),
+            "sidecar-conflict",
+            true,
+            |step| {
+                if step == RestoreStep::Reserved {
+                    fs::write(&wal, sentinel).unwrap();
+                }
+                Ok(())
+            },
+        );
+        assert!(result.is_err());
+        assert!(!database.exists());
+        assert_eq!(fs::read(&wal).unwrap(), sentinel);
+        assert_eq!(fs::read(&pending).unwrap(), source);
+        assert_guarded_conflict_retains_every_file_on_restart(&root);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn restore_conflict_real_commit_after_guard_release_survives_both_finish_paths() {
+        for committed in [false, true] {
+            let root = test_root("guarded-release-commit");
+            let database = root.join("library.sqlite3");
+            let pending = root.join("restore.pending.sqlite3");
+            drop(seed(&database, "original-before-restore"));
+            drop(seed(&pending, "restore-candidate"));
+            let original = fs::read(&database).unwrap();
+            let candidate = fs::read(&pending).unwrap();
+            let changed = std::cell::RefCell::new(None);
+            let result = replace_library(
+                &database,
+                &root,
+                &pending,
+                &root.join("backups"),
+                "released-commit",
+                true,
+                |step| {
+                    if step == RestoreStep::Installed && !committed {
+                        return Err("injected pre-commit failure".into());
+                    }
+                    if step == RestoreStep::Released {
+                        let record = super::restore_journal::decode_prepared(
+                            &fs::read(root.join("restore.transaction/PREPARED.json")).unwrap(),
+                            "library.sqlite3",
+                        )
+                        .unwrap();
+                        assert_eq!(
+                            root.join("restore.transaction/COMMITTED").exists(),
+                            committed
+                        );
+                        let conn = Connection::open_with_flags(
+                            &database,
+                            OpenFlags::SQLITE_OPEN_READ_WRITE,
+                        )
+                        .unwrap();
+                        conn.execute_batch("BEGIN IMMEDIATE;").unwrap();
+                        conn.execute("UPDATE marker SET value='real-commit-after-release'", [])
+                            .unwrap();
+                        conn.execute("INSERT INTO assets(id,path,name,portable_id,created_at,updated_at) VALUES(2,'synthetic/released.png','released-new-write','released-new-id',2,2)", []).unwrap();
+                        conn.execute_batch("COMMIT;").unwrap();
+                        drop(conn);
+                        let actual =
+                            super::owned_handle::WindowsExclusiveFile::lock_existing(&database)
+                                .unwrap()
+                                .fingerprint()
+                                .unwrap();
+                        assert_eq!(actual.file_id, record.staged.file_id);
+                        assert_ne!(actual.sha256, record.staged.sha256);
+                        *changed.borrow_mut() = Some((
+                            fs::read(&database).unwrap(),
+                            fs::metadata(&database).unwrap().modified().unwrap(),
+                        ));
+                    }
+                    Ok(())
+                },
+            );
+            let (bytes, modified) = changed
+                .into_inner()
+                .expect("The real writer must run after all transaction handles are released");
+            assert_eq!(read_marker(&database), "real-commit-after-release");
+            assert_eq!(fs::read(&database).unwrap(), bytes);
+            assert_eq!(
+                fs::metadata(&database).unwrap().modified().unwrap(),
+                modified
+            );
+            let conn =
+                Connection::open_with_flags(&database, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+            assert_eq!(
+                conn.query_row("SELECT name FROM assets WHERE id=2", [], |r| r
+                    .get::<_, String>(0))
+                    .unwrap(),
+                "released-new-write"
+            );
+            drop(conn);
+            assert_eq!(
+                fs::read(root.join("restore.transaction/database")).unwrap(),
+                original
+            );
+            assert_eq!(fs::read(&pending).unwrap(), candidate);
+            assert!(result.is_err());
+            assert_guarded_conflict_retains_every_file_on_restart(&root);
             fs::remove_dir_all(root).unwrap();
         }
     }
