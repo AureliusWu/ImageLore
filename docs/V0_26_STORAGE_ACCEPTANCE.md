@@ -1,10 +1,22 @@
 # v0.26 存储与恢复验收
 
-日期：2026-09-30；执行更新：2026-10-01（Asia/Shanghai）。范围：A1 启动保护、A2 备份/恢复、A3 历史迁移、A4 自动备份后端。全部故障库与哨兵数据位于独立临时目录，未打开用户正常资料库。
+日期：2026-09-30；执行更新：2026-10-20（Asia/Shanghai）。范围：A1 启动保护、A2 备份/恢复、A3 历史迁移、A4 自动备份后端。全部故障库与哨兵数据位于独立临时目录，未打开用户正常资料库。
 
-## 2026-10-20 Windows 恢复事务离线验证
+## 2026-10-20 当前进度
 
-后续 pending 暂存修复已完成本地 **221 passed / 0 failed / 3 原有 ignored**（116.88 秒），64 项编译输入及实际新编译测试产物分别绑定，严格 Clippy 通过。暂存复用同一所有权事务，新增持久操作锁与旧 previous 接管记录；覆盖外来 pending、释放后的真实新提交、消费后防重放及混合事务保全。完整证据和边界见 [pending 暂存安全](V0_26_PENDING_STAGE_SAFETY.md)。下列 193 项及“三个 RED 待处理”段落保留为先前基线，不能代替后续结果；真实进程中断与桌面等未验项目仍开放。
+本地 Role 候选完成 **31 个真实 Windows 子进程强制终止场景**：应用 pending 11、暂存 pending 10、自动损坏恢复 10。覆盖持久记录、DB/WAL 部分移出与部分归位、安装、提交及部分清理；父进程在确认子进程存活和实际占锁后强杀，31 次退出与逐案 PASS 保存在 `conflicts-roles-20261020-01` 原始输出中（67.82 秒）。原件、候选和 raw 使用真实含未 checkpoint 提交的 DB/WAL/SHM；自动恢复原件为 schema 11 的单叶额外索引损伤，以专用副本同时证明 integrity 非 ok 和业务仍可读，提交后的健康库仍通过完整验证。详见 [pending 暂存与进程终止记录](V0_26_PENDING_STAGE_SAFETY.md)。
+
+本轮完整 library suite `full-roles-20261020-01` 实际 **225 passed / 0 failed / 3 原有 ignored**（200.57 秒），进程退出码 0，65 项编译/include 输入前后逐项相同。完整套件沿用该 Role 候选已编译的同一测试 EXE，SHA256 为 `ef57576853bbaf8047b289ec3d24d162b8ab10a416435c0eaeb3fd9189aee6cc`，不声称又编译一次；包含测试代码的严格 Clippy `clippy-roles-20261020-02` 通过。原始 stdout、terminal、源码绑定和独立测试产物留在仓库外 `<private-evidence>/restore-role-interruption-20261020-01`。
+
+远端证据单独绑定此前源码 `c19a2f6`：[候选 Native](https://github.com/AureliusWu/ImageLore/actions/runs/39395025528)实际 **224 passed / 0 failed / 3 ignored**（709.34 秒），[快速 CI](https://github.com/AureliusWu/ImageLore/actions/runs/39395033317)和[敏感门禁](https://github.com/AureliusWu/ImageLore/actions/runs/39394917151)成功，之后正常快进 main。该远端结果覆盖此前 13 案源码，不能转记为新增 31 案候选已通过远端。
+
+另有独立 SQLite 引擎探针 `probe-01` 实际 **1 passed / 0 failed / 0 ignored**（0.01 秒）：SQLite 3.46.0、`USE_URI=1`，8 KiB 有界 memdb 的 VACUUM 实际返回 `DiskFull / 13`，独立 8 MiB 正常控制成功且源数据未变。它是仓库外的引擎容量探针，不是 ImageLore 恢复用例；原始回执保存在 `<private-evidence>/sqlite-full-probe-20261020-01`。
+
+A1/A2 整项仍未关闭。正式恢复中的新副本探针与空间不足故障保全用例仍待补齐，可在独立文件库的受控 IO/SQLite 边界注入并核对实际文件副作用与同目录重试。原计划要求这些失败时保全和可恢复行为，不要求物理主机断电或耗尽主机磁盘，不把后二者追加为发布门槛。真实桌面重启、50k/75k 与长期内存、安装升级、签名、updater 和 RC 仍按原计划各自验收；本轮没有运行 GUI、推广应用 EXE 或更改桌面快捷方式。
+
+## 2026-10-20 较早 Windows 恢复事务记录（193→221→224 项）
+
+该日较早的 pending 暂存修复完成本地 **221 passed / 0 failed / 3 原有 ignored**（116.88 秒），64 项编译输入及实际新编译测试产物分别绑定，严格 Clippy 通过。暂存复用同一所有权事务，新增持久操作锁与旧 previous 接管记录；覆盖外来 pending、释放后的真实新提交、消费后防重放及混合事务保全。该批当时未包含真实进程强杀，后续 13 案和首部 31 案分别补充；下列 193 项及“三个 RED 待处理”段落保留为对应旧基线。
 
 后续补充真实 Windows 后端子进程强制终止：应用/暂存两种事务的 13 个持久与部分清理边界均通过，实际 DB/WAL/SHM 保留未 checkpoint 业务提交，父进程核对存活/占锁后强杀并验证续作、raw、重试和第二次启动。完整库测试 **224 passed / 0 failed / 3 原有 ignored**（149.14 秒），65 项输入前后相同，严格 Clippy 通过；[完整范围](V0_26_PENDING_STAGE_SAFETY.md)保留各源码身份，不能转记为物理断电、桌面或安装验收。
 
@@ -18,7 +30,7 @@ Windows 恢复替换现已接入持续独占句柄、禁止覆盖的同句柄移
 
 首轮完整测试 **184 passed / 7 failed / 3 ignored** 单独保留，暴露属性访问目录句柄没有阻止改名、部分 UTF-16 长度下重命名目标错误及原件保全错误缺少上下文。修复加入真正参与共享检查的目录读取权限、显式字符串终止空间和八种中文目标长度回归；未通过放宽数据保全断言消除失败。
 
-这仍不关闭 A1/A2：旧 `finish_pending_stage` / `stage_restore_at` 的 pending/previous 入口还需要独立并发所有权保护；旧 `restore.rollback` 无身份记录时保留现场并要求人工核对。进程真实中断、物理断电、50k/75k 性能、桌面恢复、安装器及 updater 继续各自验收。没有构建或推广应用 EXE，也没有更改当前桌面快捷方式或默认用户资料库。
+在上述 193 项基线时，旧 `finish_pending_stage` / `stage_restore_at` 的 pending/previous 入口尚需独立并发所有权保护，真实进程中断也尚未执行；后续暂存修复与 13/31 案见首部，不把这些旧缺口继续当作未实现功能。旧 `restore.rollback` 无身份记录时仍保留现场并要求人工核对。A1/A2 整体剩余故障、性能和桌面门槛保持；该批没有构建或推广应用 EXE，也没有更改当前桌面快捷方式或默认用户资料库。
 
 源码提交 `7aacb97` 的[远端 Native](https://github.com/AureliusWu/ImageLore/actions/runs/39386940463)实际 **193 passed / 0 failed / 3 ignored**（496.45 秒）；[快速 CI](https://github.com/AureliusWu/ImageLore/actions/runs/39386940101)及[敏感信息门禁](https://github.com/AureliusWu/ImageLore/actions/runs/39386881359)均成功，随后正常 fast-forward 同步 main。另一个隔离工作区已取得 pending-stage 三个实际丢失 RED（0/3，3.34 秒），分别证明旧 previous 复原和新候选安装可覆盖外来 pending，旧清理可删除同 File ID 新提交；[完整边界记录](V0_26_RESTORE_TRANSACTION.md)保留失败身份，继续阻止阶段 A 退出。
 
@@ -55,11 +67,11 @@ Windows 恢复替换现已接入持续独占句柄、禁止覆盖的同句柄移
 
 同一新产物再实际执行两项 profile 导出，四份新报告由字节未变的固定消费者验证，得到 13 个 session、7 次完整 validator 调用；全部 35 份输入、二进制与报告身份保持。新回执保存在仓库外 `<private-evidence>/backup-worker-discovery-compat-20261018-01`，不继承旧产物或报告的运行结果。此候选仍未合入 main 或推广为桌面程序，未关闭真实 Native 对照、性能和下述并发恢复门槛。
 
-### 未关闭：最终检查与替换之间的并发修复
+### 2026-10-18 历史 RED：最终检查与替换之间的并发修复
 
 以 `48689a6` 的恢复逻辑，在独立 worktree 增加仅测试用的最终写入检查后钩子。真实 schema 11 文件通过 `BEGIN IMMEDIATE`、版本查询并实际报告索引完整性损坏，独立普通恢复控制先成功；随后在检查结束、预留文件之前，将活动库修复为有效库，提交新的业务哨兵和第二项资产后关闭连接。实际恢复返回 `Ok(())`，业务哨兵却被旧备份覆盖，保全回归 **0 passed / 1 failed**，退出码 101。此结果证明受控调度下真实文件的数据丢失，不代表已启动第二个应用进程或完成真实桌面并发测试。
 
-该检查的 Windows 独占句柄及 SQLite 事务均未跨越完整替换过程。仅再检查一次不能证明检查之后的安全；普通重命名可能替换新建目标，回滚也需保护来源不明的新活动库。此问题仍为 **A1/A2 未关闭的数据保全门槛**，没有计入上述通过项，不发布或推广候选。失败源码、现场、测试 EXE 及回执保留在仓库外 `<private-evidence>/restore-final-check-race-20261018-01`，待实现跨替换阶段的保护并补充冲突回归。
+该旧基线的 Windows 独占句柄及 SQLite 事务均未跨越完整替换过程。仅再检查一次不能证明检查之后的安全；普通重命名可能替换新建目标，回滚也需保护来源不明的新活动库。此项当时是 A1/A2 未关闭的数据保全门槛，未计入当时通过项。失败源码、现场、测试 EXE 及回执继续保留在仓库外 `<private-evidence>/restore-final-check-race-20261018-01`；后续持续句柄、禁止覆盖移动、冲突回归和进程中断结果分别见本页首部及[恢复事务](V0_26_RESTORE_TRANSACTION.md)，不删除或改写这次真实失败，也不以其旧待办描述当前实现。
 
 本节仅证明文件库后端及受控 Windows 权限行为，没有启动 ImageLore GUI，也未构建或推广桌面 EXE、安装包、签名或 updater。真实桌面/性能/安装升级与阶段 A 退出标准保持待验收；现有桌面运行时仍绑定其原构建来源。
 
