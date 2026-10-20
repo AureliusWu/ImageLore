@@ -521,6 +521,13 @@ impl Attempt {
                 original
                     .rename_no_replace(&directory.path().join(label))
                     .map_err(io)?;
+                #[cfg(test)]
+                hook(RestoreStep::OriginalReserved(
+                    LABELS
+                        .iter()
+                        .position(|role| *role == label)
+                        .expect("fixed original role"),
+                ))?;
             }
         }
         self.originals = Some(originals);

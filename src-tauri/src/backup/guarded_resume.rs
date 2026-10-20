@@ -27,6 +27,7 @@ pub(super) enum ResumeStep {
     Original,
     Pending,
     Prepared,
+    Restored(usize),
 }
 
 #[cfg(all(test, windows))]
@@ -375,6 +376,8 @@ impl State {
             if let Some(mut original) = self.reserved[ordinal].take() {
                 original.rename(&self.active_paths[ordinal])?;
                 self.active[ordinal] = Some(original);
+                #[cfg(test)]
+                resume_boundary(self.directory.path(), ResumeStep::Restored(ordinal));
             }
         }
         self.check_unheld_names()?;

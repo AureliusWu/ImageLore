@@ -763,6 +763,8 @@ enum RestoreStep {
     WriteChecked,
     #[cfg(all(test, windows))]
     Prepared,
+    #[cfg(all(test, windows))]
+    OriginalReserved(usize),
     Reserved,
     Installed,
     #[cfg(all(test, windows))]

@@ -18,14 +18,19 @@ const READY_LIMIT: usize = 8192;
 enum Purpose {
     ApplyPending,
     StagePending,
+    RecoverCorrupt,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum Point {
     Prepared,
+    ReservedDatabase,
+    ReservedWal,
     Reserved,
     Installed,
+    RestoredDatabase,
+    RestoredWal,
     Committed,
     OriginalRemoved,
     PendingRemoved,
@@ -43,6 +48,8 @@ impl Point {
     fn restore_step(self) -> Option<RestoreStep> {
         match self {
             Self::Prepared => Some(RestoreStep::Prepared),
+            Self::ReservedDatabase => Some(RestoreStep::OriginalReserved(0)),
+            Self::ReservedWal => Some(RestoreStep::OriginalReserved(1)),
             Self::Reserved => Some(RestoreStep::Reserved),
             Self::Installed => Some(RestoreStep::Installed),
             Self::Committed => Some(RestoreStep::Committed),
@@ -55,8 +62,14 @@ impl Point {
             Self::OriginalRemoved => Some(guarded_resume::ResumeStep::Original),
             Self::PendingRemoved => Some(guarded_resume::ResumeStep::Pending),
             Self::PreparedRemoved => Some(guarded_resume::ResumeStep::Prepared),
+            Self::RestoredDatabase => Some(guarded_resume::ResumeStep::Restored(0)),
+            Self::RestoredWal => Some(guarded_resume::ResumeStep::Restored(1)),
             _ => None,
         }
+    }
+
+    fn rollback_injected(self) -> bool {
+        matches!(self, Self::RestoredDatabase | Self::RestoredWal)
     }
 }
 
@@ -82,24 +95,26 @@ impl ProcessSpec {
     fn source(&self) -> PathBuf {
         match self.purpose {
             Purpose::ApplyPending => self.pending(),
-            Purpose::StagePending => self.data().join("backups/selected.sqlite3"),
+            Purpose::StagePending | Purpose::RecoverCorrupt => {
+                self.data().join("backups/selected.sqlite3")
+            }
         }
     }
     fn target(&self) -> PathBuf {
         match self.purpose {
-            Purpose::ApplyPending => self.active(),
+            Purpose::ApplyPending | Purpose::RecoverCorrupt => self.active(),
             Purpose::StagePending => self.pending(),
         }
     }
     fn transaction(&self) -> PathBuf {
         self.data().join(match self.purpose {
-            Purpose::ApplyPending => "restore.transaction",
+            Purpose::ApplyPending | Purpose::RecoverCorrupt => "restore.transaction",
             Purpose::StagePending => "restore.pending.transaction",
         })
     }
     fn target_name(&self) -> &'static str {
         match self.purpose {
-            Purpose::ApplyPending => "library.sqlite3",
+            Purpose::ApplyPending | Purpose::RecoverCorrupt => "library.sqlite3",
             Purpose::StagePending => "restore.pending.sqlite3",
         }
     }
@@ -239,7 +254,7 @@ struct ProcessBusiness {
 
 // SQLite opens only a disposable copy outside dataDir. Reading a real WAL
 // cohort directly could rebuild its SHM and invalidate preservation assertions.
-fn process_business(spec: &ProcessSpec, paths: &[Option<PathBuf>; 3]) -> ProcessBusiness {
+fn process_business_copy(spec: &ProcessSpec, paths: &[Option<PathBuf>; 3]) -> PathBuf {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let directory = spec.root.join(format!(
         "business-probe-{}",
@@ -254,8 +269,10 @@ fn process_business(spec: &ProcessSpec, paths: &[Option<PathBuf>; 3]) -> Process
         }
     }
     assert!(paths[0].is_some());
-    validate_in_place(&copies[0]).unwrap();
-    let conn = Connection::open_with_flags(&copies[0], OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    copies[0].clone()
+}
+
+fn read_process_business(conn: &Connection) -> ProcessBusiness {
     ProcessBusiness {
         marker: conn
             .query_row("SELECT value FROM marker", [], |row| row.get(0))
@@ -276,9 +293,53 @@ fn process_business(spec: &ProcessSpec, paths: &[Option<PathBuf>; 3]) -> Process
     }
 }
 
+fn process_business(spec: &ProcessSpec, paths: &[Option<PathBuf>; 3]) -> ProcessBusiness {
+    let copy = process_business_copy(spec, paths);
+    validate_in_place(&copy).unwrap();
+    let conn = Connection::open_with_flags(&copy, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    read_process_business(&conn)
+}
+
+// Recovery's original and raw bytes intentionally contain one damaged extra
+// index leaf. They must remain schema-11/readable business data, while an
+// actual SQLite integrity result proves physical damage instead of NOTADB.
+fn process_corrupt_business(spec: &ProcessSpec, paths: &[Option<PathBuf>; 3]) -> ProcessBusiness {
+    let copy = process_business_copy(spec, paths);
+    let conn = Connection::open_with_flags(&copy, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    assert_eq!(
+        conn.query_row(
+            "SELECT value FROM app_meta WHERE key='schema_version'",
+            [],
+            |row| row.get::<_, String>(0)
+        )
+        .unwrap(),
+        "11"
+    );
+    let integrity: String = conn
+        .query_row("PRAGMA integrity_check(1)", [], |row| row.get(0))
+        .unwrap();
+    assert_ne!(integrity, "ok");
+    assert!(
+        integrity.contains("process_integrity_index"),
+        "unexpected damage: {integrity}"
+    );
+    let business = read_process_business(&conn);
+    drop(conn);
+    assert!(matches!(
+        validate_in_place(&copy),
+        Err(ValidationFailure::Rejected(_))
+    ));
+    business
+}
+
 fn business_at(spec: &ProcessSpec, path: &Path) -> ProcessBusiness {
     let paths = companions(path).map(|path| path.try_exists().unwrap().then_some(path));
     process_business(spec, &paths)
+}
+
+fn corrupt_business_at(spec: &ProcessSpec, path: &Path) -> ProcessBusiness {
+    let paths = companions(path).map(|path| path.try_exists().unwrap().then_some(path));
+    process_corrupt_business(spec, &paths)
 }
 
 fn assert_business(business: &ProcessBusiness, marker: &str, extra: &str) {
@@ -294,6 +355,24 @@ fn assert_business(business: &ProcessBusiness, marker: &str, extra: &str) {
 fn seed_process_wal(spec: &ProcessSpec, target: &Path, label: &str, marker: &str, extra: &str) {
     let staging = spec.root.join(format!("wal-seed-{label}.sqlite3"));
     let conn = seed(&staging, "marker before WAL commit");
+    let damage_index = if spec.purpose == Purpose::RecoverCorrupt
+        && target == spec.active().as_path()
+    {
+        conn.execute_batch("CREATE TABLE process_integrity_sentinel(value INTEGER); INSERT INTO process_integrity_sentinel VALUES(123); CREATE INDEX process_integrity_index ON process_integrity_sentinel(value);").unwrap();
+        let page_size: usize = conn
+            .query_row("PRAGMA page_size", [], |row| row.get(0))
+            .unwrap();
+        let root_page: usize = conn
+            .query_row(
+                "SELECT rootpage FROM sqlite_master WHERE name='process_integrity_index'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        Some((page_size, root_page))
+    } else {
+        None
+    };
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; BEGIN IMMEDIATE;")
         .unwrap();
     conn.execute("UPDATE marker SET value=?1", [marker])
@@ -346,6 +425,55 @@ fn seed_process_wal(spec: &ProcessSpec, target: &Path, label: &str, marker: &str
     );
     drop(without_wal);
     assert_business(&business_at(spec, target), marker, extra);
+    if let Some((page_size, root_page)) = damage_index {
+        // The extra index was fully committed before WAL mode. Prove no WAL
+        // frame shadows its leaf, then alter only its single-row index payload.
+        // The application tables and schema marker remain readable.
+        let wal = fs::read(&to[1]).unwrap();
+        assert_eq!(
+            u32::from_be_bytes(wal[8..12].try_into().unwrap()) as usize,
+            page_size
+        );
+        let frames = wal[32..].chunks_exact(page_size + 24);
+        assert!(frames.remainder().is_empty());
+        for frame in frames {
+            assert_ne!(
+                u32::from_be_bytes(frame[..4].try_into().unwrap()) as usize,
+                root_page
+            );
+        }
+        let before = process_cohort(target);
+        let main = fs::read(target).unwrap();
+        let page = (root_page - 1) * page_size;
+        assert_eq!(main[page], 10, "the independent extra index is a leaf");
+        let cell = u16::from_be_bytes([main[page + 8], main[page + 9]]) as usize;
+        assert_eq!(&main[page + cell..page + cell + 5], &[4, 3, 1, 9, 123]);
+        {
+            use std::io::{Seek, SeekFrom, Write};
+            let mut file = fs::OpenOptions::new().write(true).open(target).unwrap();
+            file.seek(SeekFrom::Start((page + cell + 4) as u64))
+                .unwrap();
+            file.write_all(&[124]).unwrap();
+            file.sync_all().unwrap();
+        }
+        let damaged = process_cohort(target);
+        let mut expected_main = main;
+        expected_main[page + cell + 4] = 124;
+        assert_eq!(damaged[0].as_ref().unwrap().bytes, expected_main);
+        let old_main = &before[0].as_ref().unwrap().fingerprint;
+        let damaged_main = &damaged[0].as_ref().unwrap().fingerprint;
+        assert_eq!(damaged_main.volume_serial, old_main.volume_serial);
+        assert_eq!(damaged_main.file_id, old_main.file_id);
+        assert_eq!(damaged_main.size, old_main.size);
+        assert_ne!(damaged_main.sha256, old_main.sha256);
+        assert_eq!(&damaged[1..], &before[1..]);
+        assert_business(&corrupt_business_at(spec, target), marker, extra);
+        assert_eq!(
+            process_cohort(target),
+            damaged,
+            "the corrupt oracle may open only its copy"
+        );
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -390,7 +518,7 @@ fn restore_process_child() {
     assert_process_fixture(&spec);
     assert_eq!(fs::canonicalize(path.parent().unwrap()).unwrap(), spec.root);
     assert_eq!(path.file_name().unwrap(), "child-spec.json");
-    assert!(!(spec.purpose == Purpose::StagePending && spec.point == Point::PendingRemoved));
+    assert!(spec.point != Point::PendingRemoved || spec.purpose == Purpose::ApplyPending);
     let _operation = operation_lock::acquire(&spec.data()).unwrap();
     let transaction = spec.transaction();
     let run = || {
@@ -403,8 +531,14 @@ fn restore_process_child() {
             match spec.purpose {
                 Purpose::ApplyPending => guarded_restore::RestorePurpose::ApplyPending,
                 Purpose::StagePending => guarded_restore::RestorePurpose::StagePending,
+                Purpose::RecoverCorrupt => guarded_restore::RestorePurpose::RecoverCorrupt,
             },
             |step| {
+                if spec.point.rollback_injected() && step == RestoreStep::Installed {
+                    // Enter real rollback. The measured crash happens later,
+                    // only after an actual successful original-role rename.
+                    return Err("injected failure before real partial rollback".into());
+                }
                 if spec.point.restore_step() == Some(step) {
                     process_ready_and_park(&spec);
                 }
@@ -579,6 +713,7 @@ fn interrupted_record(spec: &ProcessSpec) -> restore_journal::Prepared {
         match spec.purpose {
             Purpose::ApplyPending => restore_journal::Mode::Pending,
             Purpose::StagePending => restore_journal::Mode::StagePending,
+            Purpose::RecoverCorrupt => restore_journal::Mode::Recovery,
         }
     );
     record
@@ -605,6 +740,50 @@ fn assert_boundary_state(
             for (path, expected) in reserved.iter().zip(original) {
                 assert_eq!(process_proof(path), *expected.as_ref().unwrap());
             }
+            assert_eq!(
+                process_proof(&spec.transaction().join("staged")).fingerprint,
+                record.staged
+            );
+        }
+        Point::ReservedDatabase | Point::ReservedWal => {
+            let moved = if spec.point == Point::ReservedDatabase {
+                1
+            } else {
+                2
+            };
+            for (ordinal, (path, expected)) in reserved.iter().zip(original).enumerate() {
+                if ordinal < moved {
+                    assert!(target[ordinal].is_none());
+                    assert_eq!(process_proof(path), *expected.as_ref().unwrap());
+                } else {
+                    assert_eq!(target[ordinal], *expected);
+                    assert!(!path.exists());
+                }
+            }
+            assert_eq!(
+                process_proof(&spec.transaction().join("staged")).fingerprint,
+                record.staged
+            );
+        }
+        Point::RestoredDatabase | Point::RestoredWal => {
+            let restored = if spec.point == Point::RestoredDatabase {
+                1
+            } else {
+                2
+            };
+            for (ordinal, (path, expected)) in reserved.iter().zip(original).enumerate() {
+                if ordinal < restored {
+                    assert_eq!(target[ordinal], *expected);
+                    assert!(!path.exists());
+                } else {
+                    assert!(target[ordinal].is_none());
+                    assert_eq!(process_proof(path), *expected.as_ref().unwrap());
+                }
+            }
+            assert_eq!(
+                process_proof(&spec.transaction().join("staged")).fingerprint,
+                record.staged
+            );
         }
         _ => {
             assert_eq!(target[0].as_ref().unwrap().fingerprint, record.staged);
@@ -661,6 +840,13 @@ fn run_process_interruption(purpose: Purpose, point: Point) {
                 "selected source extra asset",
             );
         }
+        Purpose::RecoverCorrupt => seed_process_wal(
+            spec,
+            &spec.source(),
+            "source",
+            "selected source committed WAL",
+            "selected source extra asset",
+        ),
     }
     let original = process_cohort(&spec.target());
     let source = process_cohort(&spec.source());
@@ -696,12 +882,21 @@ fn run_process_interruption(purpose: Purpose, point: Point) {
         );
     }
     let (old_marker, old_extra) = match purpose {
-        Purpose::ApplyPending => ("old active committed WAL", "old active extra asset"),
+        Purpose::ApplyPending | Purpose::RecoverCorrupt => {
+            ("old active committed WAL", "old active extra asset")
+        }
         Purpose::StagePending => ("old pending committed WAL", "old pending extra asset"),
     };
-    assert_business(&process_business(spec, &raw_paths), old_marker, old_extra);
+    let raw_business = if purpose == Purpose::RecoverCorrupt {
+        process_corrupt_business(spec, &raw_paths)
+    } else {
+        process_business(spec, &raw_paths)
+    };
+    assert_business(&raw_business, old_marker, old_extra);
     match purpose {
-        Purpose::ApplyPending => finish_or_rollback(&spec.active(), &spec.data()).unwrap(),
+        Purpose::ApplyPending | Purpose::RecoverCorrupt => {
+            finish_or_rollback(&spec.active(), &spec.data()).unwrap()
+        }
         Purpose::StagePending => finish_pending_stage(&spec.data()).unwrap(),
     }
     assert!(!spec.transaction().exists());
@@ -722,7 +917,17 @@ fn run_process_interruption(purpose: Purpose, point: Point) {
     } else {
         assert_eq!(process_cohort(&spec.target()), original);
         assert_eq!(process_cohort(&spec.source()), source);
-        assert_business(&business_at(spec, &spec.target()), old_marker, old_extra);
+        let retained_business = if purpose == Purpose::RecoverCorrupt {
+            corrupt_business_at(spec, &spec.target())
+        } else {
+            business_at(spec, &spec.target())
+        };
+        assert_business(&retained_business, old_marker, old_extra);
+        assert_eq!(
+            process_cohort(&spec.target()),
+            original,
+            "the original-data oracle must leave all roles intact"
+        );
     }
     for ordinal in 0..3 {
         assert_eq!(
@@ -753,13 +958,38 @@ fn run_process_interruption(purpose: Purpose, point: Point) {
             "selected source extra asset",
         );
     }
+    if purpose == Purpose::RecoverCorrupt {
+        assert_eq!(process_cohort(&spec.source()), source);
+        if !point.committed() {
+            let restored = recover_latest_valid_backup(
+                &spec.active(),
+                &spec.data(),
+                &spec.data().join("backups"),
+                "synthetic real process termination retry of physical index damage",
+            )
+            .unwrap()
+            .expect("normal recovery must select the unchanged valid backup");
+            assert_eq!(restored.name, "selected.sqlite3");
+            assert_eq!(PathBuf::from(restored.path), spec.source());
+        }
+        assert_business(
+            &business_at(spec, &spec.active()),
+            "selected source committed WAL",
+            "selected source extra asset",
+        );
+        assert_eq!(
+            process_cohort(&spec.source()),
+            source,
+            "Recovery never consumes its backup source"
+        );
+    }
     apply_pending_restore(&spec.active(), &spec.data(), &spec.data().join("backups")).unwrap();
     let (selected_marker, selected_extra) = match purpose {
         Purpose::ApplyPending => (
             "selected pending committed WAL",
             "selected pending extra asset",
         ),
-        Purpose::StagePending => (
+        Purpose::StagePending | Purpose::RecoverCorrupt => (
             "selected source committed WAL",
             "selected source extra asset",
         ),
@@ -778,8 +1008,14 @@ fn run_process_interruption(purpose: Purpose, point: Point) {
     apply_pending_restore(&spec.active(), &spec.data(), &spec.data().join("backups")).unwrap();
     assert_eq!(process_cohort(&spec.active()), installed);
     assert!(process_cohort(&spec.pending()).iter().all(Option::is_none));
-    if purpose == Purpose::StagePending {
+    if matches!(purpose, Purpose::StagePending | Purpose::RecoverCorrupt) {
         assert_eq!(process_cohort(&spec.source()), source);
+    }
+    for (path, expected) in raw_paths.iter().zip(&raw_before) {
+        assert_eq!(
+            process_proof(path.as_ref().unwrap()),
+            *expected.as_ref().unwrap()
+        );
     }
     assert_eq!(
         process_proof(&spec.data().join("restore.operation.lock")),
@@ -793,8 +1029,12 @@ fn run_process_interruption(purpose: Purpose, point: Point) {
 fn forced_process_termination_active_apply_resumes_all_durable_boundaries() {
     for point in [
         Point::Prepared,
+        Point::ReservedDatabase,
+        Point::ReservedWal,
         Point::Reserved,
         Point::Installed,
+        Point::RestoredDatabase,
+        Point::RestoredWal,
         Point::Committed,
         Point::OriginalRemoved,
         Point::PendingRemoved,
@@ -808,12 +1048,34 @@ fn forced_process_termination_active_apply_resumes_all_durable_boundaries() {
 fn forced_process_termination_pending_stage_resumes_all_durable_boundaries() {
     for point in [
         Point::Prepared,
+        Point::ReservedDatabase,
+        Point::ReservedWal,
         Point::Reserved,
         Point::Installed,
+        Point::RestoredDatabase,
+        Point::RestoredWal,
         Point::Committed,
         Point::OriginalRemoved,
         Point::PreparedRemoved,
     ] {
         run_process_interruption(Purpose::StagePending, point);
+    }
+}
+
+#[test]
+fn forced_process_termination_corrupt_recovery_resumes_all_recorded_boundaries() {
+    for point in [
+        Point::Prepared,
+        Point::ReservedDatabase,
+        Point::ReservedWal,
+        Point::Reserved,
+        Point::Installed,
+        Point::RestoredDatabase,
+        Point::RestoredWal,
+        Point::Committed,
+        Point::OriginalRemoved,
+        Point::PreparedRemoved,
+    ] {
+        run_process_interruption(Purpose::RecoverCorrupt, point);
     }
 }

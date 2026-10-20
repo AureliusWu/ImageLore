@@ -69,4 +69,20 @@ Windows 的 apply、recover 和 stage 在首次查询或续作前取得数据目
 
 完整套件 `full-matrix-20261020-02` 为 **224 passed / 0 failed / 3 原有 ignored**（149.14 秒），65 项编译/include 输入前后相同。它沿用最终定向门禁实际新编译的同一测试 EXE，SHA-256 为 `01b8c14eb75b2f1fd1c8c74e7e3079f15bb07834db04a20c6e1b87e9c626f082`，另有独立产物与逐文件源码归档；没有声称 full 又编译了一次。严格 Clippy `clippy-matrix-20261020-02` 通过。原始证据保存于 `<private-evidence>/restore-process-interruption-20261020-01`，先前定向通过、Clippy 命名警告及修正后的复跑均保留，未降低警告等级。
 
-上述锁只串行遵守新协议的恢复操作；备份创建/轮换仍有其既有 AppState 锁和源文件保护，旧程序也不识别新接管记录，不能声称跨旧版并发或降级兼容已经验证。旧 `restore.rollback` 仍需保留并人工核对。上述 13 案是后端测试进程的强制终止；物理断电/磁盘耗尽、桌面进程重启、安装升级、规模与长期内存仍须独立验收。所有原始现场、邮箱、凭据及本机路径留在仓库外。
+源码 `c19a2f60b786ebc3e511fe36b0ce2197738c94d3` 的[候选 Native CI](https://github.com/AureliusWu/ImageLore/actions/runs/39395025528)实际 **224 passed / 0 failed / 3 ignored**（709.34 秒），format/check/Clippy 成功；[快速 CI](https://github.com/AureliusWu/ImageLore/actions/runs/39395033317)和[敏感门禁](https://github.com/AureliusWu/ImageLore/actions/runs/39394917151)成功，之后正常快进 main。源码与 65 项已测 Git blob 字节逐项一致；推送前 1301 项检查与默认 Gitleaks 通过。原始 Native/Fast 日志在同一私有目录中，后续新增场景不转记为这次远端已通过。
+
+## 部分角色移动与自动损坏恢复
+
+新一轮在前述 13 案之外，增加三种用途的 DB/WAL 逐角色移出和逐角色归位中断，并补齐自动损坏恢复的持久边界，共 **31 个实际强杀场景**：应用 pending 11、暂存 pending 10、自动损坏恢复 10。
+
+移出钩子在对应原件的同句柄禁止覆盖移动实际成功后触发；归位钩子在回滚实际移动原件并更新所持角色后触发。选择 DB 和 WAL 两处，覆盖三角色只完成一项或两项的状态；三项全移已由原 Reserved 场景覆盖。归位测试先在 Installed 之后返回测试错误，进入真实回滚，再由父进程在指定角色归位后强制终止；前面的错误只用于选择回滚分支，不算作强杀证据。
+
+自动恢复使用明确的物理索引损伤而非仅写入 NOTADB 字符串：完整 schema 11 上建立独立单叶索引，在真实 WAL 提交后复制三角色并关闭播种连接；证明 WAL 的帧没有覆盖该索引页，再只改变主库索引 payload 的一个字节。主库 ID/长度保持、SHA 改变，WAL/SHM 完整指纹不变。专用副本明确读出 schema 11、指名该索引的 integrity 非 ok，以及正确 marker、两项资产和 Prompt；损坏原件和 raw 不被误称为完整健康库。提交后的新库仍走完整 schema/完整性/业务验证。
+
+最终定向 `conflicts-roles-20261020-01` 实际为 31 个强杀退出与 31 个逐案 PASS（67.82 秒）；三个父测试与一个空参数 child 入口计为 4 个普通测试，不重复累加案例数。回滚前后严格比较所有角色、staged 与 raw 的完整指纹。自动恢复未提交状态先恢复损坏原件，再通过正式 `recover_latest_valid_backup` 正常重试；源备份三角色在续作、恢复与第二次启动后都未被消费或修改。
+
+完整本地回归 `full-roles-20261020-01` 实际 **225 passed / 0 failed / 3 原有 ignored**（200.57 秒），65 项编译/include 输入前后相同，并逐项校验后另存源码快照。沿用最终定向新编译的测试 EXE，封存 SHA-256 为 `ef57576853bbaf8047b289ec3d24d162b8ab10a416435c0eaeb3fd9189aee6cc`。严格 Clippy `clippy-roles-20261020-02` 通过，首轮只影响测试钩子的 `unused_enumerate_index` 警告与修正日志分别保留。原始证据位于 `<private-evidence>/restore-role-interruption-20261020-01`；本地 225 项不转记为远端 CI 或桌面验收。
+
+## 证据范围与剩余验收
+
+上述锁只串行遵守新协议的恢复操作；备份创建/轮换仍有其既有 AppState 锁和源文件保护，旧程序也不识别新接管记录，不能声称跨旧版并发或降级兼容已经验证。旧 `restore.rollback` 仍需保留并人工核对。原计划要求恢复暂存、复制、rename、空间不足和进程中断的故障保全及再次启动；空间不足故障注入仍须取得独立证据。物理主机断电和耗尽主机磁盘不在这些测试的证明范围，也不作为新增发布门槛。桌面进程重启、安装升级、规模与长期内存继续独立验收。所有原始现场、邮箱、凭据及本机路径留在仓库外。
