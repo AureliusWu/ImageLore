@@ -132,3 +132,7 @@ npm run version:major
 仓库内的 `browser-extension/` 是 Chrome / Edge Manifest V3 扩展。开发模式加载后，可在网页图片上右键选择「保存到 ImageLore」或「保存到 ImageLore · Remix 参考」。
 
 扩展把图片和同名 `.imagelore.json` Sidecar 保存到系统下载目录下的 `ImageLore Inbox`。在 ImageLore 的「资料库管理 → 来源目录」点击「准备浏览器 Inbox」后，该目录会作为本地 Source Folder 管理；启动和重新聚焦 ImageLore 时会同步一次，不常驻监听文件系统。
+
+## 许可证
+
+ImageLore 原创代码采用 [MIT 许可证](LICENSE)。第三方依赖、模型、图标、字体及其他材料保留各自的许可证和版权声明，不因本项目采用 MIT 而重新授权；分发时仍须遵守相应条款并保留所需声明。
