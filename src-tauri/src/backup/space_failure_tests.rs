@@ -24,7 +24,7 @@ fn preservation_directory(spec: &ProcessSpec, purpose: Purpose) -> PathBuf {
     }
 }
 
-fn space_fixture(purpose: Purpose) -> ProcessFixture {
+pub(super) fn space_fixture(purpose: Purpose) -> ProcessFixture {
     // Point only satisfies the shared fixture constructor; these tests never
     // spawn a process or register any process-interruption hook.
     let fixture = ProcessFixture::new(purpose, Point::Prepared);
@@ -74,7 +74,7 @@ fn space_fixture(purpose: Purpose) -> ProcessFixture {
     fixture
 }
 
-fn run_formal_restore(spec: &ProcessSpec, purpose: Purpose) -> Result<(), String> {
+pub(super) fn run_formal_restore(spec: &ProcessSpec, purpose: Purpose) -> Result<(), String> {
     match purpose {
         Purpose::ApplyPending => {
             apply_pending_restore(&spec.active(), &spec.data(), &spec.data().join("backups"))
@@ -111,7 +111,7 @@ fn run_formal_restore(spec: &ProcessSpec, purpose: Purpose) -> Result<(), String
     }
 }
 
-fn assert_original_business(spec: &ProcessSpec, purpose: Purpose) {
+pub(super) fn assert_original_business(spec: &ProcessSpec, purpose: Purpose) {
     let (marker, extra) = match purpose {
         Purpose::ApplyPending | Purpose::RecoverCorrupt => {
             ("old active committed WAL", "old active extra asset")
@@ -140,12 +140,17 @@ fn assert_selected_business(spec: &ProcessSpec, purpose: Purpose) {
     assert_business(&business_at(spec, &spec.target()), marker, extra);
 }
 
-fn assert_no_transaction(spec: &ProcessSpec) {
+pub(super) fn assert_no_transaction(spec: &ProcessSpec) {
     assert!(!spec.data().join("restore.transaction").exists());
     assert!(!spec.data().join("restore.pending.transaction").exists());
 }
 
-fn assert_io_receipt(observation: &IoObservation, path: &Path, kind: IoKind, prefix: u64) {
+pub(super) fn assert_io_receipt(
+    observation: &IoObservation,
+    path: &Path,
+    kind: IoKind,
+    prefix: u64,
+) {
     assert_eq!(observation.path, path);
     assert_eq!(observation.kind, kind);
     assert!(observation.requested_bytes > prefix);
@@ -162,7 +167,7 @@ fn backup_names(spec: &ProcessSpec) -> Vec<String> {
         .collect()
 }
 
-fn scene(spec: &ProcessSpec) -> BTreeMap<PathBuf, Option<ProcessProof>> {
+pub(super) fn scene(spec: &ProcessSpec) -> BTreeMap<PathBuf, Option<ProcessProof>> {
     fn visit(root: &Path, path: &Path, output: &mut BTreeMap<PathBuf, Option<ProcessProof>>) {
         use std::os::windows::fs::MetadataExt;
         let metadata = fs::symlink_metadata(path).unwrap();
@@ -183,7 +188,7 @@ fn scene(spec: &ProcessSpec) -> BTreeMap<PathBuf, Option<ProcessProof>> {
     output
 }
 
-fn assert_normal_retry(
+pub(super) fn assert_normal_retry(
     spec: &ProcessSpec,
     purpose: Purpose,
     source: &[Option<ProcessProof>; 3],

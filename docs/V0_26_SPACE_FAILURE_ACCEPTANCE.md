@@ -40,7 +40,9 @@ Windows 112 是在真实前缀写入/复制及 `sync_all` 成功后注入的 IO 
 
 ## 与已有证据及剩余验收的关系
 
-此前 Role 候选的 **31 次真实 Windows 子进程强杀**与完整本地 **225/0/3**（200.57 秒、65 项输入）继续按[pending 暂存与进程终止记录](V0_26_PENDING_STAGE_SAFETY.md)分别绑定。2026-10-22 02:29 UTC 观察时，该候选 `9284eaf` 的[快速 CI](https://github.com/AureliusWu/ImageLore/actions/runs/39711213364)与[敏感门禁](https://github.com/AureliusWu/ImageLore/actions/runs/39399396084)已成功，[Native](https://github.com/AureliusWu/ImageLore/actions/runs/39711150959)仍在运行、待终态。此状态只绑定 Role 候选，不能替代本批空间故障源码的远端验证。
+此前 Role 候选的 **31 次真实 Windows 子进程强杀**与完整本地 **225/0/3**（200.57 秒、65 项输入）继续按[pending 暂存与进程终止记录](V0_26_PENDING_STAGE_SAFETY.md)分别绑定。2026-10-22 02:29 UTC 的历史观察中 Native 尚在运行；后续该候选 `9284eaf` 的 [Native](https://github.com/AureliusWu/ImageLore/actions/runs/39711150959)已实际 **225/0/3**（850.93 秒），[快速 CI](https://github.com/AureliusWu/ImageLore/actions/runs/39711213364)与[敏感门禁](https://github.com/AureliusWu/ImageLore/actions/runs/39399396084)成功，不能借此替代本批空间故障源码的远端验证。
+
+本批空间故障源码 `4030249` 的[候选 Native](https://github.com/AureliusWu/ImageLore/actions/runs/39712538000)随后实际 **230/0/3**（901.46 秒），[快速 CI](https://github.com/AureliusWu/ImageLore/actions/runs/39712540748)及[敏感门禁](https://github.com/AureliusWu/ImageLore/actions/runs/39712357271)成功并正常快进 main。其后新增创建备份/当前 Probe/实际 rename/readonly 的定向结果另见[故障补充验收](V0_26_BACKUP_FAULT_COMPLETION.md)，本页 18 案不重复计入新增 16 案。
 
 更早 `c19a2f6` 的 13 案源码已有候选 Native **224/0/3**（709.34 秒）；同源码的 [main Native 复跑](https://github.com/AureliusWu/ImageLore/actions/runs/39397136749)实际 **224 passed / 0 failed / 3 ignored**（1030.72 秒），原始日志已另行归档。它们不覆盖新增 31 案或本批空间故障源码。
 

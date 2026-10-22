@@ -10,9 +10,15 @@
 
 ## 当前进度（2026-10-22）
 
+原后端要求审计定位的具体路径已补充定向验证：备份创建真实 FULL 1 案、当前 source Probe DB/WAL 复制 6 案、安装后 File Probe 复制 3 案、实际 rename 80/183 3 案、真实 readonly 拒绝/恢复 3 案，共 16 场景，定向实际 **5/0/0**（24.40 秒），完整库回归实际 **235 passed / 0 failed / 3 原有 ignored**（223.37 秒）。68 项编译/include 输入前后相同，严格 Clippy 通过，产物复用身份详见[备份与恢复故障补充验收](V0_26_BACKUP_FAULT_COMPLETION.md)。A1 核心判定已有后端证明，A2 本次具体缺口已补定向和完整回归；4.1-6 缺图/正式重定位与业务/谱系重开闭环另行定位，同进程后端证据不等于 GUI 或全部原退出条件完成。
+
+前一空间故障源码 `4030249` 的[候选 Native](https://github.com/AureliusWu/ImageLore/actions/runs/39712538000)实际 **230/0/3**（901.46 秒），[快速 CI](https://github.com/AureliusWu/ImageLore/actions/runs/39712540748)与[敏感门禁](https://github.com/AureliusWu/ImageLore/actions/runs/39712357271)成功并正常快进 main；本批新增路径不继承该远端结论。两路 worker 的本地 233 项与六操作 debug 诊断仍是独立候选，未入 main、未完成正式性能，见[固定提交记录](https://github.com/AureliusWu/ImageLore/blob/0a87dd8ddfce3022df4122576f616b5bbbbaf503/docs/V0_26_BACKUP_GUARDED_WORKER_DIAGNOSTIC.md)。
+
+### 前一批空间故障记录（67 项输入）
+
 正式恢复的受控空间故障已完成定向验证：三用途合计 18 个故障场景及一个作用域控制，定向实际 **5/0/0**（27.22 秒），完整库测试实际 **230 passed / 0 failed / 3 原有 ignored**（203.51 秒），67 项编译/include 输入前后相同，包含测试代码的严格 Clippy 通过。Windows 112 在真实部分写入/复制及同步后注入，真实 SQLite VACUUM 在本案 8 KiB memdb 中返回 `DiskFull / 13`；原件、源与 raw 按故障状态分别保全，截断 Commit 连续三次正式入口拒绝且现场不变。首次 10 月 20 日中断无结果的尝试保留，不算通过或失败；完整套件复用实际定向产物的身份与回执见[空间故障验收](V0_26_SPACE_FAILURE_ACCEPTANCE.md)。同进程正式入口重试不计新进程或 GUI 验收，阶段 A 与后续分发阶段仍未关闭。
 
-`c19a2f6` 的 [main Native 复跑](https://github.com/AureliusWu/ImageLore/actions/runs/39397136749)实际 **224/0/3**（1030.72 秒），只覆盖此前 13 案源码。新增 31 案 Role 候选 `9284eaf` 的[快速 CI](https://github.com/AureliusWu/ImageLore/actions/runs/39711213364)与[敏感门禁](https://github.com/AureliusWu/ImageLore/actions/runs/39399396084)已成功，[Native](https://github.com/AureliusWu/ImageLore/actions/runs/39711150959)仍待终态，观察时间见空间故障记录。本批空间故障与以下本地 Role 225 项及此前远端 224 项各自绑定。
+`c19a2f6` 的 [main Native 复跑](https://github.com/AureliusWu/ImageLore/actions/runs/39397136749)实际 **224/0/3**（1030.72 秒），只覆盖此前 13 案源码。后续 31 案 Role 候选 `9284eaf` 的 [Native](https://github.com/AureliusWu/ImageLore/actions/runs/39711150959)实际 **225/0/3**（850.93 秒），[快速 CI](https://github.com/AureliusWu/ImageLore/actions/runs/39711213364)与[敏感门禁](https://github.com/AureliusWu/ImageLore/actions/runs/39399396084)成功。本批空间故障与这些 Role/c19 结果各自绑定，不混用测试身份。
 
 ### 2026-10-20 Role 候选与引擎探针记录
 
@@ -99,7 +105,7 @@ A1 与 Reference 切图回归首先在接手轮次完成。后续 A2–A7 已开
 5. 恢复暂存/复制/rename/磁盘空间不足/进程中断：下一次启动仍有可用原件，且不把不完整文件当成功库。
 6. 原图路径缺失：元数据与谱系保留，显示缺失并支持重定位；重建缓存和搜索索引不改变手工数据。
 
-第 5 项的复制、空间不足等错误可在独立文件库的受控边界注入，并验证原件、候选、记录和下一次重试的真实行为；无需物理断电或耗尽主机磁盘。当前 31 案关闭所列后端进程终止状态的验证，新的 SQLite 副本探针和空间不足用例仍待完成，不以旧步骤返回错误或已有进程案例代替其证据。
+第 5 项允许在独立文件库的受控边界注入并核对真实文件副作用，无需物理断电或耗尽主机磁盘。已有 31 案覆盖所列后端进程终止状态，18 案补充恢复记录/raw/暂存 VACUUM 的空间错误；后续又针对备份创建 FULL、当前 Probe 复制、真正 rename 错误和 readonly 拒绝完成 16 案定向验证与 235 项完整库回归，详见[故障补充验收](V0_26_BACKUP_FAULT_COMPLETION.md)。不再将这些已取得具体证据的路径笼统列为“待实现”，也不把后端函数续作等同完整应用重启或 GUI 验收。第 6 项缺图/重定位闭环及其他原退出条件仍各自验收。
 
 数据库 Backup 保存元数据与关系。图片字节仍在原路径，丢失原图需要用户另行备份；模型与缓存也不能被声称已经包含在 SQLite snapshot 中。文档与恢复界面应解释恢复点时间和可能失去的备份后编辑。
 

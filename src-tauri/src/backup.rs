@@ -707,12 +707,22 @@ fn create_locked(state: &AppState, prefix: &str) -> Result<BackupRecord, String>
         {
             let conn = storage_phase!("backup.db_mutex_wait", None, state.db.lock())
                 .map_err(|e| e.to_string())?;
-            storage_phase!(
+            #[cfg(all(test, windows))]
+            let result = storage_phase!(
+                "backup.vacuum_into",
+                None,
+                space_fault::create_vacuum_override(&conn, &state.backups_dir, prefix, &path)
+                    .unwrap_or_else(|| {
+                        conn.execute_batch(&format!("VACUUM INTO '{}';", sql_path(&path)))
+                    })
+            );
+            #[cfg(not(all(test, windows)))]
+            let result = storage_phase!(
                 "backup.vacuum_into",
                 None,
                 conn.execute_batch(&format!("VACUUM INTO '{}';", sql_path(&path)))
-            )
-            .map_err(|e| e.to_string())?;
+            );
+            result.map_err(|e| e.to_string())?;
         }
         storage_phase!("backup.new_validation", Some(&path), validate(&path))?;
         sync_file(&path)?;
@@ -768,6 +778,8 @@ enum RestoreStep {
     #[cfg(all(test, windows))]
     OriginalReserved(usize),
     Reserved,
+    #[cfg(all(test, windows))]
+    InstallReady,
     Installed,
     #[cfg(all(test, windows))]
     Committed,
@@ -1617,6 +1629,11 @@ mod tests {
     #[cfg(windows)]
     mod space_failure_tests {
         include!("backup/space_failure_tests.rs");
+    }
+
+    #[cfg(windows)]
+    mod fault_completion_tests {
+        include!("backup/fault_completion_tests.rs");
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]

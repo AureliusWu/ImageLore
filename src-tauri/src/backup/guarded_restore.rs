@@ -136,10 +136,23 @@ impl Probe {
         )
         .map_err(io)?;
         let paths = companions(&directory.path().join("library.sqlite3"));
+        #[cfg(test)]
+        let source_main = source.path().to_path_buf();
         let mut identities = Vec::new();
         for (ordinal, path) in paths.iter().enumerate() {
             let mut copy = if ordinal == 0 {
-                source.copy_to(path).map_err(io)?
+                #[cfg(test)]
+                let result = super::space_fault::probe_copy_with_fault(
+                    &work.data,
+                    super::space_fault::ProbeKind::File,
+                    &source_main,
+                    ordinal,
+                    path,
+                    || source.copy_to(path),
+                );
+                #[cfg(not(test))]
+                let result = source.copy_to(path);
+                result.map_err(io)?
             } else {
                 WindowsExclusiveFile::create_new(path).map_err(io)?
             };
@@ -160,11 +173,28 @@ impl Probe {
         )
         .map_err(io)?;
         let paths = companions(&directory.path().join("library.sqlite3"));
+        #[cfg(test)]
+        let source_main = bundle.files_mut()[0]
+            .as_ref()
+            .map(|source| source.path().to_path_buf());
         let mut identities = Vec::new();
         for (ordinal, path) in paths.iter().enumerate() {
             let mut copy = if ordinal < 2 {
                 match bundle.files_mut()[ordinal].as_mut() {
-                    Some(source) => source.copy_to(path).map_err(io)?,
+                    Some(source) => {
+                        #[cfg(test)]
+                        let result = super::space_fault::probe_copy_with_fault(
+                            &work.data,
+                            super::space_fault::ProbeKind::Bundle,
+                            source_main.as_deref().ok_or("检查副本缺少主资料库")?,
+                            ordinal,
+                            path,
+                            || source.copy_to(path),
+                        );
+                        #[cfg(not(test))]
+                        let result = source.copy_to(path);
+                        result.map_err(io)?
+                    }
                     None if ordinal == 0 => return Err("检查副本缺少主资料库".into()),
                     None => WindowsExclusiveFile::create_new(path).map_err(io)?,
                 }
@@ -546,6 +576,8 @@ impl Attempt {
         for path in companions(&self.work.database) {
             absent(&path)?;
         }
+        #[cfg(test)]
+        hook(RestoreStep::InstallReady)?;
         self.stage
             .as_mut()
             .ok_or("恢复暂存句柄缺失")?

@@ -4,11 +4,19 @@
 
 ## 2026-10-22 当前进度
 
+本次补齐审计定位的后端故障路径：真实备份创建 SQLite FULL 1 案、当前源 Probe 的 DB/WAL 部分复制 6 案、安装后 File Probe 部分复制 3 案、所有缺失预检之后的真实 rename 80/183 冲突 3 案、真实 Windows readonly 拒绝及属性恢复 3 案。定向 **5/0/0**（24.40 秒），原始输出有 16 个场景 PASS；完整库回归实际 **235 passed / 0 failed / 3 原有 ignored**（223.37 秒），68 项编译/include 输入前后相同，严格 Clippy 通过。产物复用身份、真实文件指纹与业务断言见[备份与恢复故障补充验收](V0_26_BACKUP_FAULT_COMPLETION.md)。旧 18 案和 31 案不重复计入；同进程后端入口、事务核心钩子与实际 GUI/IPC 验收分别记录。
+
+A1 核心自动恢复策略已有后端证据；A2 本次审计发现的上述具体故障路径已补定向验证，4.1-6 的缺图/正式重定位/业务与谱系重开闭环另行定位。当前源码的真实桌面流程、性能、长期内存及安装、签名、updater、RC 仍按原计划完成，版本与桌面产物保持 `0.26.0`。
+
+前一批 `4030249` 的[候选 Native](https://github.com/AureliusWu/ImageLore/actions/runs/39712538000)实际 **230/0/3**（901.46 秒），[快速 CI](https://github.com/AureliusWu/ImageLore/actions/runs/39712540748)和[敏感门禁](https://github.com/AureliusWu/ImageLore/actions/runs/39712357271)成功后正常快进 main；推送前 1327 项检查与默认 Gitleaks 通过。它不覆盖本批新增 68 项输入中的故障接点。两路 worker 候选的 233 项本地回归与六操作 debug 诊断另见[固定提交记录](https://github.com/AureliusWu/ImageLore/blob/0a87dd8ddfce3022df4122576f616b5bbbbaf503/docs/V0_26_BACKUP_GUARDED_WORKER_DIAGNOSTIC.md)，未入 main、未关闭正式性能。
+
+### 前一批空间故障记录（67 项输入）
+
 Windows 正式恢复入口完成空间故障定向验证：应用 pending、暂存 pending、自动损坏恢复三用途，共 **18 个故障场景**（PREPARED 部分写入 3、raw 部分复制 9、截断 COMMITTED 3、真实 SQLite FULL 3）及一个作用域控制测试。定向实际 **5/0/0**（27.22 秒），完整库测试实际 **230 passed / 0 failed / 3 原有 ignored**（203.51 秒），67 项编译/include 输入前后相同，严格 `--lib --tests -- -D warnings` Clippy 通过。完整套件沿用定向门禁新编译的同一测试产物；首次 10 月 20 日尝试中断且无结果，原记录保留。产物、源码绑定与完整门禁身份见[空间故障验收](V0_26_SPACE_FAILURE_ACCEPTANCE.md)。
 
-Windows 112 在真实部分写入/复制和同步后受控注入；SQLite FULL 则由唯一命名、8 KiB 有界 memdb 中的实际 VACUUM 返回 typed `DiskFull / 13`。原件、源候选及 raw 的断言分别核对；截断 Commit 持续拒绝并保留完整现场，不能盲删协议文件强行恢复。撤销注入后的正式入口重试发生在同一测试进程，不作为桌面或新进程重启验收。A1/A2、性能、桌面、安装升级及后续签名/updater/RC 门槛继续保留。
+Windows 112 在真实部分写入/复制和同步后受控注入；SQLite FULL 则由唯一命名、8 KiB 有界 memdb 中的实际 VACUUM 返回 typed `DiskFull / 13`。原件、源候选及 raw 的断言分别核对；截断 Commit 持续拒绝并保留完整现场，不能盲删协议文件强行恢复。撤销注入后的正式入口重试发生在同一测试进程，不作为桌面或新进程重启验收；本批之后补充的具体故障路径及当前剩余范围见首部。
 
-此前 `c19a2f6` 的 [main Native 复跑](https://github.com/AureliusWu/ImageLore/actions/runs/39397136749)实际 **224/0/3**（1030.72 秒），与下述候选 224 项结果分别归档。Role 候选 `9284eaf` 的[快速 CI](https://github.com/AureliusWu/ImageLore/actions/runs/39711213364)与[敏感门禁](https://github.com/AureliusWu/ImageLore/actions/runs/39399396084)已成功，[Native](https://github.com/AureliusWu/ImageLore/actions/runs/39711150959)仍待终态；观察时间见独立记录。新增 31 案的本地 225 项结果仍只绑定该 Role 候选，本批空间故障不继承其远端状态。
+此前 `c19a2f6` 的 [main Native 复跑](https://github.com/AureliusWu/ImageLore/actions/runs/39397136749)实际 **224/0/3**（1030.72 秒），与下述候选 224 项结果分别归档。后续 Role 候选 `9284eaf` 的 [Native](https://github.com/AureliusWu/ImageLore/actions/runs/39711150959)实际 **225/0/3**（850.93 秒），[快速 CI](https://github.com/AureliusWu/ImageLore/actions/runs/39711213364)与[敏感门禁](https://github.com/AureliusWu/ImageLore/actions/runs/39399396084)成功。这些结果分别绑定 13 案与 31 案源码，不代替后续空间故障批次的验证。
 
 ## 2026-10-20 Role 候选与引擎探针记录
 

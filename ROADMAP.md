@@ -2,9 +2,15 @@
 
 ## 当前进度（2026-10-22）
 
+版本保持 `0.26.0`。审计定位的备份创建 FULL、当前 Probe 复制、真实 rename 80/183 与 readonly 拒绝/恢复补充验证实际 **5/0/0**（24.40 秒），覆盖 16 个明确故障场景；完整库回归实际 **235 passed / 0 failed / 3 原有 ignored**（223.37 秒），68 项编译/include 输入前后相同，严格 Clippy 通过。A1 核心后端策略已有证明，A2 本次具体路径已补定向和完整回归，4.1-6 缺图/正式重定位与业务重开闭环另行定位。测试进程内正式入口与事务核心接点不计 GUI/IPC 或安装验收，产物与源码身份见[故障补充记录](docs/V0_26_BACKUP_FAULT_COMPLETION.md)。
+
+前一批 `4030249` 的[候选 Native](https://github.com/AureliusWu/ImageLore/actions/runs/39712538000)实际 **230/0/3**（901.46 秒），[快速 CI](https://github.com/AureliusWu/ImageLore/actions/runs/39712540748)与[敏感门禁](https://github.com/AureliusWu/ImageLore/actions/runs/39712357271)成功并正常快进 main；本批新增故障路径单独验证。两路 worker 候选的本地 233 项和六操作 debug 诊断见[固定提交记录](https://github.com/AureliusWu/ImageLore/blob/0a87dd8ddfce3022df4122576f616b5bbbbaf503/docs/V0_26_BACKUP_GUARDED_WORKER_DIAGNOSTIC.md)，未入 main、未完成正式性能。
+
+### 前一批空间故障记录（67 项输入）
+
 版本保持 `0.26.0`，阶段 A 仍未全部退出。正式恢复入口的空间故障定向门禁实际 **5/0/0**（27.22 秒），覆盖三用途的 18 个故障场景及一个作用域控制；完整库测试实际 **230 passed / 0 failed / 3 原有 ignored**（203.51 秒），67 项编译/include 输入前后相同，严格 Clippy 通过。Windows 112 属于真实部分写入/复制和同步后的受控注入；SQLite FULL 来自本案 8 KiB 有界 memdb 的实际 VACUUM。截断 Commit 持续拒绝并保留完整现场，其余已覆盖故障在撤销注入后正式入口重试；同进程后端重试不计桌面或新进程启动验收。产物复用及源码身份详见[空间故障验收](docs/V0_26_SPACE_FAILURE_ACCEPTANCE.md)。
 
-此前 `c19a2f6` 的 [main Native 复跑](https://github.com/AureliusWu/ImageLore/actions/runs/39397136749)实际 **224/0/3**（1030.72 秒），只覆盖原 13 案源码。新增 31 案 Role 候选 `9284eaf` 的[快速 CI](https://github.com/AureliusWu/ImageLore/actions/runs/39711213364)与[敏感门禁](https://github.com/AureliusWu/ImageLore/actions/runs/39399396084)已成功，[Native](https://github.com/AureliusWu/ImageLore/actions/runs/39711150959)仍待终态，观察时间见空间故障记录；这些状态不与本批空间故障源码混记。性能、桌面、长期内存、安装升级、可信签名、updater 和 RC 按既有计划继续验收。
+此前 `c19a2f6` 的 [main Native 复跑](https://github.com/AureliusWu/ImageLore/actions/runs/39397136749)实际 **224/0/3**（1030.72 秒），只覆盖原 13 案源码。后续 31 案 Role 候选 `9284eaf` 的 [Native](https://github.com/AureliusWu/ImageLore/actions/runs/39711150959)实际 **225/0/3**（850.93 秒），[快速 CI](https://github.com/AureliusWu/ImageLore/actions/runs/39711213364)与[敏感门禁](https://github.com/AureliusWu/ImageLore/actions/runs/39399396084)成功，不与其他源码混记。性能、桌面、长期内存、安装升级、可信签名、updater 和 RC 按既有计划继续验收。
 
 ### 2026-10-20 Role 候选与引擎探针记录
 

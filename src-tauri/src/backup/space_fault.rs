@@ -22,6 +22,12 @@ pub(super) enum IoKind {
     CopyTo,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ProbeKind {
+    Bundle,
+    File,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct IoObservation {
     pub(super) path: PathBuf,
@@ -58,6 +64,21 @@ struct RawFault {
     receipt: IoReceipt,
 }
 
+struct ProbeCopyFault {
+    parent: PathBuf,
+    kind: ProbeKind,
+    source_main: PathBuf,
+    ordinal: usize,
+    after_bytes: u64,
+    receipt: IoReceipt,
+}
+
+struct CreateSqliteFault {
+    parent: PathBuf,
+    prefix: String,
+    receipt: SqliteReceipt,
+}
+
 struct SqliteFault {
     staged_path: PathBuf,
     uri: String,
@@ -70,6 +91,8 @@ struct SqliteFault {
 thread_local! {
     static IO_FAULT: RefCell<Option<IoFault>> = const { RefCell::new(None) };
     static RAW_FAULT: RefCell<Option<RawFault>> = const { RefCell::new(None) };
+    static PROBE_COPY_FAULT: RefCell<Option<ProbeCopyFault>> = const { RefCell::new(None) };
+    static CREATE_SQLITE_FAULT: RefCell<Option<CreateSqliteFault>> = const { RefCell::new(None) };
     static SQLITE_FAULT: RefCell<Option<SqliteFault>> = const { RefCell::new(None) };
 }
 
@@ -185,6 +208,90 @@ pub(super) fn raw_copy_with_fault<T>(
         return run();
     };
     assert_eq!(actual_path.parent(), Some(parent));
+    io_scope(
+        IoFault {
+            path: exact_path(actual_path),
+            kind: IoKind::CopyTo,
+            after_bytes: request.after_bytes,
+            receipt: request.receipt,
+        },
+        run,
+    )
+}
+
+pub(super) fn with_probe_copy_fault<T>(
+    exact_parent: &Path,
+    kind: ProbeKind,
+    exact_source_main: &Path,
+    ordinal: usize,
+    after_bytes: u64,
+    run: impl FnOnce() -> T,
+) -> (T, Option<IoObservation>) {
+    struct Reset(Option<ProbeCopyFault>);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            PROBE_COPY_FAULT.with(|current| current.replace(self.0.take()));
+        }
+    }
+    check_budget(after_bytes);
+    assert!(
+        match kind {
+            ProbeKind::Bundle => ordinal < 2,
+            ProbeKind::File => ordinal == 0,
+        },
+        "probe copies DB/WAL for a bundle and DB only for a file"
+    );
+    let receipt = Rc::new(RefCell::new(None));
+    let result = {
+        let _reset = Reset(PROBE_COPY_FAULT.with(|current| {
+            current.replace(Some(ProbeCopyFault {
+                parent: exact_path(exact_parent),
+                kind,
+                source_main: exact_path(exact_source_main),
+                ordinal,
+                after_bytes,
+                receipt: receipt.clone(),
+            }))
+        }));
+        run()
+    };
+    let observation = receipt.borrow().clone();
+    (result, observation)
+}
+
+/// Called after the constructor owns its new random directory. Match the
+/// selected source cohort and copy role, then bind the primitive to only the
+/// concrete destination path. No call counter or directory scan participates.
+pub(super) fn probe_copy_with_fault<T>(
+    parent: &Path,
+    kind: ProbeKind,
+    source_main: &Path,
+    ordinal: usize,
+    actual_path: &Path,
+    run: impl FnOnce() -> T,
+) -> T {
+    let request = PROBE_COPY_FAULT.with(|current| {
+        let mut current = current.borrow_mut();
+        if current.as_ref().is_some_and(|request| {
+            request.parent == parent
+                && request.kind == kind
+                && request.source_main == source_main
+                && request.ordinal == ordinal
+        }) {
+            current.take()
+        } else {
+            None
+        }
+    });
+    let Some(request) = request else {
+        return run();
+    };
+    let probe_dir = actual_path.parent().expect("probe output has a directory");
+    assert_eq!(probe_dir.parent(), Some(parent));
+    assert_eq!(
+        actual_path,
+        super::companions(&probe_dir.join("library.sqlite3"))[ordinal]
+    );
     io_scope(
         IoFault {
             path: exact_path(actual_path),
@@ -318,6 +425,64 @@ pub(super) fn with_sqlite_full<T>(
     (result, observation)
 }
 
+pub(super) fn with_create_sqlite_full<T>(
+    exact_parent: &Path,
+    exact_prefix: &str,
+    run: impl FnOnce() -> T,
+) -> (T, Option<SqliteObservation>) {
+    struct Reset(Option<CreateSqliteFault>);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            CREATE_SQLITE_FAULT.with(|current| current.replace(self.0.take()));
+        }
+    }
+    assert!(
+        !exact_prefix.is_empty() && !exact_prefix.contains(['/', '\\', ':', '\0']),
+        "backup fault requires an exact ordinary prefix"
+    );
+    let receipt = Rc::new(RefCell::new(None));
+    let result = {
+        let _reset = Reset(CREATE_SQLITE_FAULT.with(|current| {
+            current.replace(Some(CreateSqliteFault {
+                parent: exact_path(exact_parent),
+                prefix: exact_prefix.to_owned(),
+                receipt: receipt.clone(),
+            }))
+        }));
+        run()
+    };
+    let observation = receipt.borrow().clone();
+    (result, observation)
+}
+
+/// The creator has already chosen its unique destination. Claim only its
+/// exact backup parent and requested prefix, then run the unchanged SQLite
+/// operation against a private bounded memdb, retaining the real FULL result.
+pub(super) fn create_vacuum_override(
+    connection: &Connection,
+    parent: &Path,
+    prefix: &str,
+    actual_path: &Path,
+) -> Option<rusqlite::Result<()>> {
+    let request = CREATE_SQLITE_FAULT.with(|current| {
+        let mut current = current.borrow_mut();
+        if current
+            .as_ref()
+            .is_some_and(|request| request.parent == parent && request.prefix == prefix)
+        {
+            current.take()
+        } else {
+            None
+        }
+    })?;
+    assert_eq!(actual_path.parent(), Some(parent));
+    Some(run_bounded_vacuum(
+        connection,
+        sqlite_request(actual_path, request.receipt),
+        false,
+    ))
+}
+
 /// Return None for every other path. An exact match runs the real SQLite
 /// VACUUM against the bounded store and returns its unmodified typed result.
 pub(super) fn vacuum_override(
@@ -335,9 +500,24 @@ pub(super) fn vacuum_override(
             None
         }
     })?;
+    Some(run_bounded_vacuum(connection, request, true))
+}
+
+fn run_bounded_vacuum(
+    connection: &Connection,
+    request: SqliteFault,
+    synchronous_full: bool,
+) -> rusqlite::Result<()> {
     // `request` retains its keeper until the real execute_batch has completed.
+    // Restore already requests FULL; live backup creation does not change its
+    // connection's synchronous setting merely to select this test destination.
+    let pragma = if synchronous_full {
+        "PRAGMA synchronous=FULL; "
+    } else {
+        ""
+    };
     let result = connection.execute_batch(&format!(
-        "PRAGMA synchronous=FULL; VACUUM INTO '{}';",
+        "{pragma}VACUUM INTO '{}';",
         request.uri.replace('\'', "''")
     ));
     if let Err(error) = &result {
@@ -351,5 +531,5 @@ pub(super) fn vacuum_override(
             });
         }
     }
-    Some(result)
+    result
 }
