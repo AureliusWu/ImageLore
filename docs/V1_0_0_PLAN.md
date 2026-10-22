@@ -1,6 +1,6 @@
 # ImageLore v1.0.0 更新方案
 
-编制日期：2026-09-30；执行更新：2026-10-20（Asia/Shanghai）
+编制日期：2026-09-30；执行更新：2026-10-22（Asia/Shanghai）
 
 原始接手基线：`main` / `9b93bbbabab6ee8795fd6f0b0406acf7dfddccb4` / 应用 `0.25.1` / 数据库 schema `11`。
 
@@ -8,13 +8,19 @@
 
 执行更新：后续指令已授权版本化桌面快捷方式，并按 ROADMAP 持续推进至 `v1.0.0`。当前开发版本为 `0.26.0`（schema 仍为 11）。A1–A4/A6/A7 的实现与回归见[存储验收](V0_26_STORAGE_ACCEPTANCE.md)、[工作流验收](V0_26_WORKFLOW_ACCEPTANCE.md)；A5 文件库原生测量见[规模记录](V0_26_NATIVE_SCALE.md)，实际桌面程序、保存重启、恢复和性能边界见[桌面验收](V0_26_DESKTOP_ACCEPTANCE.md)，后续全库校验、关闭安全与内存隔离复验见[性能跟进](V0_26_PERFORMANCE_FOLLOWUP.md)。本计划的原始接手基线保留供追溯。阶段 A 的完整退出标准仍未全部关闭。公开源码仓库访问权限已具备；阶段 B 的证书/签名服务、正式 Release 及已验证 updater 端点仍未就绪。
 
-## 当前进度（2026-10-20）
+## 当前进度（2026-10-22）
+
+正式恢复的受控空间故障已完成定向验证：三用途合计 18 个故障场景及一个作用域控制，定向实际 **5/0/0**（27.22 秒），完整库测试实际 **230 passed / 0 failed / 3 原有 ignored**（203.51 秒），67 项编译/include 输入前后相同，包含测试代码的严格 Clippy 通过。Windows 112 在真实部分写入/复制及同步后注入，真实 SQLite VACUUM 在本案 8 KiB memdb 中返回 `DiskFull / 13`；原件、源与 raw 按故障状态分别保全，截断 Commit 连续三次正式入口拒绝且现场不变。首次 10 月 20 日中断无结果的尝试保留，不算通过或失败；完整套件复用实际定向产物的身份与回执见[空间故障验收](V0_26_SPACE_FAILURE_ACCEPTANCE.md)。同进程正式入口重试不计新进程或 GUI 验收，阶段 A 与后续分发阶段仍未关闭。
+
+`c19a2f6` 的 [main Native 复跑](https://github.com/AureliusWu/ImageLore/actions/runs/39397136749)实际 **224/0/3**（1030.72 秒），只覆盖此前 13 案源码。新增 31 案 Role 候选 `9284eaf` 的[快速 CI](https://github.com/AureliusWu/ImageLore/actions/runs/39711213364)与[敏感门禁](https://github.com/AureliusWu/ImageLore/actions/runs/39399396084)已成功，[Native](https://github.com/AureliusWu/ImageLore/actions/runs/39711150959)仍待终态，观察时间见空间故障记录。本批空间故障与以下本地 Role 225 项及此前远端 224 项各自绑定。
+
+### 2026-10-20 Role 候选与引擎探针记录
 
 本地 Role 候选已实际完成 **31 个 Windows 后端子进程强杀场景**：应用 pending 11、暂存 pending 10、自动损坏恢复 10，包含 DB/WAL 部分移出及部分归位后的续作。原件与 raw 全角色指纹、真实未 checkpoint 业务提交、正常重试和第二次启动均有断言；自动恢复原件是 schema 11 可读的真实额外索引损伤，健康恢复结果仍走完整验证。定向输出有 31 次真实终止和 31 个逐案 PASS（67.82 秒）；完整库测试 `full-roles-20261020-01` 为 **225 passed / 0 failed / 3 原有 ignored**（200.57 秒），65 项编译/include 输入前后相同，沿用该候选已编译的同一测试产物，严格 Clippy 通过。详细身份和历史失败见[存储验收](V0_26_STORAGE_ACCEPTANCE.md)与[pending 暂存安全](V0_26_PENDING_STAGE_SAFETY.md)。
 
 远端已归档的 `c19a2f6` 候选 [Native CI](https://github.com/AureliusWu/ImageLore/actions/runs/39395025528)为 **224/0/3**（709.34 秒），[快速 CI](https://github.com/AureliusWu/ImageLore/actions/runs/39395033317)与[敏感门禁](https://github.com/AureliusWu/ImageLore/actions/runs/39394917151)成功并正常快进 main。这是此前 13 案源码的远端证据，与新增 31 案的本地 225 项结果分别登记。
 
-独立 SQLite 3.46.0 引擎探针已实际通过：8 KiB 有界 memdb 的 VACUUM 返回 `DiskFull / 13`，独立 8 MiB 正常控制成功、源数据不变（1/0/0，0.01 秒）。这不是正式恢复空间故障用例；下一离线项仍是把新的副本探针和空间不足故障保全、同目录重试验证接入 ImageLore，尚未取得该应用范围的通过证据。允许在独立测试目录的受控 IO/SQLite 边界注入，核对真实文件副作用；原计划未要求物理主机断电或耗尽主机磁盘，不追加这两项为发布门槛。阶段 A 仍保留真实桌面、规模/冷暖性能和长期内存门槛；安装升级、可信签名、updater 与 RC 继续按后续阶段执行，版本及已验收桌面产物保持 `0.26.0`。
+独立 SQLite 3.46.0 引擎探针已实际通过：8 KiB 有界 memdb 的 VACUUM 返回 `DiskFull / 13`，独立 8 MiB 正常控制成功、源数据不变（1/0/0，0.01 秒）。它本身不是正式恢复用例；当时尚缺的 ImageLore 空间故障验证已于 10 月 22 日补充，具体范围和本地完整回归见首部。允许在独立测试目录的受控 IO/SQLite 边界注入，核对真实文件副作用；原计划未要求物理主机断电或耗尽主机磁盘，不追加这两项为发布门槛。阶段 A 仍保留真实桌面、规模/冷暖性能和长期内存门槛；安装升级、可信签名、updater 与 RC 继续按后续阶段执行，版本及已验收桌面产物保持 `0.26.0`。
 
 当前运行时更新：`ec8874f9421deb184e17e833347d2a70bf5b0238` / EXE SHA256 `10381121a5ea89c71d629f93c6f5e2879ca829612706e50c5ba82e16bd50e01c` 已完成 300 项真实 512 维编码、预期坏/缺失两项修复、各 20 warm 检索、备份与正常关闭/fresh-profile 重启；Native IPC p95 text/similar 为 `803 / 4.6` ms。该产物于 `2026-10-03T15:41:05.5079495Z`（北京时间 10 月 3 日 23:41:05）推广到 `<project>/desktop-runtime/current/ImageLore.exe`，既有桌面快捷方式稳定目标已核验，旧 current 完整文件保存为 previous。证据冻结时主仓库 HEAD 为 `177958a390d724dc65fb0e1433e70029022a46f0`，生产源码未改变；这两个 SHA 的角色分别为构建来源和文档/回归后的仓库状态。完整计时、用户数据检查范围及回退边界见[当前运行时验收](V0_26_CURRENT_RUNTIME_ACCEPTANCE.md)。该轮不关闭当前 50k、三次可比冷测、长期内存和物理 UI 门槛，历史 `2276de1` 的 50k 继续保留原身份。
 

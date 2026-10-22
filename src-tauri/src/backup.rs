@@ -20,6 +20,8 @@ mod operation_lock;
 mod owned_handle;
 #[cfg(windows)]
 mod restore_journal;
+#[cfg(all(test, windows))]
+mod space_fault;
 
 const MAX_BACKUPS: usize = 10;
 const AUTO_INTERVAL: i64 = 24 * 3600;
@@ -1610,6 +1612,11 @@ mod tests {
     #[cfg(windows)]
     pub(super) mod restore_process_exit_tests {
         include!("backup/restore_process_exit_tests.rs");
+    }
+
+    #[cfg(windows)]
+    mod space_failure_tests {
+        include!("backup/space_failure_tests.rs");
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -336,9 +336,13 @@ fn preserve(
         if let Some(source) = bundle.files_mut()[ordinal].as_mut() {
             let original = source.fingerprint().map_err(io)?;
             let path = current.join(format!("{prefix}-{token}.{label}.raw"));
-            let mut copy = source
-                .copy_to(&path)
-                .map_err(|error| format!("保全原件 {label} 失败：{error}"))?;
+            #[cfg(test)]
+            let copy = super::space_fault::raw_copy_with_fault(&current, ordinal, &path, || {
+                source.copy_to(&path)
+            });
+            #[cfg(not(test))]
+            let copy = source.copy_to(&path);
+            let mut copy = copy.map_err(|error| format!("保全原件 {label} 失败：{error}"))?;
             let before_close = copy.fingerprint().map_err(io)?;
             drop(copy); // settle Windows' close-time last-write timestamp
             let mut copy = WindowsExclusiveFile::lock_existing(&path).map_err(io)?;
@@ -404,11 +408,18 @@ impl Attempt {
                 .map_err(|e| e.to_string())?;
             conn.busy_timeout(std::time::Duration::ZERO)
                 .map_err(|e| e.to_string())?;
-            conn.execute_batch(&format!(
-                "PRAGMA synchronous=FULL; VACUUM INTO '{}';",
-                sql_path(&staged_path)
-            ))
-            .map_err(|e| e.to_string())?;
+            let vacuum = || {
+                conn.execute_batch(&format!(
+                    "PRAGMA synchronous=FULL; VACUUM INTO '{}';",
+                    sql_path(&staged_path)
+                ))
+            };
+            #[cfg(test)]
+            let result =
+                super::space_fault::vacuum_override(&conn, &staged_path).unwrap_or_else(vacuum);
+            #[cfg(not(test))]
+            let result = vacuum();
+            result.map_err(|e| e.to_string())?;
             drop(conn);
             super::sync_file(&staged_path)
         });

@@ -249,6 +249,12 @@ impl WindowsExclusiveFile {
         }
         self.file.seek(SeekFrom::Start(0))?;
         self.file.set_len(0)?;
+        #[cfg(test)]
+        if let Some(fault) =
+            super::space_fault::take_io_fault(&self.path, super::space_fault::IoKind::WriteCreated)
+        {
+            return Err(fault.write_error(&mut self.file, bytes)?);
+        }
         self.file.write_all(bytes)?;
         self.file.sync_all()
     }
@@ -336,6 +342,12 @@ impl WindowsExclusiveFile {
 
     pub(super) fn copy_to(&mut self, target: &Path) -> io::Result<Self> {
         let mut output = Self::create_new(target)?;
+        #[cfg(test)]
+        if let Some(fault) =
+            super::space_fault::take_io_fault(target, super::space_fault::IoKind::CopyTo)
+        {
+            return Err(fault.copy_error(&mut self.clone_at_start()?, &mut output.file)?);
+        }
         io::copy(&mut self.clone_at_start()?, &mut output.file)?;
         output.file.sync_all()?;
         // A failed copy leaves its create-new output for inspection, never

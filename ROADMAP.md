@@ -1,12 +1,18 @@
 # ImageLore Roadmap
 
-## 当前进度（2026-10-20）
+## 当前进度（2026-10-22）
+
+版本保持 `0.26.0`，阶段 A 仍未全部退出。正式恢复入口的空间故障定向门禁实际 **5/0/0**（27.22 秒），覆盖三用途的 18 个故障场景及一个作用域控制；完整库测试实际 **230 passed / 0 failed / 3 原有 ignored**（203.51 秒），67 项编译/include 输入前后相同，严格 Clippy 通过。Windows 112 属于真实部分写入/复制和同步后的受控注入；SQLite FULL 来自本案 8 KiB 有界 memdb 的实际 VACUUM。截断 Commit 持续拒绝并保留完整现场，其余已覆盖故障在撤销注入后正式入口重试；同进程后端重试不计桌面或新进程启动验收。产物复用及源码身份详见[空间故障验收](docs/V0_26_SPACE_FAILURE_ACCEPTANCE.md)。
+
+此前 `c19a2f6` 的 [main Native 复跑](https://github.com/AureliusWu/ImageLore/actions/runs/39397136749)实际 **224/0/3**（1030.72 秒），只覆盖原 13 案源码。新增 31 案 Role 候选 `9284eaf` 的[快速 CI](https://github.com/AureliusWu/ImageLore/actions/runs/39711213364)与[敏感门禁](https://github.com/AureliusWu/ImageLore/actions/runs/39399396084)已成功，[Native](https://github.com/AureliusWu/ImageLore/actions/runs/39711150959)仍待终态，观察时间见空间故障记录；这些状态不与本批空间故障源码混记。性能、桌面、长期内存、安装升级、可信签名、updater 和 RC 按既有计划继续验收。
+
+### 2026-10-20 Role 候选与引擎探针记录
 
 开发与已验收桌面版本仍为 `0.26.0`，阶段 A 未全部退出。本地 Role 候选完成 **31 个真实 Windows 后端进程强杀场景**（应用 pending 11、暂存 pending 10、自动损坏恢复 10），覆盖 DB/WAL 部分移出、部分归位、提交与部分清理，并核对完整原件/raw、业务、正常重试及第二次启动。完整库测试 **225 passed / 0 failed / 3 原有 ignored**（200.57 秒），65 项编译/include 输入前后相同，严格 Clippy 通过，见[存储验收](docs/V0_26_STORAGE_ACCEPTANCE.md)和[pending 暂存安全](docs/V0_26_PENDING_STAGE_SAFETY.md)。
 
 此前 `c19a2f6` 的[候选 Native](https://github.com/AureliusWu/ImageLore/actions/runs/39395025528)实际 **224/0/3**（709.34 秒），[快速 CI](https://github.com/AureliusWu/ImageLore/actions/runs/39395033317)和[敏感门禁](https://github.com/AureliusWu/ImageLore/actions/runs/39394917151)成功后正常快进 main。该远端结果绑定此前 13 案源码，与新增 31 案的本地结果分开登记。
 
-独立引擎探针已证明有界 memdb 的真实 `SQLITE_FULL / 13`、正常容量控制及源数据保全（1/0/0）；正式 ImageLore 副本探针与空间不足故障用例仍待补齐。按原计划验证错误时保全及可恢复行为，可采用受控注入，不追加物理主机断电或耗尽主机磁盘门槛。真实桌面、50k/75k 与冷暖性能、长期内存、安装升级、可信签名、updater 和 RC 继续按既有阶段验收。
+独立引擎探针已证明有界 memdb 的真实 `SQLITE_FULL / 13`、正常容量控制及源数据保全（1/0/0）；该次尚缺的正式 ImageLore 空间故障定向验证已于 10 月 22 日补充，范围见首部。按原计划验证错误时保全及可恢复行为，可采用受控注入，不追加物理主机断电或耗尽主机磁盘门槛。真实桌面、50k/75k 与冷暖性能、长期内存、安装升级、可信签名、updater 和 RC 继续按既有阶段验收。
 
 ## v0.10.0 — Clean Core ✅
 全新 SQLite 数据基线、规范化标签、FTS、Collection、Lineage。

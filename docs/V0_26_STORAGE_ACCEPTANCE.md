@@ -1,8 +1,16 @@
 # v0.26 存储与恢复验收
 
-日期：2026-09-30；执行更新：2026-10-20（Asia/Shanghai）。范围：A1 启动保护、A2 备份/恢复、A3 历史迁移、A4 自动备份后端。全部故障库与哨兵数据位于独立临时目录，未打开用户正常资料库。
+日期：2026-09-30；执行更新：2026-10-22（Asia/Shanghai）。范围：A1 启动保护、A2 备份/恢复、A3 历史迁移、A4 自动备份后端。全部故障库与哨兵数据位于独立临时目录，未打开用户正常资料库。
 
-## 2026-10-20 当前进度
+## 2026-10-22 当前进度
+
+Windows 正式恢复入口完成空间故障定向验证：应用 pending、暂存 pending、自动损坏恢复三用途，共 **18 个故障场景**（PREPARED 部分写入 3、raw 部分复制 9、截断 COMMITTED 3、真实 SQLite FULL 3）及一个作用域控制测试。定向实际 **5/0/0**（27.22 秒），完整库测试实际 **230 passed / 0 failed / 3 原有 ignored**（203.51 秒），67 项编译/include 输入前后相同，严格 `--lib --tests -- -D warnings` Clippy 通过。完整套件沿用定向门禁新编译的同一测试产物；首次 10 月 20 日尝试中断且无结果，原记录保留。产物、源码绑定与完整门禁身份见[空间故障验收](V0_26_SPACE_FAILURE_ACCEPTANCE.md)。
+
+Windows 112 在真实部分写入/复制和同步后受控注入；SQLite FULL 则由唯一命名、8 KiB 有界 memdb 中的实际 VACUUM 返回 typed `DiskFull / 13`。原件、源候选及 raw 的断言分别核对；截断 Commit 持续拒绝并保留完整现场，不能盲删协议文件强行恢复。撤销注入后的正式入口重试发生在同一测试进程，不作为桌面或新进程重启验收。A1/A2、性能、桌面、安装升级及后续签名/updater/RC 门槛继续保留。
+
+此前 `c19a2f6` 的 [main Native 复跑](https://github.com/AureliusWu/ImageLore/actions/runs/39397136749)实际 **224/0/3**（1030.72 秒），与下述候选 224 项结果分别归档。Role 候选 `9284eaf` 的[快速 CI](https://github.com/AureliusWu/ImageLore/actions/runs/39711213364)与[敏感门禁](https://github.com/AureliusWu/ImageLore/actions/runs/39399396084)已成功，[Native](https://github.com/AureliusWu/ImageLore/actions/runs/39711150959)仍待终态；观察时间见独立记录。新增 31 案的本地 225 项结果仍只绑定该 Role 候选，本批空间故障不继承其远端状态。
+
+## 2026-10-20 Role 候选与引擎探针记录
 
 本地 Role 候选完成 **31 个真实 Windows 子进程强制终止场景**：应用 pending 11、暂存 pending 10、自动损坏恢复 10。覆盖持久记录、DB/WAL 部分移出与部分归位、安装、提交及部分清理；父进程在确认子进程存活和实际占锁后强杀，31 次退出与逐案 PASS 保存在 `conflicts-roles-20261020-01` 原始输出中（67.82 秒）。原件、候选和 raw 使用真实含未 checkpoint 提交的 DB/WAL/SHM；自动恢复原件为 schema 11 的单叶额外索引损伤，以专用副本同时证明 integrity 非 ok 和业务仍可读，提交后的健康库仍通过完整验证。详见 [pending 暂存与进程终止记录](V0_26_PENDING_STAGE_SAFETY.md)。
 
@@ -12,7 +20,7 @@
 
 另有独立 SQLite 引擎探针 `probe-01` 实际 **1 passed / 0 failed / 0 ignored**（0.01 秒）：SQLite 3.46.0、`USE_URI=1`，8 KiB 有界 memdb 的 VACUUM 实际返回 `DiskFull / 13`，独立 8 MiB 正常控制成功且源数据未变。它是仓库外的引擎容量探针，不是 ImageLore 恢复用例；原始回执保存在 `<private-evidence>/sqlite-full-probe-20261020-01`。
 
-A1/A2 整项仍未关闭。正式恢复中的新副本探针与空间不足故障保全用例仍待补齐，可在独立文件库的受控 IO/SQLite 边界注入并核对实际文件副作用与同目录重试。原计划要求这些失败时保全和可恢复行为，不要求物理主机断电或耗尽主机磁盘，不把后二者追加为发布门槛。真实桌面重启、50k/75k 与长期内存、安装升级、签名、updater 和 RC 仍按原计划各自验收；本轮没有运行 GUI、推广应用 EXE 或更改桌面快捷方式。
+A1/A2 整项仍未关闭。在该次记录时，正式恢复中的新副本探针与空间不足故障保全用例尚待补齐；后续正式空间故障定向结果见首部及[独立验收记录](V0_26_SPACE_FAILURE_ACCEPTANCE.md)。原计划要求这些失败时保全和可恢复行为，不要求物理主机断电或耗尽主机磁盘，不把后二者追加为发布门槛。真实桌面重启、50k/75k 与长期内存、安装升级、签名、updater 和 RC 仍按原计划各自验收；该轮没有运行 GUI、推广应用 EXE 或更改桌面快捷方式。
 
 ## 2026-10-20 较早 Windows 恢复事务记录（193→221→224 项）
 

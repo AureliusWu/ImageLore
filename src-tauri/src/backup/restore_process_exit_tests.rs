@@ -15,7 +15,7 @@ const READY_LIMIT: usize = 8192;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-enum Purpose {
+pub(super) enum Purpose {
     ApplyPending,
     StagePending,
     RecoverCorrupt,
@@ -23,7 +23,7 @@ enum Purpose {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-enum Point {
+pub(super) enum Point {
     Prepared,
     ReservedDatabase,
     ReservedWal,
@@ -75,24 +75,24 @@ impl Point {
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ProcessSpec {
-    root: PathBuf,
+pub(super) struct ProcessSpec {
+    pub(super) root: PathBuf,
     nonce: String,
     purpose: Purpose,
     point: Point,
 }
 
 impl ProcessSpec {
-    fn data(&self) -> PathBuf {
+    pub(super) fn data(&self) -> PathBuf {
         self.root.join("data")
     }
-    fn active(&self) -> PathBuf {
+    pub(super) fn active(&self) -> PathBuf {
         self.data().join("library.sqlite3")
     }
-    fn pending(&self) -> PathBuf {
+    pub(super) fn pending(&self) -> PathBuf {
         self.data().join("restore.pending.sqlite3")
     }
-    fn source(&self) -> PathBuf {
+    pub(super) fn source(&self) -> PathBuf {
         match self.purpose {
             Purpose::ApplyPending => self.pending(),
             Purpose::StagePending | Purpose::RecoverCorrupt => {
@@ -100,19 +100,19 @@ impl ProcessSpec {
             }
         }
     }
-    fn target(&self) -> PathBuf {
+    pub(super) fn target(&self) -> PathBuf {
         match self.purpose {
             Purpose::ApplyPending | Purpose::RecoverCorrupt => self.active(),
             Purpose::StagePending => self.pending(),
         }
     }
-    fn transaction(&self) -> PathBuf {
+    pub(super) fn transaction(&self) -> PathBuf {
         self.data().join(match self.purpose {
             Purpose::ApplyPending | Purpose::RecoverCorrupt => "restore.transaction",
             Purpose::StagePending => "restore.pending.transaction",
         })
     }
-    fn target_name(&self) -> &'static str {
+    pub(super) fn target_name(&self) -> &'static str {
         match self.purpose {
             Purpose::ApplyPending | Purpose::RecoverCorrupt => "library.sqlite3",
             Purpose::StagePending => "restore.pending.sqlite3",
@@ -127,13 +127,13 @@ impl ProcessSpec {
     }
 }
 
-struct ProcessFixture {
-    spec: ProcessSpec,
+pub(super) struct ProcessFixture {
+    pub(super) spec: ProcessSpec,
     temporary: PathBuf,
 }
 
 impl ProcessFixture {
-    fn new(purpose: Purpose, point: Point) -> Self {
+    pub(super) fn new(purpose: Purpose, point: Point) -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let temporary = fs::canonicalize(std::env::temp_dir()).unwrap();
         let nonce = format!(
@@ -167,7 +167,7 @@ impl ProcessFixture {
         );
     }
 
-    fn cleanup(self) {
+    pub(super) fn cleanup(self) {
         fn ordinary_tree(path: &Path) {
             let metadata = fs::symlink_metadata(path).unwrap();
             assert_eq!(metadata.file_attributes() & 0x400, 0);
@@ -215,13 +215,13 @@ fn process_write(path: &Path, bytes: &[u8]) {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ProcessProof {
-    bytes: Vec<u8>,
+pub(super) struct ProcessProof {
+    pub(super) bytes: Vec<u8>,
     modified: SystemTime,
     fingerprint: FileFingerprint,
 }
 
-fn process_proof(path: &Path) -> ProcessProof {
+pub(super) fn process_proof(path: &Path) -> ProcessProof {
     ProcessProof {
         bytes: fs::read(path).unwrap(),
         modified: fs::metadata(path).unwrap().modified().unwrap(),
@@ -232,7 +232,7 @@ fn process_proof(path: &Path) -> ProcessProof {
     }
 }
 
-fn process_cohort(path: &Path) -> [Option<ProcessProof>; 3] {
+pub(super) fn process_cohort(path: &Path) -> [Option<ProcessProof>; 3] {
     companions(path).map(|path| match fs::symlink_metadata(&path) {
         Ok(metadata) => {
             assert!(metadata.is_file());
@@ -245,7 +245,7 @@ fn process_cohort(path: &Path) -> [Option<ProcessProof>; 3] {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-struct ProcessBusiness {
+pub(super) struct ProcessBusiness {
     marker: String,
     extra_asset: String,
     asset_count: i64,
@@ -293,7 +293,10 @@ fn read_process_business(conn: &Connection) -> ProcessBusiness {
     }
 }
 
-fn process_business(spec: &ProcessSpec, paths: &[Option<PathBuf>; 3]) -> ProcessBusiness {
+pub(super) fn process_business(
+    spec: &ProcessSpec,
+    paths: &[Option<PathBuf>; 3],
+) -> ProcessBusiness {
     let copy = process_business_copy(spec, paths);
     validate_in_place(&copy).unwrap();
     let conn = Connection::open_with_flags(&copy, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
@@ -303,7 +306,10 @@ fn process_business(spec: &ProcessSpec, paths: &[Option<PathBuf>; 3]) -> Process
 // Recovery's original and raw bytes intentionally contain one damaged extra
 // index leaf. They must remain schema-11/readable business data, while an
 // actual SQLite integrity result proves physical damage instead of NOTADB.
-fn process_corrupt_business(spec: &ProcessSpec, paths: &[Option<PathBuf>; 3]) -> ProcessBusiness {
+pub(super) fn process_corrupt_business(
+    spec: &ProcessSpec,
+    paths: &[Option<PathBuf>; 3],
+) -> ProcessBusiness {
     let copy = process_business_copy(spec, paths);
     let conn = Connection::open_with_flags(&copy, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
     assert_eq!(
@@ -332,17 +338,17 @@ fn process_corrupt_business(spec: &ProcessSpec, paths: &[Option<PathBuf>; 3]) ->
     business
 }
 
-fn business_at(spec: &ProcessSpec, path: &Path) -> ProcessBusiness {
+pub(super) fn business_at(spec: &ProcessSpec, path: &Path) -> ProcessBusiness {
     let paths = companions(path).map(|path| path.try_exists().unwrap().then_some(path));
     process_business(spec, &paths)
 }
 
-fn corrupt_business_at(spec: &ProcessSpec, path: &Path) -> ProcessBusiness {
+pub(super) fn corrupt_business_at(spec: &ProcessSpec, path: &Path) -> ProcessBusiness {
     let paths = companions(path).map(|path| path.try_exists().unwrap().then_some(path));
     process_corrupt_business(spec, &paths)
 }
 
-fn assert_business(business: &ProcessBusiness, marker: &str, extra: &str) {
+pub(super) fn assert_business(business: &ProcessBusiness, marker: &str, extra: &str) {
     assert_eq!(business.marker, marker);
     assert_eq!(business.extra_asset, extra);
     assert_eq!(business.asset_count, 2);
@@ -352,7 +358,13 @@ fn assert_business(business: &ProcessBusiness, marker: &str, extra: &str) {
 // Copy an actually committed, uncheckpointed SQLite WAL while its sole source
 // connection is idle. Close that source before the transaction child starts;
 // the independent DB/WAL/SHM copies remain the real test cohort.
-fn seed_process_wal(spec: &ProcessSpec, target: &Path, label: &str, marker: &str, extra: &str) {
+pub(super) fn seed_process_wal(
+    spec: &ProcessSpec,
+    target: &Path,
+    label: &str,
+    marker: &str,
+    extra: &str,
+) {
     let staging = spec.root.join(format!("wal-seed-{label}.sqlite3"));
     let conn = seed(&staging, "marker before WAL commit");
     let damage_index = if spec.purpose == Purpose::RecoverCorrupt
