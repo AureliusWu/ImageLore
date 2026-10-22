@@ -4,9 +4,13 @@
 
 ## 2026-10-22 当前进度
 
+4.1-6 缺图/重定位的文件库后端闭环已补证据：真实两 PNG 导入、实际移动、missing 刷新、缓存与 FTS/CJK 重建、drop/reopen、fingerprint 重定位、再次重开与幂等，持续核对十二表 typed 行、完整资产记录和双向谱系。首次 `4030249 + commands.rs` 定向实际 **1/0/0**（0.15 秒），67 项输入相同；随后整合至 `82c187f`，同一 commands 字节的完整库回归实际 **236 passed / 0 failed / 3 原有 ignored**（248.98 秒），68 项输入相同，严格 Clippy 通过。两次新编译产物身份和具体断言见[缺图与重定位验收](V0_26_MISSING_RELOCATION_ACCEPTANCE.md)，不计 GUI/IPC 或新应用进程重启。
+
+### 前一批故障补充记录（68 项输入）
+
 本次补齐审计定位的后端故障路径：真实备份创建 SQLite FULL 1 案、当前源 Probe 的 DB/WAL 部分复制 6 案、安装后 File Probe 部分复制 3 案、所有缺失预检之后的真实 rename 80/183 冲突 3 案、真实 Windows readonly 拒绝及属性恢复 3 案。定向 **5/0/0**（24.40 秒），原始输出有 16 个场景 PASS；完整库回归实际 **235 passed / 0 failed / 3 原有 ignored**（223.37 秒），68 项编译/include 输入前后相同，严格 Clippy 通过。产物复用身份、真实文件指纹与业务断言见[备份与恢复故障补充验收](V0_26_BACKUP_FAULT_COMPLETION.md)。旧 18 案和 31 案不重复计入；同进程后端入口、事务核心钩子与实际 GUI/IPC 验收分别记录。
 
-A1 核心自动恢复策略已有后端证据；A2 本次审计发现的上述具体故障路径已补定向验证，4.1-6 的缺图/正式重定位/业务与谱系重开闭环另行定位。当前源码的真实桌面流程、性能、长期内存及安装、签名、updater、RC 仍按原计划完成，版本与桌面产物保持 `0.26.0`。
+A1 核心自动恢复策略已有后端证据；A2 上述具体故障路径已有定向和完整回归，后续 4.1-6 后端闭环见首部。当前源码的真实桌面流程、性能、长期内存及安装、签名、updater、RC 仍按原计划完成，版本与桌面产物保持 `0.26.0`。
 
 前一批 `4030249` 的[候选 Native](https://github.com/AureliusWu/ImageLore/actions/runs/39712538000)实际 **230/0/3**（901.46 秒），[快速 CI](https://github.com/AureliusWu/ImageLore/actions/runs/39712540748)和[敏感门禁](https://github.com/AureliusWu/ImageLore/actions/runs/39712357271)成功后正常快进 main；推送前 1327 项检查与默认 Gitleaks 通过。它不覆盖本批新增 68 项输入中的故障接点。两路 worker 候选的 233 项本地回归与六操作 debug 诊断另见[固定提交记录](https://github.com/AureliusWu/ImageLore/blob/0a87dd8ddfce3022df4122576f616b5bbbbaf503/docs/V0_26_BACKUP_GUARDED_WORKER_DIAGNOSTIC.md)，未入 main、未关闭正式性能。
 

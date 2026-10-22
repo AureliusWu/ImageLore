@@ -2,7 +2,11 @@
 
 ## 当前进度（2026-10-22）
 
-版本保持 `0.26.0`。审计定位的备份创建 FULL、当前 Probe 复制、真实 rename 80/183 与 readonly 拒绝/恢复补充验证实际 **5/0/0**（24.40 秒），覆盖 16 个明确故障场景；完整库回归实际 **235 passed / 0 failed / 3 原有 ignored**（223.37 秒），68 项编译/include 输入前后相同，严格 Clippy 通过。A1 核心后端策略已有证明，A2 本次具体路径已补定向和完整回归，4.1-6 缺图/正式重定位与业务重开闭环另行定位。测试进程内正式入口与事务核心接点不计 GUI/IPC 或安装验收，产物与源码身份见[故障补充记录](docs/V0_26_BACKUP_FAULT_COMPLETION.md)。
+版本保持 `0.26.0`。4.1-6 缺图/重定位后端闭环已补：真实两 PNG 导入与移动、missing 刷新、缓存/FTS/CJK 重建、drop/reopen、fingerprint 重定位及再次重开/幂等，核对十二表 typed 数据、完整资产记录和双向谱系。首次 `4030249 + commands.rs` 定向实际 **1/0/0**（0.15 秒）、67 项输入相同；整合至 `82c187f` 后完整库回归实际 **236 passed / 0 failed / 3 原有 ignored**（248.98 秒），68 项输入相同，严格 Clippy 通过。身份及 GUI/新进程边界见[缺图与重定位验收](docs/V0_26_MISSING_RELOCATION_ACCEPTANCE.md)。
+
+### 前一批故障补充记录（68 项输入）
+
+版本保持 `0.26.0`。审计定位的备份创建 FULL、当前 Probe 复制、真实 rename 80/183 与 readonly 拒绝/恢复补充验证实际 **5/0/0**（24.40 秒），覆盖 16 个明确故障场景；完整库回归实际 **235 passed / 0 failed / 3 原有 ignored**（223.37 秒），68 项编译/include 输入前后相同，严格 Clippy 通过。A1 核心后端策略已有证明，A2 本次具体路径已补定向和完整回归，后续 4.1-6 后端闭环见首部。测试进程内正式入口与事务核心接点不计 GUI/IPC 或安装验收，产物与源码身份见[故障补充记录](docs/V0_26_BACKUP_FAULT_COMPLETION.md)。
 
 前一批 `4030249` 的[候选 Native](https://github.com/AureliusWu/ImageLore/actions/runs/39712538000)实际 **230/0/3**（901.46 秒），[快速 CI](https://github.com/AureliusWu/ImageLore/actions/runs/39712540748)与[敏感门禁](https://github.com/AureliusWu/ImageLore/actions/runs/39712357271)成功并正常快进 main；本批新增故障路径单独验证。两路 worker 候选的本地 233 项和六操作 debug 诊断见[固定提交记录](https://github.com/AureliusWu/ImageLore/blob/0a87dd8ddfce3022df4122576f616b5bbbbaf503/docs/V0_26_BACKUP_GUARDED_WORKER_DIAGNOSTIC.md)，未入 main、未完成正式性能。
 

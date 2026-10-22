@@ -507,6 +507,10 @@ fn preview_cache_key(
 
 #[tauri::command]
 pub fn refresh_missing(state: State<'_, AppState>) -> Result<i64, String> {
+    refresh_missing_for_state(state.inner())
+}
+
+fn refresh_missing_for_state(state: &AppState) -> Result<i64, String> {
     let rows: Vec<(i64, String, i64)> = {
         let conn = state.db.lock().map_err(|e| e.to_string())?;
         let mut st = conn
@@ -547,6 +551,10 @@ pub fn refresh_missing(state: State<'_, AppState>) -> Result<i64, String> {
 
 #[tauri::command]
 pub fn relocate_missing(state: State<'_, AppState>, root: String) -> Result<i64, String> {
+    relocate_missing_for_state(state.inner(), Path::new(&root))
+}
+
+fn relocate_missing_for_state(state: &AppState, root: &Path) -> Result<i64, String> {
     let wanted: Vec<(i64, String)> = {
         let conn = state.db.lock().map_err(|e| e.to_string())?;
         let mut st = conn
@@ -873,5 +881,372 @@ mod tests {
         assert_eq!(second_pixel, [0, 255, 0]);
         assert!(source_preserved);
         assert!(previous_cache_preserved);
+    }
+
+    #[test]
+    fn missing_relocation_rebuild_and_reopen_preserve_manual_metadata_and_lineage() {
+        use rusqlite::types::Value as SqlValue;
+        use std::io::Write;
+        use std::sync::{
+            atomic::{AtomicBool, AtomicU64},
+            Mutex,
+        };
+
+        fn open_state(root: &Path) -> AppState {
+            fs::create_dir_all(root).unwrap();
+            let database_path = root.join("library.sqlite3");
+            AppState {
+                db: Mutex::new(db::init_db(&database_path).unwrap()),
+                backup_operation: Mutex::new(()),
+                data_dir: root.to_path_buf(),
+                cache_dir: root.join("cache"),
+                database_path,
+                backups_dir: root.join("backups"),
+                models_dir: root.join("models"),
+                jobs: Mutex::new(HashMap::new()),
+                next_job_id: AtomicU64::new(1),
+                vision_api_key: Mutex::new(String::new()),
+            }
+        }
+
+        fn typed_rows(conn: &Connection, sql: &str) -> Vec<Vec<SqlValue>> {
+            let mut statement = conn.prepare(sql).unwrap();
+            let columns = statement.column_count();
+            statement
+                .query_map([], |row| {
+                    (0..columns)
+                        .map(|column| row.get(column))
+                        .collect::<rusqlite::Result<Vec<SqlValue>>>()
+                })
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+        }
+
+        fn manual_snapshot(conn: &Connection) -> Vec<Vec<Vec<SqlValue>>> {
+            [
+                // Only relocation's path/name/missing/updated_at may change.
+                "SELECT id,favorite,width,height,file_size,format,mime_type,metadata_type,generation_json,fingerprint,portable_id,file_mtime,created_at FROM assets ORDER BY id",
+                "SELECT * FROM prompt_state ORDER BY asset_id",
+                "SELECT * FROM prompt_revisions ORDER BY id",
+                "SELECT * FROM tags ORDER BY id",
+                "SELECT * FROM asset_tags ORDER BY asset_id,tag_id",
+                "SELECT * FROM visual_dna ORDER BY asset_id",
+                "SELECT * FROM reference_sources ORDER BY id",
+                "SELECT * FROM relations ORDER BY id",
+                "SELECT * FROM collections ORDER BY id",
+                "SELECT * FROM collection_assets ORDER BY collection_id,asset_id",
+                "SELECT * FROM generation_index ORDER BY asset_id",
+                "SELECT * FROM app_meta ORDER BY key",
+            ]
+            .iter()
+            .map(|sql| typed_rows(conn, sql))
+            .collect()
+        }
+
+        fn database_bundle(database: &Path) -> Vec<Option<Vec<u8>>> {
+            ["", "-wal", "-shm"]
+                .iter()
+                .map(|suffix| {
+                    let path = PathBuf::from(format!("{}{suffix}", database.to_string_lossy()));
+                    match fs::read(path) {
+                        Ok(bytes) => Some(bytes),
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                        Err(error) => panic!("Cannot snapshot isolated library bundle: {error}"),
+                    }
+                })
+                .collect()
+        }
+
+        fn search_ids(conn: &Connection, query: &str) -> Vec<i64> {
+            search::library_page(
+                conn,
+                &LibraryFilter {
+                    query: query.into(),
+                    ..LibraryFilter::default()
+                },
+                0,
+                20,
+            )
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|asset| asset.id)
+            .collect()
+        }
+
+        let temporary = std::env::temp_dir().canonicalize().unwrap();
+        let root = temporary.join(format!(
+            "imagelore-missing-relocation-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        let marker = root.join(".imagelore-command-test-root");
+        let mut marker_file = fs::File::options()
+            .write(true)
+            .create_new(true)
+            .open(&marker)
+            .unwrap();
+        marker_file
+            .write_all(b"ImageLore missing relocation fixture v1")
+            .unwrap();
+        marker_file.sync_all().unwrap();
+        drop(marker_file);
+        let images = root.join("images");
+        let relocated = root.join("relocated");
+        fs::create_dir(&images).unwrap();
+        fs::create_dir(&relocated).unwrap();
+        let parent_path = images.join("parent.png");
+        let old_path = images.join("oldnameanchor.png");
+        let new_path = relocated.join("relocatednameanchor.png");
+        image::RgbImage::from_pixel(3, 3, image::Rgb([20, 40, 60]))
+            .save(&parent_path)
+            .unwrap();
+        image::RgbImage::from_pixel(3, 3, image::Rgb([80, 100, 120]))
+            .save(&old_path)
+            .unwrap();
+        let parent_path = parent_path.canonicalize().unwrap();
+        let old_path = old_path.canonicalize().unwrap();
+        let parent_bytes = fs::read(&parent_path).unwrap();
+        let child_bytes = fs::read(&old_path).unwrap();
+        let library = root.join("library");
+        let state = open_state(&library);
+        let imported = crate::importer::run_import(
+            &state,
+            vec![
+                parent_path.to_string_lossy().into_owned(),
+                old_path.to_string_lossy().into_owned(),
+            ],
+            false,
+            &AtomicBool::new(false),
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(
+            (
+                imported.added,
+                imported.skipped,
+                imported.duplicates,
+                imported.failed
+            ),
+            (2, 0, 0, 0)
+        );
+
+        let (parent, child, preserved) = {
+            let mut conn = state.db.lock().unwrap();
+            let id_at = |path: &Path| {
+                conn.query_row(
+                    "SELECT id FROM assets WHERE path=?1",
+                    params![path.to_string_lossy()],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap()
+            };
+            let parent_id = id_at(&parent_path);
+            let child_id = id_at(&old_path);
+            let tx = conn.transaction().unwrap();
+            tx.execute(
+                "UPDATE assets SET favorite=1,generation_json=?1,updated_at=1 WHERE id=?2",
+                params![
+                    r#"{"seed":42,"steps":28,"sampler":"manualsampler"}"#,
+                    child_id
+                ],
+            )
+            .unwrap();
+            tx.execute(
+                "UPDATE prompt_state SET prompt='manualpromptanchor 手工蓝发角色',negative_prompt='negativeanchor',model='modelanchor',updated_at=2 WHERE asset_id=?1",
+                params![child_id],
+            ).unwrap();
+            tx.execute(
+                "INSERT INTO prompt_revisions(asset_id,prompt,negative_prompt,model,tags_json,note,created_at) VALUES(?1,'revisionanchor 历史手工','historic negative','historic model','[\"taganchor\"]','keep revision note',3)",
+                params![child_id],
+            ).unwrap();
+            tx.execute(
+                "INSERT INTO tags(name,created_at) VALUES('taganchor',4)",
+                [],
+            )
+            .unwrap();
+            let tag_id = tx.last_insert_rowid();
+            tx.execute(
+                "INSERT INTO asset_tags(asset_id,tag_id,created_at) VALUES(?1,?2,5)",
+                params![child_id, tag_id],
+            )
+            .unwrap();
+            tx.execute("INSERT INTO visual_dna(asset_id,subject,style,search_text,source,updated_at) VALUES(?1,'dnaanchor 红衣角色','hand-painted','dnaanchor 红衣角色','manual',6)", params![child_id]).unwrap();
+            tx.execute("INSERT INTO reference_sources(asset_id,source_url,page_url,page_title,metadata_json,captured_at,created_at,updated_at) VALUES(?1,'https://example.test/image.png','https://example.test/page','referenceanchor 紫色光影','{\"note\":\"manual reference\"}',7,8,9)", params![child_id]).unwrap();
+            tx.execute("INSERT INTO relations(parent_id,child_id,relation_type,note,created_at) VALUES(?1,?2,'derived_from','keep lineage note',10)", params![parent_id,child_id]).unwrap();
+            tx.execute("INSERT INTO collections(name,description,created_at,updated_at) VALUES('manual collection','keep collection note',11,12)", []).unwrap();
+            let collection_id = tx.last_insert_rowid();
+            tx.execute(
+                "INSERT INTO collection_assets(collection_id,asset_id,created_at) VALUES(?1,?2,13)",
+                params![collection_id, child_id],
+            )
+            .unwrap();
+            generation_index::upsert(
+                &tx,
+                child_id,
+                r#"{"seed":42,"steps":28,"sampler":"manualsampler"}"#,
+            )
+            .unwrap();
+            db::reindex_asset(&tx, parent_id).unwrap();
+            db::reindex_asset(&tx, child_id).unwrap();
+            tx.commit().unwrap();
+            (
+                db::get_asset(&conn, parent_id).unwrap(),
+                db::get_asset(&conn, child_id).unwrap(),
+                manual_snapshot(&conn),
+            )
+        };
+        assert_ne!(parent.fingerprint, child.fingerprint);
+        assert!(!child.fingerprint.is_empty() && !child.portable_id.is_empty());
+        let assert_preserved = |state: &AppState, path: &Path, name: &str, missing: i64| {
+            let conn = state.db.lock().unwrap();
+            assert_eq!(manual_snapshot(&conn), preserved);
+            let current = db::get_asset(&conn, child.id).unwrap();
+            let mut expected = serde_json::to_value(&child).unwrap();
+            expected["path"] = json!(path.to_string_lossy());
+            expected["name"] = json!(name);
+            expected["missing"] = json!(missing);
+            if path != old_path.as_path() {
+                expected["updated_at"] = json!(current.updated_at);
+            }
+            assert_eq!(serde_json::to_value(&current).unwrap(), expected);
+            assert_eq!(
+                serde_json::to_value(db::get_asset(&conn, parent.id).unwrap()).unwrap(),
+                serde_json::to_value(&parent).unwrap()
+            );
+            let parents = relations(&conn, child.id, true).unwrap();
+            let children = relations(&conn, parent.id, false).unwrap();
+            assert_eq!((parents.len(), children.len()), (1, 1));
+            assert_eq!(
+                (parents[0].other_id, parents[0].other_name.as_str()),
+                (parent.id, parent.name.as_str())
+            );
+            assert_eq!(
+                (children[0].other_id, children[0].other_name.as_str()),
+                (child.id, name)
+            );
+            for query in [
+                "manualpromptanchor",
+                "手工蓝发角色",
+                "negativeanchor",
+                "modelanchor",
+                "taganchor",
+                "dnaanchor",
+                "红衣角色",
+                "referenceanchor",
+                "紫色光影",
+            ] {
+                assert_eq!(search_ids(&conn, query), vec![child.id], "{query}");
+            }
+            let missing_page = search::library_page(
+                &conn,
+                &LibraryFilter {
+                    view: "missing".into(),
+                    ..LibraryFilter::default()
+                },
+                0,
+                20,
+            )
+            .unwrap();
+            assert_eq!(missing_page.total, missing);
+            assert_eq!(
+                missing_page
+                    .items
+                    .into_iter()
+                    .map(|asset| asset.id)
+                    .collect::<Vec<_>>(),
+                if missing == 1 {
+                    vec![child.id]
+                } else {
+                    Vec::new()
+                }
+            );
+        };
+
+        assert_preserved(&state, &old_path, "oldnameanchor.png", 0);
+        let info = fs::metadata(&old_path).unwrap();
+        let key = preview_cache_key(
+            &child.fingerprint,
+            child.id,
+            info.len(),
+            info.modified().ok(),
+            child.file_mtime,
+        );
+        let before_preview = database_bundle(&state.database_path);
+        let preview_path =
+            preview::cached_preview_path(&old_path, &state.cache_dir, &key, 2200, false).unwrap();
+        assert_eq!(database_bundle(&state.database_path), before_preview);
+        assert_eq!(image::image_dimensions(&preview_path).unwrap(), (3, 3));
+        assert_eq!(fs::read(&parent_path).unwrap(), parent_bytes);
+        assert_eq!(fs::read(&old_path).unwrap(), child_bytes);
+
+        fs::rename(&old_path, &new_path).unwrap();
+        let new_path = new_path.canonicalize().unwrap();
+        assert!(!old_path.exists());
+        assert_eq!(refresh_missing_for_state(&state).unwrap(), 1);
+        assert_preserved(&state, &old_path, "oldnameanchor.png", 1);
+        let before_prune = database_bundle(&state.database_path);
+        preview::prune_cache(&state.cache_dir, 0);
+        assert!(!Path::new(&preview_path).exists());
+        assert_eq!(database_bundle(&state.database_path), before_prune);
+        assert_eq!(fs::read(&parent_path).unwrap(), parent_bytes);
+        assert_eq!(fs::read(&new_path).unwrap(), child_bytes);
+        {
+            let mut conn = state.db.lock().unwrap();
+            let tx = conn.transaction().unwrap();
+            tx.execute_batch("DELETE FROM asset_search; DELETE FROM asset_cjk_search;")
+                .unwrap();
+            assert!(search_ids(&tx, "manualpromptanchor").is_empty());
+            db::reindex_asset(&tx, parent.id).unwrap();
+            db::reindex_asset(&tx, child.id).unwrap();
+            tx.commit().unwrap();
+        }
+        assert_preserved(&state, &old_path, "oldnameanchor.png", 1);
+        drop(state);
+        let state = open_state(&library);
+        assert_preserved(&state, &old_path, "oldnameanchor.png", 1);
+        assert_eq!(refresh_missing_for_state(&state).unwrap(), 1);
+        assert_eq!(relocate_missing_for_state(&state, &relocated).unwrap(), 1);
+        assert_preserved(&state, &new_path, "relocatednameanchor.png", 0);
+        let relocated_record = {
+            let conn = state.db.lock().unwrap();
+            assert!(search_ids(&conn, "oldnameanchor").is_empty());
+            assert_eq!(search_ids(&conn, "relocatednameanchor"), vec![child.id]);
+            serde_json::to_value(db::get_asset(&conn, child.id).unwrap()).unwrap()
+        };
+        let before_regeneration = database_bundle(&state.database_path);
+        let rebuilt_preview =
+            preview::cached_preview_path(&new_path, &state.cache_dir, &key, 2200, false).unwrap();
+        assert_eq!(image::image_dimensions(&rebuilt_preview).unwrap(), (3, 3));
+        assert_eq!(database_bundle(&state.database_path), before_regeneration);
+        assert_eq!(fs::read(&parent_path).unwrap(), parent_bytes);
+        assert_eq!(fs::read(&new_path).unwrap(), child_bytes);
+        drop(state);
+        let state = open_state(&library);
+        assert_preserved(&state, &new_path, "relocatednameanchor.png", 0);
+        assert_eq!(refresh_missing_for_state(&state).unwrap(), 0);
+        assert_eq!(relocate_missing_for_state(&state, &relocated).unwrap(), 0);
+        assert_eq!(
+            serde_json::to_value(db::get_asset(&state.db.lock().unwrap(), child.id).unwrap())
+                .unwrap(),
+            relocated_record
+        );
+        assert_preserved(&state, &new_path, "relocatednameanchor.png", 0);
+        drop(state);
+
+        // Failed assertions retain their isolated fixture for diagnosis. Only
+        // this fresh, marked direct child of the resolved temp root is removed.
+        assert_eq!(root.parent(), Some(temporary.as_path()));
+        assert_eq!(
+            fs::read_to_string(marker).unwrap(),
+            "ImageLore missing relocation fixture v1"
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 }
