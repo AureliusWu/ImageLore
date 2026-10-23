@@ -22,7 +22,8 @@ if (@(& git -C $project status --porcelain --untracked-files=no).Count -ne 0) {
     throw 'Candidate checkout is already modified.'
 }
 $target = Join-Path $project 'src-tauri/target'
-$output = Join-Path $target 'optimized-candidate-evidence'
+# Evidence must not be restored from, or saved into, the Cargo target cache.
+$output = Join-Path ([IO.Path]::GetFullPath($env:RUNNER_TEMP)) 'imagelore-optimized-candidate-evidence'
 if (Test-Path -LiteralPath $output) {
     throw 'Candidate evidence directory must be fresh.'
 }

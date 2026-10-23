@@ -2,6 +2,7 @@ name: ImageLore Optimized Native Candidate
 
 on:
   workflow_dispatch:
+  workflow_call:
 
 concurrency:
   group: imagelore-optimized-${{ github.ref }}
@@ -37,7 +38,7 @@ jobs:
           name: optimized-native-${{ github.sha }}-${{ github.run_attempt }}
           # Native binary redistribution remains a separate licensing/release gate.
           path: |
-            src-tauri/target/optimized-candidate-evidence/*.json
-            src-tauri/target/optimized-candidate-evidence/*.log
+            ${{ runner.temp }}/imagelore-optimized-candidate-evidence/*.json
+            ${{ runner.temp }}/imagelore-optimized-candidate-evidence/*.log
           if-no-files-found: error
           retention-days: 14
