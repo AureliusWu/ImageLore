@@ -371,16 +371,18 @@ pub(super) fn seed_process_wal(
         && target == spec.active().as_path()
     {
         conn.execute_batch("CREATE TABLE process_integrity_sentinel(value INTEGER); INSERT INTO process_integrity_sentinel VALUES(123); CREATE INDEX process_integrity_index ON process_integrity_sentinel(value);").unwrap();
-        let page_size: usize = conn
+        let page_size: i64 = conn
             .query_row("PRAGMA page_size", [], |row| row.get(0))
             .unwrap();
-        let root_page: usize = conn
+        let page_size = usize::try_from(page_size).unwrap();
+        let root_page: i64 = conn
             .query_row(
                 "SELECT rootpage FROM sqlite_master WHERE name='process_integrity_index'",
                 [],
                 |row| row.get(0),
             )
             .unwrap();
+        let root_page = usize::try_from(root_page).unwrap();
         Some((page_size, root_page))
     } else {
         None

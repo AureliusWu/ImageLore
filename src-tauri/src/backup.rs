@@ -4996,16 +4996,18 @@ mod tests {
         let backup = root.join("backups/candidate.sqlite3");
         let conn = seed(&database, "future-original");
         conn.execute_batch("CREATE TABLE future_integrity_sentinel(value INTEGER); INSERT INTO future_integrity_sentinel VALUES(123); CREATE INDEX future_integrity_index ON future_integrity_sentinel(value); UPDATE app_meta SET value='12' WHERE key='schema_version';").unwrap();
-        let page_size: usize = conn
+        let page_size: i64 = conn
             .query_row("PRAGMA page_size", [], |r| r.get(0))
             .unwrap();
-        let root_page: usize = conn
+        let page_size = usize::try_from(page_size).unwrap();
+        let root_page: i64 = conn
             .query_row(
                 "SELECT rootpage FROM sqlite_master WHERE name='future_integrity_index'",
                 [],
                 |r| r.get(0),
             )
             .unwrap();
+        let root_page = usize::try_from(root_page).unwrap();
         drop(conn);
         // Change only the synthetic single-row index leaf payload. The table's
         // value and readable schema marker remain intact; readonly integrity
@@ -5084,16 +5086,18 @@ mod tests {
             // Reuse the real single-row index damage from the future-schema test,
             // keeping the complete supported schema readable instead of NOTADB.
             conn.execute_batch("CREATE TABLE final_check_sentinel(value INTEGER); INSERT INTO final_check_sentinel VALUES(123); CREATE INDEX final_check_index ON final_check_sentinel(value);").unwrap();
-            let page_size: usize = conn
+            let page_size: i64 = conn
                 .query_row("PRAGMA page_size", [], |row| row.get(0))
                 .unwrap();
-            let root_page: usize = conn
+            let page_size = usize::try_from(page_size).unwrap();
+            let root_page: i64 = conn
                 .query_row(
                     "SELECT rootpage FROM sqlite_master WHERE name='final_check_index'",
                     [],
                     |row| row.get(0),
                 )
                 .unwrap();
+            let root_page = usize::try_from(root_page).unwrap();
             drop(conn);
             let mut damaged = fs::read(&database).unwrap();
             let page = (root_page - 1) * page_size;
