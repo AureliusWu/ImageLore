@@ -1382,8 +1382,10 @@ mod tests {
                     continue;
                 }
                 let query: Vec<f32> = blob
-                    .chunks_exact(4)
-                    .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap()))
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|chunk| f32::from_le_bytes(*chunk))
                     .collect();
                 if label == "extra-byte" {
                     continue;
