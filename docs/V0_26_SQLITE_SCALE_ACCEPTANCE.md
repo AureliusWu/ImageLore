@@ -44,7 +44,7 @@
 
 已准备十二张独立合成 PNG、空白且带 marker 的数据根及新 WebView profile 计划。首次启动在两分钟资源检查内未达到 3 GiB 可用内存，控制器终态为“未启动”，没有应用 PID 或 profile，也没有打开普通用户库；两个已知默认目录下六个 DB/WAL/SHM 元数据检查均前后不存在。该结果不计成功或失败的应用启动样本，也不证明全部用户文件保全。资源允许时继续隔离桌面导入、编辑、重启及其后原计划验收。
 
-[候选源码 Native CI](https://github.com/AureliusWu/ImageLore/actions/runs/39908775792)已从原始日志核对实际 **236/0/3（1093.75 秒）**；[main 快速 CI](https://github.com/AureliusWu/ImageLore/actions/runs/39911210262)和[main 敏感门禁](https://github.com/AureliusWu/ImageLore/actions/runs/39911210285)通过，[main Native 复跑](https://github.com/AureliusWu/ImageLore/actions/runs/39911210425)按其独立终态记录。源已正常快进同步到公开 main；这些结果不等于正式 Release。
+[候选源码 Native CI](https://github.com/AureliusWu/ImageLore/actions/runs/39908775792)已从原始日志核对实际 **236/0/3（1093.75 秒）**；[main 快速 CI](https://github.com/AureliusWu/ImageLore/actions/runs/39911210262)和[main 敏感门禁](https://github.com/AureliusWu/ImageLore/actions/runs/39911210285)通过，[main Native 复跑](https://github.com/AureliusWu/ImageLore/actions/runs/39911210425)原始日志另确认 `1dfe369` 实际 **236/0/3（1126.82 秒）**。随后[备份与恢复 profile](V0_26_SQLITE_BACKUP_ACCEPTANCE.md)独立确认运行时 SQLite 3.53.2；源已正常快进同步到公开 main，这些结果不等于正式 Release。
 
 ## 证据身份
 
