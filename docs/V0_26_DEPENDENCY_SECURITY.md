@@ -20,7 +20,7 @@ SQLite bundled 头文件现在为 **3.53.2**；Windows 实际优化构建记录�
 
 前端按新锁执行 `npm ci --no-audit --no-fund`、`npm run check` 与 `npm run build` 全部通过，锁文件未改写。快捷方式及运行时发布测试使用独立临时目录和合成文件，没有运行 fixture EXE、修改真实桌面或推广本轮应用。
 
-同源码候选[快速 CI](https://github.com/AureliusWu/ImageLore/actions/runs/39908778908)与[敏感信息门禁](https://github.com/AureliusWu/ImageLore/actions/runs/39908775709)已成功；[Native CI](https://github.com/AureliusWu/ImageLore/actions/runs/39908775792)另按其真实终态核对，不将本地结果转记为远端通过。
+同源码候选[快速 CI](https://github.com/AureliusWu/ImageLore/actions/runs/39908778908)与[敏感信息门禁](https://github.com/AureliusWu/ImageLore/actions/runs/39908775709)已成功；[Native CI](https://github.com/AureliusWu/ImageLore/actions/runs/39908775792)已从原始日志核对实际 **236/0/3（1093.75 秒）**，与本地优化构建的耗时各自记录。
 
 ## 公告与许可范围
 
@@ -32,7 +32,7 @@ SQLite bundled 头文件现在为 **3.53.2**；Windows 实际优化构建记录�
 - [paste RUSTSEC-2024-0436](https://rustsec.org/advisories/RUSTSEC-2024-0436.html)：停止维护；本次构建观察到该过程宏依赖，保留维护风险，不把它改写为已证实的运行时漏洞或已修复。
 - [proc-macro-error RUSTSEC-2024-0370](https://rustsec.org/advisories/RUSTSEC-2024-0370.html)：停止维护；本次 Windows 构建和目标图均未观察到。
 
-SQLite 原生代码另参照 [SQLite 官方 CVE 说明](https://www.sqlite.org/cves.html)，没有仅依赖 Rust 包公告推断其安全性。新引擎的实际 `SELECT sqlite_version()` profile 与桌面性能仍需独立观测，本轮不从头文件推断已完成该动态验证。
+SQLite 原生代码另参照 [SQLite 官方 CVE 说明](https://www.sqlite.org/cves.html)，没有仅依赖 Rust 包公告推断其安全性。后续 50k/75k 原生查询已独立执行，38 场景 / 874 样本、0 budget WARN；两份新 fixture 的原始文件头均记录最后写入库为 3.53.2，详见[新引擎规模验收](V0_26_SQLITE_SCALE_ACCEPTANCE.md)。尚未独立执行 `SELECT sqlite_version()` profile，也不从该 DB 头或头文件推断桌面程序已运行。
 
 六个本次新增/升级且被 Windows 目标图选中的 Rust 包已核对本地 crate 归档 checksum 与新锁一致，并收集声明及许可文本；另收集新 Vite/source-map-js 的实际安装许可文件。Windows 构建共观察到 404 个 package 身份，构建选中不等于最终链接或实际安装分发。未下载、未作为 Windows 依赖验收两个 wasm 专用归档。最终应用/NSIS、ORT/DirectML、其他未变依赖的通知及来源仍按原分发审查继续，MIT 仅覆盖原创代码。
 

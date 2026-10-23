@@ -1,5 +1,7 @@
 # v0.26 当前优化构建原生规模查询验收
 
+2026-10-23 后续：SQLite 安全升级后的独立 50k/75k 重测已完成，实际 1/0/0、38 场景 / 874 样本、0 budget WARN，见[新引擎规模验收](V0_26_SQLITE_SCALE_ACCEPTANCE.md)。本页保留旧引擎原始源码和数字，不将其转记为新引擎结果。
+
 日期：2026-10-22（Asia/Shanghai）。版本 `0.26.0`、schema `11`，受测源码 `1da13713040485a2919bfb26258425624b0fafaa`。本轮直接运行实际归档的 optimized Rust library 测试，`opt-level=3`、`debug_assertions=false`；没有构建或运行应用安装包。
 
 实际终态为 `PASS_OPTIMIZED_NATIVE_SCALE_CORRECTNESS`，**1 passed / 0 failed / 0 ignored，160.98 秒**。50k 与 75k 两个新建文件 SQLite WAL 库各 19 场景，共 **38 场景、874 个计时样本**；全部正确性断言通过，所有 warm p95 都在原建议预算内，**budget WARN 为 0**。正确性结论与预算结论分别保留，这不是阶段 A 或 v1.0.0 全部验收完成。
