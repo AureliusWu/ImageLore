@@ -267,9 +267,17 @@ pub(super) fn fingerprints(
     Ok(values)
 }
 
+// Complete SQL validation on an owned disposable probe. Typed validation has
+// its own outer scope and does not call this helper, avoiding double counting.
+fn validate_probe(path: &Path) -> Result<(), String> {
+    #[cfg(test)]
+    let _validation = super::storage_profile_span("validation.total", Some(path));
+    validate_in_place(path).map_err(|error| error.to_string())
+}
+
 pub(super) fn validate_bundle(data_dir: &Path, bundle: &mut ExclusiveBundle) -> Result<(), String> {
     let work = Workspace::open(&data_dir.join("library.sqlite3"), data_dir)?;
-    Probe::copy(&work, bundle)?.run(|probe| validate_in_place(probe).map_err(|e| e.to_string()))
+    Probe::copy(&work, bundle)?.run(validate_probe)
 }
 
 fn probe_health(path: &Path) -> Result<bool, String> {
@@ -433,7 +441,7 @@ impl Attempt {
         // SQLite's synchronous VACUUM operation needs the empty target released.
         drop(self.stage.take());
         let snapshot = probe.run(|probe| {
-            validate_in_place(probe).map_err(|e| e.to_string())?;
+            validate_probe(probe)?;
             let conn = Connection::open_with_flags(probe, OpenFlags::SQLITE_OPEN_READ_ONLY)
                 .map_err(|e| e.to_string())?;
             conn.busy_timeout(std::time::Duration::ZERO)
@@ -507,8 +515,7 @@ impl Attempt {
                 return Err("自动恢复原库锁内复核未确认损坏，已保留当前资料库与备份候选".into());
             }
             if !corrupt {
-                Probe::copy(&self.work, &mut originals)?
-                    .run(|probe| validate_in_place(probe).map_err(|e| e.to_string()))?;
+                Probe::copy(&self.work, &mut originals)?.run(validate_probe)?;
             }
             #[cfg(test)]
             if corrupt {
@@ -590,7 +597,7 @@ impl Attempt {
         // The staged object remains exclusively held at its new active name.
         // Validate a copy, including the complete ImageLore business schema.
         Probe::copy_file(&self.work, self.stage.as_mut().ok_or("恢复安装句柄缺失")?)?
-            .run(|probe| validate_in_place(probe).map_err(|e| e.to_string()))?;
+            .run(validate_probe)?;
         if self
             .stage
             .as_mut()
