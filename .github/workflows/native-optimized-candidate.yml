@@ -1,0 +1,43 @@
+name: ImageLore Optimized Native Candidate
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: imagelore-optimized-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  optimized-library:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+          cache-on-failure: true
+
+      - name: Build and test source-bound optimized library candidate
+        shell: pwsh
+        run: ./scripts/build_optimized_native_candidate.ps1
+
+      - name: Archive verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: optimized-native-${{ github.sha }}-${{ github.run_attempt }}
+          # Native binary redistribution remains a separate licensing/release gate.
+          path: |
+            src-tauri/target/optimized-candidate-evidence/*.json
+            src-tauri/target/optimized-candidate-evidence/*.log
+          if-no-files-found: error
+          retention-days: 14
