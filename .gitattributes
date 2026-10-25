@@ -3,3 +3,8 @@
 *.bat text eol=crlf
 *.png binary
 *.ico binary
+
+# Preserve original upstream notice bytes for their reviewed SHA-256 identity.
+third_party/frontend/licenses/** -text
+# The original Vite notice intentionally retains upstream blockquote spaces.
+third_party/frontend/licenses/vite-generated-helpers/7.3.7/LICENSE.md -whitespace

@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import string
+import hashlib
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import check_sensitive as guard
@@ -50,6 +52,51 @@ synthetic@example.invalid
         email = "owner" + "@" + "mail.test"
         self.assertIn((1, "private-user-path"), guard.inspect("document.md", path.encode()))
         self.assertIn((1, "private-email"), guard.inspect("document.md", email.encode()))
+
+    def public_notice(self):
+        name = "third_party/frontend/licenses/vite-generated-helpers/7.3.7/LICENSE.md"
+        data = (Path(__file__).resolve().parents[1] / name).read_bytes()
+        return name, data
+
+    def test_verified_public_notice_attribution_is_allowed(self):
+        name, data = self.public_notice()
+        self.assertTrue(any(guard.private_email(m.group()) for m in guard.EMAIL.finditer(data.decode())))
+        self.assertEqual(guard.inspect(name, data), [])
+
+    def test_public_notice_path_does_not_allow_modified_content_or_credentials(self):
+        name, data = self.public_notice()
+        changed = data + b'\nowner' + b'@mail.test\n' + b'password="' + b'weakvalue12"\n'
+        rules = {rule for _, rule in guard.inspect(name, changed)}
+        self.assertIn("public-attribution-byte-mismatch", rules)
+        self.assertIn("private-email", rules)
+        self.assertIn("hardcoded-credential", rules)
+        self.assertIn((0, "public-attribution-byte-mismatch"), guard.inspect(name, data + b"\n"))
+
+    def test_public_notice_email_exception_does_not_apply_to_other_paths(self):
+        _, data = self.public_notice()
+        self.assertTrue(any(rule == "private-email" for _, rule in guard.inspect("document.md", data)))
+
+    def test_public_attribution_does_not_exempt_credentials_or_private_paths(self):
+        name, _ = self.public_notice()
+        data = b'owner' + b'@mail.test\n' + b'password="' + b'weakvalue12"\n' + b'C:/Users/' + b'real-owner/file.txt'
+        with mock.patch.dict(guard.PUBLIC_ATTRIBUTION_SHA256, {name: hashlib.sha256(data).hexdigest()}):
+            rules = {rule for _, rule in guard.inspect(name, data)}
+        self.assertNotIn("private-email", rules)
+        self.assertIn("hardcoded-credential", rules)
+        self.assertIn("private-user-path", rules)
+
+    def test_public_notice_staged_and_history_do_not_hide_modified_working_tree(self):
+        name, data = self.public_notice()
+        root = self.fixture()
+        file = root / name
+        file.parent.mkdir(parents=True)
+        file.write_bytes(data)
+        self.git(root, "add", "--", name)
+        self.commit(root)
+        file.write_bytes(data + b'\nowner' + b'@mail.test\n')
+        findings, _ = guard.scan(root, True, True, True)
+        self.assertTrue(any(scope == "working-tree" and rule == "public-attribution-byte-mismatch" for scope, _, _, rule in findings))
+        self.assertFalse(any(scope.startswith("history") or scope == "staged" for scope, _, _, _ in findings))
 
     def test_private_artifacts_are_blocked_even_with_safe_content(self):
         for name in [

@@ -14,7 +14,7 @@
 
 原生分发审查发现 NSIS 遗漏 DirectML/MSVCP，修复 `d981d97` 已完成[同提交托管 Windows 安装升级](https://github.com/AureliusWu/ImageLore/actions/runs/40177299076)：完整 Rust **236/0/3、0 filtered**，NSIS 构建、0.19.0 → 0.26.0、两次正常关闭与业务回读全部成功，三个必需 DLL 均实际从安装目录加载。上传/Release 均跳过、产物列表为 0；详见[运行库打包修复](V0_26_WINDOWS_RUNTIME_BUNDLE.md)。用户机器 GUI、模型、正式性能与可信发布继续分别验收，桌面 current 未推广。
 
-前端分发范围已与实际应用候选的三份 HTML/CSS/JS 输出字节绑定：66 个 chunk 模块涉及五个 npm 包及两个生成 helper。五个发布包的 SRI、31 个相关文件核对通过，插件许可全文补齐，本地前端声明草稿保留十份原样文本；完整原生/模型分发范围仍待核对，详见[前端分发范围](V0_26_FRONTEND_DISTRIBUTION_SCOPE.md)。
+前端分发范围已与实际应用候选的三份 HTML/CSS/JS 输出字节绑定：66 个 chunk 模块涉及五个 npm 包及两个生成 helper。五个发布包的 SRI、31 个相关文件核对通过，插件许可全文补齐，十份原样文本与来源摘要已收录 [frontend notices](../third_party/frontend/README.md)；Vite 原文另与完整发布包 SRI 核对，邮箱规则例外严格绑定固定路径和原文哈希。安装器交付及完整原生/模型归属仍待核对，详见[前端分发范围](V0_26_FRONTEND_DISTRIBUTION_SCOPE.md)。
 
 Windows 分发依赖补齐了锁定压缩包、静态库/DLL 字节与上游 GitHub 构建来源的密码学验证；从实际候选目录刷新许可清单，解析 Windows normal/build 图 **404 包**，收集 **750 + 14 份文本候选**及一份官方 MPL 全文。补查 normal / 排除过程宏依赖图为 **380 / 304 项**，三项 crate 的全部包内文件与锁定版本一致；`simd_helpers` 完整许可文本及最终分发范围仍待核对，签名资格仍在准备。新一轮 ABBA 对照因首次预热中出现并行编译而停止，正式样本 **0**，原现场保留；详见[依赖来源与许可准备](V0_26_DISTRIBUTION_DEPENDENCIES.md)。
 

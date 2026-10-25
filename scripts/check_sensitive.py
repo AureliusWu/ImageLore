@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import re
 import subprocess
 import sys
@@ -9,6 +10,12 @@ from pathlib import Path, PurePosixPath
 
 MAX_BYTES = 8 * 1024 * 1024
 PUBLIC_IMAGES = {"docs/og.png", "src-tauri/icons/icon.png", "src-tauri/icons/icon.ico"}
+# Published upstream attribution bytes, independently matched to the locked
+# package. Only the email rule is exempted; credentials/path/binary rules remain.
+PUBLIC_ATTRIBUTION_SHA256 = {
+    "third_party/frontend/licenses/vite-generated-helpers/7.3.7/LICENSE.md":
+        "a77a1c089806b39ad339535bdf3677f636c91d96693e8ad7b11fe733f650ea64",
+}
 PRIVATE_DIRS = {
     ".git", "node_modules", "target", "desktop-runtime", "task-evidence",
     "private", "private-data", "user-data", "secrets", "credentials",
@@ -94,13 +101,17 @@ def inspect(name: str, data: bytes) -> list[tuple[int, str]]:
     except UnicodeDecodeError:
         failures.add((0, "unreviewed-encoding"))
         return sorted(failures)
+    expected_attribution = PUBLIC_ATTRIBUTION_SHA256.get(name)
+    public_attribution = bool(expected_attribution and hashlib.sha256(data).hexdigest() == expected_attribution)
+    if expected_attribution and not public_attribution:
+        failures.add((0, "public-attribution-byte-mismatch"))
     for number, line in enumerate(text.splitlines(), 1):
         for rule, pattern in RULES:
             if pattern.search(line):
                 failures.add((number, rule))
         if any(match.group(1).lower() not in DEMO_USERS for match in USER_PATH.finditer(line)):
             failures.add((number, "private-user-path"))
-        if any(private_email(match.group()) for match in EMAIL.finditer(line)):
+        if not public_attribution and any(private_email(match.group()) for match in EMAIL.finditer(line)):
             failures.add((number, "private-email"))
         for match in ASSIGNMENT.finditer(line):
             value = match.group(1)

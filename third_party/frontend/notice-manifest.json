@@ -1,0 +1,177 @@
+{
+  "state": "FRONTEND_NOTICE_SOURCE_MATERIAL_NOT_APPLICATION_LICENSE_CLOSURE",
+  "recordedUtc": "2026-10-25T09:37:34.545318+00:00",
+  "head": "1dfe36999fd63eacdb26259da7ffde0a6f0a836b",
+  "candidateExeSha256": "f32d25ace7ebd358b486f3907a20cc0246eda2480dac5e88c47ce5ebd589bdad",
+  "outputHashes": {
+    "dist/assets/index-Bzrl0l6h.css": "c76e8151469cfbe436f8ee0a1144e5571528107869dfb3260d1e09cc49b3a4e5",
+    "dist/assets/index-DzMZ5FeH.js": "571250864845f49bd367ee3ec6c3bc582c971329f244153a1a0d537a60dad6fe",
+    "dist/index.html": "e9d3f1789c6be6e1eaa40b584c2af54f90d66fe6dd98e7fe3c1d348f0ef21180"
+  },
+  "npmComponents": [
+    {
+      "name": "@tauri-apps/api",
+      "version": "2.12.0",
+      "declaredLicense": "Apache-2.0 OR MIT"
+    },
+    {
+      "name": "@tauri-apps/plugin-dialog",
+      "version": "2.8.0",
+      "declaredLicense": "MIT OR Apache-2.0"
+    },
+    {
+      "name": "react",
+      "version": "19.3.0",
+      "declaredLicense": "MIT"
+    },
+    {
+      "name": "react-dom",
+      "version": "19.3.0",
+      "declaredLicense": "MIT"
+    },
+    {
+      "name": "scheduler",
+      "version": "0.28.0",
+      "declaredLicense": "MIT"
+    }
+  ],
+  "generatedHelpers": [
+    {
+      "id": "\u0000vite/modulepreload-polyfill.js",
+      "renderedLength": 1168
+    },
+    {
+      "id": "\u0000commonjsHelpers.js",
+      "renderedLength": 140
+    }
+  ],
+  "copiedTexts": [
+    {
+      "component": "@tauri-apps/api",
+      "relativePath": "licenses/@tauri-apps__api/2.12.0/LICENSE-APACHE-2.0",
+      "bytes": 10174,
+      "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594",
+      "source": {
+        "type": "Published npm package file",
+        "tarball": "https://registry.npmjs.org/@tauri-apps/api/-/api-2.12.0.tgz",
+        "integrity": "sha512-fUSxFX8VABYe9W9K5ROdEaKVkNUFRcMSRofjruvaxztXA+I0XnQHcYHF8m/a6iExRUxsUf0HsFWhPBuH9IgzJw==",
+        "file": "package/LICENSE-APACHE-2.0"
+      }
+    },
+    {
+      "component": "@tauri-apps/api",
+      "relativePath": "licenses/@tauri-apps__api/2.12.0/LICENSE-MIT",
+      "bytes": 1090,
+      "sha256": "9dd42ea92cff2ede5cd477cbfcce051b2d0115c0ac7f368ee88cb545055dff1d",
+      "source": {
+        "type": "Published npm package file",
+        "tarball": "https://registry.npmjs.org/@tauri-apps/api/-/api-2.12.0.tgz",
+        "integrity": "sha512-fUSxFX8VABYe9W9K5ROdEaKVkNUFRcMSRofjruvaxztXA+I0XnQHcYHF8m/a6iExRUxsUf0HsFWhPBuH9IgzJw==",
+        "file": "package/LICENSE-MIT"
+      }
+    },
+    {
+      "component": "@tauri-apps/api",
+      "relativePath": "licenses/@tauri-apps__api/2.12.0/LICENSE.spdx",
+      "bytes": 889,
+      "sha256": "5e834fe9788c524210deda859c46a550ffa5aa0cba9ea0572f0d81120e97c008",
+      "source": {
+        "type": "Published npm package file",
+        "tarball": "https://registry.npmjs.org/@tauri-apps/api/-/api-2.12.0.tgz",
+        "integrity": "sha512-fUSxFX8VABYe9W9K5ROdEaKVkNUFRcMSRofjruvaxztXA+I0XnQHcYHF8m/a6iExRUxsUf0HsFWhPBuH9IgzJw==",
+        "file": "package/LICENSE.spdx"
+      }
+    },
+    {
+      "component": "@tauri-apps/plugin-dialog",
+      "relativePath": "licenses/@tauri-apps__plugin-dialog/2.8.0/LICENSE.spdx",
+      "bytes": 888,
+      "sha256": "eb8a6c84630461b352badcab1dbe5d0168c56d377358b2b8c86b51003272d5ef",
+      "source": {
+        "type": "Published npm package file",
+        "tarball": "https://registry.npmjs.org/@tauri-apps/plugin-dialog/-/plugin-dialog-2.8.0.tgz",
+        "integrity": "sha512-HSSD5C8UFE9ijD1wue84F7jjaIReFmj8AAPtS+xyjYRltJafIc4BiWHY7SJ6vbbew6u+YljEJHfyNfy5VwywXg==",
+        "file": "package/LICENSE.spdx"
+      }
+    },
+    {
+      "component": "react",
+      "relativePath": "licenses/react/19.3.0/LICENSE",
+      "bytes": 1088,
+      "sha256": "da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93",
+      "source": {
+        "type": "Published npm package file",
+        "tarball": "https://registry.npmjs.org/react/-/react-19.3.0.tgz",
+        "integrity": "sha512-E8LUcbtBWt20bbl2YoHfx4ZDBdxVTfOKtCZn9cDSJ4l6/nuoApcpIBcj47t2wZoVX8g2ZHuMHbiShgCR1T5Sog==",
+        "file": "package/LICENSE"
+      }
+    },
+    {
+      "component": "react-dom",
+      "relativePath": "licenses/react-dom/19.3.0/LICENSE",
+      "bytes": 1088,
+      "sha256": "da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93",
+      "source": {
+        "type": "Published npm package file",
+        "tarball": "https://registry.npmjs.org/react-dom/-/react-dom-19.3.0.tgz",
+        "integrity": "sha512-JDk8dgif51OjFoDE70+OT9ICyYr+69HlmihNwp1+Nsfbna3t5sIiCa9ZJktDmQ4/1b/rn26hIAR2uYXDMr5r0Q==",
+        "file": "package/LICENSE"
+      }
+    },
+    {
+      "component": "scheduler",
+      "relativePath": "licenses/scheduler/0.28.0/LICENSE",
+      "bytes": 1088,
+      "sha256": "da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93",
+      "source": {
+        "type": "Published npm package file",
+        "tarball": "https://registry.npmjs.org/scheduler/-/scheduler-0.28.0.tgz",
+        "integrity": "sha512-juorfCmIkIw8tT+p5BXSm6PJjQF/ycEYmKyzURCIt/RaZIhL+PulbQ9Yu2z1HdOJDdqDTlxA1+xKBmHXJsczAw==",
+        "file": "package/LICENSE"
+      }
+    },
+    {
+      "component": "@tauri-apps/plugin-dialog",
+      "relativePath": "licenses/@tauri-apps__plugin-dialog/2.8.0/LICENSE_APACHE-2.0",
+      "bytes": 10173,
+      "sha256": "0cec06e0e55fbc3dc5cee4fca9b607f66cb8f4e4dbcf3b3c013594dd156732e9",
+      "source": {
+        "type": "Fixed upstream repository license candidate",
+        "url": "https://github.com/tauri-apps/plugins-workspace/blob/a2364a5f216324439feedeb25b2db74e7b1eba90/LICENSE_APACHE-2.0",
+        "revisionEvidence": "Exact npm version gitHead field; publisher metadata, not a source attestation"
+      }
+    },
+    {
+      "component": "@tauri-apps/plugin-dialog",
+      "relativePath": "licenses/@tauri-apps__plugin-dialog/2.8.0/LICENSE_MIT",
+      "bytes": 1089,
+      "sha256": "89ff9689dcf9dd53968785d05a26f7898bb169dbfcada8d032b3e68cf0d55607",
+      "source": {
+        "type": "Fixed upstream repository license candidate",
+        "url": "https://github.com/tauri-apps/plugins-workspace/blob/a2364a5f216324439feedeb25b2db74e7b1eba90/LICENSE_MIT",
+        "revisionEvidence": "Exact npm version gitHead field; publisher metadata, not a source attestation"
+      }
+    },
+    {
+      "component": "Vite generated helpers",
+      "relativePath": "licenses/vite-generated-helpers/7.3.7/LICENSE.md",
+      "bytes": 101176,
+      "sha256": "a77a1c089806b39ad339535bdf3677f636c91d96693e8ad7b11fe733f650ea64",
+      "source": {
+        "type": "Published locked build-tool package notice",
+        "package": "vite@7.3.7",
+        "tarball": "https://registry.npmjs.org/vite/-/vite-7.3.7.tgz",
+        "integrity": "sha512-AHEzTORMbi7/7aXp7w7KZ5+DCUdSeLsJz0grY8xHpc9DHdYb0vQu6DqJfm2tOw3gDExNgPgnJTXxM6syYFHaCA==",
+        "file": "package/LICENSE.md",
+        "scope": "Retained conservatively for modulepreload polyfill and CommonJS helper; no claim that the full build tool ships."
+      }
+    }
+  ],
+  "openScope": [
+    "Native linked components and actual required notices",
+    "DirectML proprietary terms and provider eligibility",
+    "Downloaded models and tokenizer/conversion notices",
+    "Complete installer/application asset inclusion"
+  ],
+  "scope": "Original public frontend notice texts only. Source1d byte-matched frontend analysis; native dependencies/models/assets are separate. Not installed release notice delivery."
+}

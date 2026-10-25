@@ -47,6 +47,8 @@ Gitleaks 使用 `.gitleaks.toml` 的项目配置及默认规则扫描所有已�
 
 ## 打包与发布
 
+已公开的上游许可署名按 [third_party/frontend](third_party/frontend/README.md) 的实际范围保留。Vite 原样许可的邮箱规则例外同时绑定一个固定路径与完整 SHA-256；任意改动都产生 `public-attribution-byte-mismatch`，其他凭据、路径与文件类型检查继续生效。该例外不允许项目个人邮箱、私密材料或整个目录绕过扫描；更新许可时须重新核对确切发布包和原始字节。
+
 上传前检查实际文件清单和构建输入，只允许明确列出的发布文件。不要压缩或上传整个工作目录、`.git`、本地运行时备份或 `<private-storage>`。`.gitignore` 不限制手工压缩、复制、artifact 上传或第三方工具的文件收集。
 
 Windows CI artifact 和 GitHub Release 只应包含指定安装器；不得附带资料库、原始日志、截图或扫描报告。安装器和前端构建仍需确认没有嵌入凭据或私有数据。`package.json` 的 `private: true` 保护 npm 发布，但不保证手工打包或其它上传入口安全。

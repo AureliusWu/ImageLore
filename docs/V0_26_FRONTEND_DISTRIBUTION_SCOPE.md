@@ -32,12 +32,16 @@ Node 构建退出码为 0。184 项受版本控制输入、51 个实际物理输
 
 这份实际输出记录缩小了前端范围；完整 npm lock 的 133 项、已安装声明的 73 项仍是不同范围，不能直接作为客户端全部包含的组件。
 
-## 前端声明草稿
+## 前端原样许可文本
 
-本地已准备五个组件及生成 helper 的独立声明草稿，保留 **10 份原样文本**和逐文件哈希/来源清单，尚未作为完整应用声明公开发布。
+五个组件及生成 helper 的 **10 份原样文本**与逐文件哈希/来源清单已收录至 [third_party/frontend](../third_party/frontend/README.md)，供公开源码归属审查。这个目录只覆盖已核对的前端范围，尚未随安装器交付，不是完整应用的许可闭环。
 
 `@tauri-apps/plugin-dialog` 的发布包只附 `LICENSE.spdx`，其中列出许可和版权声明，没有 MIT/Apache 条款全文。本轮依据确切 npm 版本的 gitHead `a2364a5f216324439feedeb25b2db74e7b1eba90`，取得同一上游提交的 [MIT 全文](https://github.com/tauri-apps/plugins-workspace/blob/a2364a5f216324439feedeb25b2db74e7b1eba90/LICENSE_MIT)与 [Apache 2.0 全文](https://github.com/tauri-apps/plugins-workspace/blob/a2364a5f216324439feedeb25b2db74e7b1eba90/LICENSE_APACHE-2.0)。上游 SPDX 文件与发布包字节相同，原 SPDX 声明与两份全文一起保留；没有补造权利人或年份。
 
-另有两个无物理源文件路径、非零 rendered 的生成模块：Vite modulepreload polyfill 与 CommonJS helper。草稿同时保留锁定 Vite 7.3.7 的完整 LICENSE.md，其中包括 plugin-commonjs 的组件许可声明；这不表示整个 Vite 构建工具进入客户端。
+另有两个无物理源文件路径、非零 rendered 的生成模块：Vite modulepreload polyfill 与 CommonJS helper。文本池保留锁定 Vite 7.3.7 的完整 LICENSE.md，其中包括 plugin-commonjs 的组件许可声明；这不表示整个 Vite 构建工具进入客户端。
+
+Vite 原文含已公开的上游署名联系信息，上传防护为其固定路径及完整 SHA-256 设置精确的邮箱规则例外，任意字节改变即拒绝；凭据/私钥/个人路径/二进制规则继续执行，其他文件邮箱规则不变。没有删除原始署名、泛化允许邮箱域名或豁免整个目录。新增回归覆盖原样接受、改动及添加凭据拒绝、换路径拒绝、已暂存/历史原文不能掩盖被改动工作区。
+
+公开前另从 npm 官方 registry 取得 Vite 7.3.7 的完整发布 tarball，完整 SHA-512 SRI 与锁文件一致，包内 `package/LICENSE.md` 与待收录原文逐字节相同（101,176 字节，SHA-256 `a77a1c089806b39ad339535bdf3677f636c91d96693e8ad7b11fe733f650ea64`）。该包只读检查，没有安装或运行；这个证据专门支持署名例外的字节身份。
 
 完整原始包、模块路径和报告保存在仓库外。独立复核重新核对三份输出、五个包的完整 SRI、31 个相关文件及十份草稿文本，均通过。原生库的实际链接范围、DirectML 条款和身份、模型/分词器及其他应用资产继续按[依赖来源与许可准备](V0_26_DISTRIBUTION_DEPENDENCIES.md)核对；本记录不关闭这些项目、桌面验收或签名/安装升级/updater 门槛。

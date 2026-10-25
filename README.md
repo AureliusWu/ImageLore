@@ -5,6 +5,8 @@
 
 ImageLore 是一个 local-first 的 AI 视觉生成记忆库，用来保存图片背后的 Prompt、模型、参数、历史版本、集合与生成谱系，并让这些信息在几个月以后仍然可以继续使用。
 
+第三方原样许可与前端范围：[Frontend notices](third_party/frontend/README.md)。完整原生、模型与安装器分发归属继续分别审查。
+
 ## 应用预览
 
 仓库内的 `docs/og.svg` 是可编辑的 OG / README 视觉源；合并到主线后由 GitHub Actions 自动渲染 `docs/og.png`（1280×640），可直接用于 GitHub Social Preview。
