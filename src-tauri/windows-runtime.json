@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "target": "x86_64-pc-windows-msvc",
+  "ortSysVersion": "2.0.0-rc.13",
+  "upstreamArchive": {
+    "url": "https://cdn.pyke.io/0/pyke:ort-rs/ms@1.28.0/x86_64-pc-windows-msvc+directml.tar.lzma2",
+    "sha256": "f7c654b3729cb9e5ad2a36a0c38e5b48e63bf4eed22968931aed33a0ad0b527d"
+  },
+  "directML": {
+    "fileName": "DirectML.dll",
+    "bytes": 18527776,
+    "sha256": "9c9e6d822561c6c41b90e6994b3e8857cf1d66dbfb1e0c4c799c7c89b4e92da1"
+  }
+}

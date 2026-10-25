@@ -41,6 +41,7 @@
     "createUpdaterArtifacts": false,
     "publisher": "ImageLore Project",
     "windows": {
+      "bundleVCRuntime": true,
       "webviewInstallMode": {
         "type": "embedBootstrapper",
         "silent": true

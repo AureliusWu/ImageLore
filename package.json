@@ -14,7 +14,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "node scripts/sync_version.mjs && tauri dev",
-    "tauri:build": "node scripts/sync_version.mjs && tauri build --bundles nsis -- --locked",
+    "tauri:build": "node scripts/sync_version.mjs && tauri build --no-bundle -- --locked && powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/bundle_windows_installer.ps1",
     "desktop:build": "node scripts/sync_version.mjs && tauri build --no-bundle -- --locked && powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/publish_desktop_runtime.ps1",
     "desktop:shortcut": "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/update_desktop_shortcut.ps1 -ExecutablePath desktop-runtime/current/ImageLore.exe",
     "check": "node scripts/check_version.mjs && python scripts/check_project.py && python scripts/test_schema.py && python scripts/test_scale.py && python scripts/test_contract.py && npm run test:preview && npm run test:remix && npm run test:browser && npm run test:stability && npm run test:shortcut && npm run test:runtime && npm run format:check && npm run lint",

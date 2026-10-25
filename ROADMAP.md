@@ -2,6 +2,8 @@
 
 ## 当前进度（2026-10-25）
 
+原生分发审查发现 NSIS 没有包含直接导入的 DirectML/MSVCP 依赖，已补充 Windows `copy-dylibs`、内置 VC 打包选项及按清单哈希绑定的 DirectML 资源映射。隔离原型实际 NSIS 编译成功，DLL File 指令由 **0 → 10 → 11**，两个缺失/篡改负例拒绝；真实安装/升级与进程加载位置仍待新源码远端验证，详见[运行库打包修复](docs/V0_26_WINDOWS_RUNTIME_BUNDLE.md)。版本、桌面 current 与阶段退出门槛保持原范围。
+
 前端分发范围已与实际应用候选的三份 HTML/CSS/JS 输出字节绑定：66 个 chunk 模块涉及五个 npm 包及两个生成 helper。五个发布包的 SRI、31 个相关文件核对通过，插件许可全文补齐，本地前端声明草稿保留十份原样文本；完整原生/模型分发范围仍待核对，详见[前端分发范围](docs/V0_26_FRONTEND_DISTRIBUTION_SCOPE.md)。
 
 Windows 分发依赖补齐了锁定压缩包、静态库/DLL 字节与上游 GitHub 构建来源的密码学验证；从实际候选目录刷新许可清单，解析 Windows normal/build 图 **404 包**，收集 **750 + 14 份文本候选**及一份官方 MPL 全文。补查 normal / 排除过程宏依赖图为 **380 / 304 项**，三项 crate 的全部包内文件与锁定版本一致；`simd_helpers` 完整许可文本及最终分发范围仍待核对，签名资格仍在准备。新一轮 ABBA 对照因首次预热中出现并行编译而停止，正式样本 **0**，原现场保留；详见[依赖来源与许可准备](docs/V0_26_DISTRIBUTION_DEPENDENCIES.md)。

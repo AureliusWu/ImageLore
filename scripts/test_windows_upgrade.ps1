@@ -112,6 +112,14 @@ public static class ImageLoreUpgradeWindow {
 '@
 
 function Invoke-AppStartupAndClose([string]$Executable, [string]$LogPath, [string]$Label) {
+  $installDirectory = [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($Executable))
+  $requiredRuntime = @('DirectML.dll', 'msvcp140.dll', 'msvcp140_1.dll')
+  $directMLIdentity = (Get-Content -LiteralPath (Join-Path $PSScriptRoot '../src-tauri/windows-runtime.json') -Raw -Encoding UTF8 | ConvertFrom-Json).directML
+  foreach ($runtime in $requiredRuntime) {
+    $runtimePath = Join-Path $installDirectory $runtime
+    Assert-NoReparsePoint $runtimePath
+    Assert-True (Test-Path -LiteralPath $runtimePath -PathType Leaf) "$Label is missing bundled $runtime"
+  }
   $previousLog = if (Test-Path -LiteralPath $LogPath) { [IO.File]::ReadAllText($LogPath) } else { "" }
   $startedAt = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
   $app = Start-Process -FilePath $Executable -WindowStyle Hidden -PassThru
@@ -137,6 +145,20 @@ function Invoke-AppStartupAndClose([string]$Executable, [string]$LogPath, [strin
     Start-Sleep -Milliseconds 500
   }
   Assert-True ($ready -and $window -ne [IntPtr]::Zero) "$Label did not report current startup library readiness and create its window within 90 seconds"
+  # A runner may have global native runtimes. Require the application's own DLLs
+  # to be loaded, so that machine-wide dependencies cannot hide a missing payload.
+  foreach ($runtime in $requiredRuntime) {
+    $runtimePath = [IO.Path]::GetFullPath((Join-Path $installDirectory $runtime))
+    $loaded = @($app.Modules | Where-Object { $_.ModuleName -ieq $runtime })
+    Assert-True ($loaded.Count -eq 1) "$Label did not load exactly one $runtime module"
+    Assert-True ([string]::Equals([IO.Path]::GetFullPath($loaded[0].FileName), $runtimePath, [StringComparison]::OrdinalIgnoreCase)) "$Label loaded $runtime outside the installation directory"
+    $runtimeHash = (Get-FileHash -LiteralPath $runtimePath -Algorithm SHA256).Hash
+    $runtimeVersion = (Get-Item -LiteralPath $runtimePath).VersionInfo.FileVersion
+    if ($runtime -ieq 'DirectML.dll') {
+      Assert-True ($runtimeHash -ieq $directMLIdentity.sha256 -and (Get-Item -LiteralPath $runtimePath).Length -eq $directMLIdentity.bytes) "$Label installed DirectML.dll does not match the reviewed manifest"
+    }
+    Write-Host "$Label bundled runtime: $runtime, version=$runtimeVersion, SHA256=$runtimeHash, loaded-from-install=true"
+  }
   Assert-True ([ImageLoreUpgradeWindow]::Close($window)) "$Label WM_CLOSE could not be posted"
   Assert-True ($app.WaitForExit(30000)) "$Label did not exit normally within 30 seconds after WM_CLOSE; no forced termination was attempted"
   Assert-True ($app.ExitCode -eq 0) "$Label exited with code $($app.ExitCode)"
