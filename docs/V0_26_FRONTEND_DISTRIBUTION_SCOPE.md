@@ -44,4 +44,6 @@ Vite 原文含已公开的上游署名联系信息，上传防护为其固定路
 
 公开前另从 npm 官方 registry 取得 Vite 7.3.7 的完整发布 tarball，完整 SHA-512 SRI 与锁文件一致，包内 `package/LICENSE.md` 与待收录原文逐字节相同（101,176 字节，SHA-256 `a77a1c089806b39ad339535bdf3677f636c91d96693e8ad7b11fe733f650ea64`）。该包只读检查，没有安装或运行；这个证据专门支持署名例外的字节身份。
 
+收录提交 `7b79d1470da6854ec4048f582a624182fb56baf5` 的[快速 CI](https://github.com/AureliusWu/ImageLore/actions/runs/40181789646)和[敏感门禁](https://github.com/AureliusWu/ImageLore/actions/runs/40181788970)已成功，防护回归实际 **19 项通过**。十份 Git blob 与原文哈希一致，公开仓库同一不可变提交的十次匿名 HTTP 读取均为 200 且字节相同；这是源码文本可读性，不是安装包或 Release 的下载验证。此提交仅改动声明、防护脚本及文档，应用源码、产品锁文件与版本保持。
+
 完整原始包、模块路径和报告保存在仓库外。独立复核重新核对三份输出、五个包的完整 SRI、31 个相关文件及十份草稿文本，均通过。原生库的实际链接范围、DirectML 条款和身份、模型/分词器及其他应用资产继续按[依赖来源与许可准备](V0_26_DISTRIBUTION_DEPENDENCIES.md)核对；本记录不关闭这些项目、桌面验收或签名/安装升级/updater 门槛。
