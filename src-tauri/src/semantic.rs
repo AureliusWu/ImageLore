@@ -29,7 +29,7 @@ const DIMENSIONS: usize = 512;
 // Allow float32 rounding while rejecting zero/nonfinite/unnormalized data.
 // Actual model output is checked independently during native acceptance.
 const VECTOR_NORM_TOLERANCE: f64 = 0.001;
-const TRUST_MANIFEST_VERSION: u32 = 1;
+const TRUST_MANIFEST_VERSION: u32 = 2;
 static MODEL_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>> = OnceLock::new();
 static STAGE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -99,6 +99,7 @@ fn discard_stage(stage: &Path, error: ModelError) -> ModelError {
 struct SupportFile {
     path: &'static str,
     max_bytes: u64,
+    sha256: &'static str,
 }
 
 #[derive(Clone, Copy)]
@@ -114,23 +115,28 @@ struct TrustedModelSpec {
 const VISION_SUPPORT: &[SupportFile] = &[SupportFile {
     path: "preprocessor_config.json",
     max_bytes: 64 * 1024,
+    sha256: "ce945ef831c9972c135b5b198a03d8eeb70478cd69c0238f24caf1903a9965e6",
 }];
 const TEXT_SUPPORT: &[SupportFile] = &[
     SupportFile {
         path: "tokenizer.json",
         max_bytes: 8 * 1024 * 1024,
+        sha256: "b68d571997a1f81bf521fb73806740ddb91e4ed6666cb6e996c066bb289cf55b",
     },
     SupportFile {
         path: "config.json",
         max_bytes: 64 * 1024,
+        sha256: "4d5923d94bbc4e29864de837df14c138c12b93a0b738c64f3ca41f0c539e17b7",
     },
     SupportFile {
         path: "special_tokens_map.json",
         max_bytes: 64 * 1024,
+        sha256: "2cdb3b8331a60c92fc1e55a13e9fd61fd2293c5a51275fdcccd62b780052530e",
     },
     SupportFile {
         path: "tokenizer_config.json",
         max_bytes: 64 * 1024,
+        sha256: "6bdcee9ccce2a16ca2b4c0c5ed00b42c50ea225f4472a8c4c1e963a2902c2881",
     },
 ];
 
@@ -319,21 +325,30 @@ fn sha256_file(path: &Path) -> Result<String, String> {
     .map_err(|e| e.to_string())
 }
 
-fn validate_json(path: &Path, max_bytes: u64, control: &Control<'_>) -> ModelResult<()> {
+fn read_support(dir: &Path, file: &SupportFile, control: &Control<'_>) -> ModelResult<Vec<u8>> {
     control.check()?;
-    let meta = fs::metadata(path)
+    let path = dir.join(file.path);
+    let meta = fs::metadata(&path)
         .map_err(|e| ModelError::Failed(format!("模型配套文件缺失 {}：{e}", path.display())))?;
-    if meta.len() == 0 || meta.len() > max_bytes {
+    if meta.len() == 0 || meta.len() > file.max_bytes {
         return Err(ModelError::Failed(format!(
             "模型配套文件大小异常：{} ({} bytes)",
             path.display(),
             meta.len()
         )));
     }
-    let data = download::read(path, max_bytes, control)?;
+    let data = download::read(&path, file.max_bytes, control)?;
     serde_json::from_slice::<serde_json::Value>(&data)
         .map_err(|e| ModelError::Failed(format!("模型配套 JSON 无效 {}：{e}", path.display())))?;
-    control.check()
+    // Verify the same buffer that is returned to the model constructor.
+    if download::digest_reader(&mut data.as_slice(), control)? != file.sha256 {
+        return Err(ModelError::Failed(format!(
+            "模型配套文件 SHA-256 校验失败：{}。已拒绝加载。",
+            file.path
+        )));
+    }
+    control.check()?;
+    Ok(data)
 }
 
 fn validate_trusted_controlled(
@@ -361,7 +376,7 @@ fn validate_trusted_controlled(
         )));
     }
     for file in spec.support {
-        validate_json(&dir.join(file.path), file.max_bytes, control)?;
+        read_support(dir, file, control)?;
     }
     control.check()
 }
@@ -411,9 +426,14 @@ fn install_trusted_with(
                 support.max_bytes,
                 None,
             )?;
-            validate_json(&stage.join(support.path), support.max_bytes, control)?;
+            read_support(&stage, support, control)?;
         }
-        let manifest = serde_json::json!({"manifest_version":TRUST_MANIFEST_VERSION,"model_id":MODEL_ID,"component":spec.name,"repository":spec.repo,"revision":spec.revision,"onnx_sha256":spec.onnx_sha256,"onnx_size":spec.onnx_size});
+        let support_files: Vec<_> = spec
+            .support
+            .iter()
+            .map(|file| serde_json::json!({"path": file.path, "sha256": file.sha256}))
+            .collect();
+        let manifest = serde_json::json!({"manifest_version":TRUST_MANIFEST_VERSION,"model_id":MODEL_ID,"component":spec.name,"repository":spec.repo,"revision":spec.revision,"onnx_sha256":spec.onnx_sha256,"onnx_size":spec.onnx_size,"support_files":support_files});
         fs::write(
             stage.join("trusted-manifest.json"),
             serde_json::to_vec_pretty(&manifest).map_err(|e| ModelError::Failed(e.to_string()))?,
@@ -502,11 +522,7 @@ fn image_model(cache: PathBuf, control: &Control<'_>) -> ModelResult<ImageEmbedd
     let dir = install_trusted(&cache, VISION_SPEC, control)?;
     control.phase("正在准备本地视觉模型：读取可信文件…")?;
     let onnx = download::read(&dir.join("model.onnx"), VISION_SPEC.onnx_size, control)?;
-    let preprocessor = download::read(
-        &dir.join("preprocessor_config.json"),
-        VISION_SUPPORT[0].max_bytes,
-        control,
-    )?;
+    let preprocessor = read_support(&dir, &VISION_SUPPORT[0], control)?;
     drop(guard);
     control.phase("正在准备本地视觉模型：初始化 ONNX，取消将在本阶段结束后生效…")?;
     let model = ImageEmbedding::try_new_from_user_defined(
@@ -539,22 +555,10 @@ fn text_vector_controlled(
     let guard = model_guard(&operation, control)?;
     let dir = install_trusted(&cache, TEXT_SPEC, control)?;
     let tokenizer = TokenizerFiles {
-        tokenizer_file: download::read(
-            &dir.join("tokenizer.json"),
-            TEXT_SUPPORT[0].max_bytes,
-            control,
-        )?,
-        config_file: download::read(&dir.join("config.json"), TEXT_SUPPORT[1].max_bytes, control)?,
-        special_tokens_map_file: download::read(
-            &dir.join("special_tokens_map.json"),
-            TEXT_SUPPORT[2].max_bytes,
-            control,
-        )?,
-        tokenizer_config_file: download::read(
-            &dir.join("tokenizer_config.json"),
-            TEXT_SUPPORT[3].max_bytes,
-            control,
-        )?,
+        tokenizer_file: read_support(&dir, &TEXT_SUPPORT[0], control)?,
+        config_file: read_support(&dir, &TEXT_SUPPORT[1], control)?,
+        special_tokens_map_file: read_support(&dir, &TEXT_SUPPORT[2], control)?,
+        tokenizer_config_file: read_support(&dir, &TEXT_SUPPORT[3], control)?,
     };
     let onnx = download::read(&dir.join("model.onnx"), TEXT_SPEC.onnx_size, control)?;
     drop(guard);
@@ -1539,6 +1543,23 @@ mod tests {
     }
 
     #[test]
+    fn trusted_model_rejects_valid_json_from_another_revision() {
+        let root = model_test_root();
+        fs::write(root.join("model.onnx"), b"abc").unwrap();
+        fs::write(root.join(VISION_SUPPORT[0].path), b"{}").unwrap();
+        let spec = TrustedModelSpec {
+            onnx_sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+            onnx_size: 3,
+            ..VISION_SPEC
+        };
+        assert!(
+            validate_trusted(&root, spec).is_err(),
+            "valid JSON from another model revision must not be trusted"
+        );
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn vector_blob_round_trip_and_cosine() {
         let mut raw = vec![0.0; DIMENSIONS];
         raw[..4].copy_from_slice(&[1.0, 2.0, 3.0, 4.0]);
@@ -1652,6 +1673,7 @@ mod tests {
         static SUPPORT: &[SupportFile] = &[SupportFile {
             path: "config.json",
             max_bytes: 64,
+            sha256: "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
         }];
         TrustedModelSpec {
             name: "test",
@@ -1699,8 +1721,121 @@ mod tests {
     }
 
     #[test]
+    fn verified_support_in_a_legacy_manifest_cache_remains_offline_ready() {
+        let root = model_test_root();
+        let spec = small_spec();
+        let target = trusted_dir(&root, spec);
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("model.onnx"), b"abc").unwrap();
+        fs::write(target.join("config.json"), b"{}").unwrap();
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "manifest_version": 1,
+            "model_id": MODEL_ID,
+            "component": spec.name,
+            "repository": spec.repo,
+            "revision": spec.revision,
+            "onnx_sha256": spec.onnx_sha256,
+            "onnx_size": spec.onnx_size
+        }))
+        .unwrap();
+        fs::write(target.join("trusted-manifest.json"), &manifest).unwrap();
+        let paths = ["model.onnx", "config.json", "trusted-manifest.json"];
+        let mtimes: Vec<_> = paths
+            .iter()
+            .map(|name| fs::metadata(target.join(name)).unwrap().modified().unwrap())
+            .collect();
+        let control = Control {
+            cancel: None,
+            report: &|_| {},
+        };
+        assert_eq!(
+            install_trusted_with(&root, spec, &control, |_, _, _, _| panic!(
+                "verified legacy cache must remain network-free"
+            ))
+            .unwrap(),
+            target
+        );
+        assert_eq!(fs::read(target.join("model.onnx")).unwrap(), b"abc");
+        assert_eq!(fs::read(target.join("config.json")).unwrap(), b"{}");
+        assert_eq!(
+            fs::read(target.join("trusted-manifest.json")).unwrap(),
+            manifest
+        );
+        for (name, mtime) in paths.iter().zip(mtimes) {
+            assert_eq!(
+                fs::metadata(target.join(name)).unwrap().modified().unwrap(),
+                mtime
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_changed_valid_support_json_is_preserved_offline_then_repaired_with_verified_bytes() {
+        let root = model_test_root();
+        let spec = small_spec();
+        let target = trusted_dir(&root, spec);
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("model.onnx"), b"abc").unwrap();
+        let changed = br#"{"foreign":true}"#;
+        fs::write(target.join("config.json"), changed).unwrap();
+        fs::write(target.join("trusted-manifest.json"), b"old-audit-record").unwrap();
+        let control = Control {
+            cancel: None,
+            report: &|_| {},
+        };
+        let attempted = AtomicBool::new(false);
+        let offline = install_trusted_with(&root, spec, &control, |_, _, _, _| {
+            attempted.store(true, Ordering::Relaxed);
+            Err(ModelError::Failed("offline".into()))
+        });
+        assert!(attempted.load(Ordering::Relaxed));
+        assert!(matches!(offline, Err(ModelError::Failed(_))));
+        assert_eq!(fs::read(target.join("model.onnx")).unwrap(), b"abc");
+        assert_eq!(fs::read(target.join("config.json")).unwrap(), changed);
+        assert_eq!(
+            fs::read(target.join("trusted-manifest.json")).unwrap(),
+            b"old-audit-record"
+        );
+        let downloads = AtomicU64::new(0);
+        assert_eq!(
+            install_trusted_with(&root, spec, &control, |name, path, _, _| {
+                downloads.fetch_add(1, Ordering::Relaxed);
+                fs::write(
+                    path,
+                    if name == "model.onnx" {
+                        b"abc".as_slice()
+                    } else {
+                        b"{}".as_slice()
+                    },
+                )?;
+                Ok(())
+            })
+            .unwrap(),
+            target
+        );
+        assert_eq!(downloads.load(Ordering::Relaxed), 2);
+        validate_trusted(&target, spec).unwrap();
+        assert_eq!(
+            read_support(&target, &spec.support[0], &control).unwrap(),
+            b"{}"
+        );
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(target.join("trusted-manifest.json")).unwrap())
+                .unwrap();
+        assert_eq!(manifest["manifest_version"], 2);
+        assert_eq!(manifest["support_files"][0]["path"], "config.json");
+        assert_eq!(
+            manifest["support_files"][0]["sha256"],
+            spec.support[0].sha256
+        );
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn failed_or_cancelled_download_keeps_old_cache_and_other_staging_files() {
-        for mode in ["cancel", "hash", "json", "network"] {
+        for mode in ["cancel", "hash", "json", "support_hash", "network"] {
             let root = model_test_root();
             let spec = small_spec();
             let target = trusted_dir(&root, spec);
@@ -1732,6 +1867,8 @@ mod tests {
                             }
                         } else if mode == "json" {
                             b"not-json".as_slice()
+                        } else if mode == "support_hash" {
+                            br#"{"foreign":true}"#.as_slice()
                         } else {
                             b"{}".as_slice()
                         },
@@ -1748,6 +1885,7 @@ mod tests {
                 assert!(matches!(result, Err(ModelError::Failed(_))));
             }
             assert_eq!(fs::read(target.join("model.onnx")).unwrap(), b"old");
+            assert_eq!(fs::read(target.join("config.json")).unwrap(), b"{}");
             assert_eq!(fs::read(other.join("keep")).unwrap(), b"keep");
             assert_eq!(
                 fs::read_dir(&root).unwrap().count(),

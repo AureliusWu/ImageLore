@@ -10,7 +10,9 @@
 
 ## 当前进度（2026-10-25）
 
-原生分发审查发现 NSIS 没有包含直接导入的 DirectML/MSVCP 依赖，已补充 Windows `copy-dylibs`、内置 VC 打包选项及按清单哈希绑定的 DirectML 资源映射。隔离原型实际 NSIS 编译成功，DLL File 指令由 **0 → 10 → 11**，两个缺失/篡改负例拒绝；真实安装/升级与进程加载位置仍待新源码远端验证，详见[运行库打包修复](V0_26_WINDOWS_RUNTIME_BUNDLE.md)。版本、桌面 current 与阶段退出门槛保持原范围。
+固定模型的五份配套 JSON 原先只有语法/大小检查，现已与匿名取得的固定 revision 字节摘要绑定，并在初始化时使用同一已校验缓冲区。原实现接受无关有效 JSON 的故障已实际复现；修复后完整原生库 **239/0/3、0 filtered**，旧缓存离线保全与拒绝/修复路径通过，严格库 Clippy 通过。同提交远端门禁、真实推理和 GUI 验收仍待完成，详见[模型配套完整性](V0_26_MODEL_SUPPORT_INTEGRITY.md)。
+
+原生分发审查发现 NSIS 遗漏 DirectML/MSVCP，修复 `d981d97` 已完成[同提交托管 Windows 安装升级](https://github.com/AureliusWu/ImageLore/actions/runs/40177299076)：完整 Rust **236/0/3、0 filtered**，NSIS 构建、0.19.0 → 0.26.0、两次正常关闭与业务回读全部成功，三个必需 DLL 均实际从安装目录加载。上传/Release 均跳过、产物列表为 0；详见[运行库打包修复](V0_26_WINDOWS_RUNTIME_BUNDLE.md)。用户机器 GUI、模型、正式性能与可信发布继续分别验收，桌面 current 未推广。
 
 前端分发范围已与实际应用候选的三份 HTML/CSS/JS 输出字节绑定：66 个 chunk 模块涉及五个 npm 包及两个生成 helper。五个发布包的 SRI、31 个相关文件核对通过，插件许可全文补齐，本地前端声明草稿保留十份原样文本；完整原生/模型分发范围仍待核对，详见[前端分发范围](V0_26_FRONTEND_DISTRIBUTION_SCOPE.md)。
 

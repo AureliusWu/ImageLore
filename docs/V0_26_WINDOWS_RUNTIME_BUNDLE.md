@@ -37,4 +37,18 @@ PowerShell 对 DirectML 返回 `Valid / Catalog`；[官方说明](https://learn.
 
 这项证据补充了 DirectML 的 Microsoft 身份，不代表 ImageLore 已签名，也不代表验证了整个 NuGet 包。现有 ImageLore EXE 的证书表为空且 `NotSigned`，Windows Authenticode、服务商资格、updater 与正式 Release 条件继续独立处理。
 
-下一步使用新源码的现有 Windows 工作流做原生检查、应用构建、0.19.0 升级及安装目录真实加载验证。手动工作流默认验证模式，跳过安装包上传，只有显式 `upload_installer` 才启用分发复核后的上传；手动运行不会创建 Release。该远端验收的实际结果另行登记，不以本地打包成功代替。阶段 A 的桌面连续操作、正式性能及长期内存门槛仍未关闭。
+## 同提交托管 Windows 安装升级
+
+修复提交 `d981d972640532690d2870420d64f52533f44a6f` 的[手动 Windows 验证](https://github.com/AureliusWu/ImageLore/actions/runs/40177299076)已成功完成。锁定依赖、前端检查/构建、Rust fmt/check/严格库 Clippy 通过；未过滤 Rust 库测试实际 **236 passed / 0 failed / 3 ignored / 0 filtered**，949.06 秒。新源码 NSIS 与固定 `0.19.0` 基线均实际构建，并在 GitHub 托管 Windows runner 安装升级。
+
+升级进程两次创建真实窗口、报告当前启动就绪后，三个必需模块均实际从安装目录加载：
+
+| 模块 | 实际文件版本 | 两次启动 |
+| --- | --- | --- |
+| DirectML.dll | `1.15.4+241025-1615.1.dml-1.15.fac7597` | 安装目录加载、完整大小与 SHA-256 匹配清单 |
+| msvcp140.dll | `14.51.36247.0` | 安装目录加载 |
+| msvcp140_1.dll | `14.51.36247.0` | 安装目录加载 |
+
+runner 的 VC 版本与本地打包原型不同，原始日志分别保留，不能把本地 DLL 哈希转记为远端字节。两次均通过 `WM_CLOSE` 正常退出且 exit 0；schema 7 → 11、七张业务表精确哨兵、完整性/外键、备份/模型字节、原安装目录与唯一安装项、实际 EXE 版本和快捷方式断言全部成功。升级脚本的最终回执为 `PASS (0.19.0 -> 0.26.0; two normal closes and complete readbacks)`。
+
+该手动工作流的安装包上传与 Release 步骤均 **skipped**，运行产物列表实际为 **0**。默认验证模式保留；只有显式 `upload_installer` 才启用分发复核后的上传，手动运行不创建 Release。本机未安装或启动候选、未推广桌面 current。托管安装/升级不替代用户机器 GUI 连续操作、真实模型、正式性能、长期内存、签名与 updater/RC 门槛，阶段 A 及 v1.0.0 仍未完成。
