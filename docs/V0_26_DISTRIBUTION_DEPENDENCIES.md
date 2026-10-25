@@ -41,7 +41,7 @@
 | Windows x64 normal/build 解析图 | 404 包；403 个第三方包的本地 SPDX 声明均可读取，项目许可另由已采用的根目录 MIT LICENSE 证明 |
 | npm lock 图 | 133 项；73 个已安装项的声明可读取，60 项未为本平台安装 |
 | 初次本地文本候选池 | 750 份原样文本；当时 11 个 Rust 包和 4 个 npm 平台工具包未附可收集的顶层许可文本 |
-| 固定源补充 | 9 个包的 14 份固定提交文本候选，包含完整许可及短声明；另取得一份 Mozilla 官方 MPL 2.0 全文，适用范围分别核对 |
+| Rust 固定源补充 | 9 个包的 14 份固定提交文本候选，包含完整许可及短声明；另取得一份 Mozilla 官方 MPL 2.0 全文，适用范围分别核对 |
 
 Windows 图由 `cargo tree --locked --offline`、目标 `x86_64-pc-windows-msvc`、`normal,build` 边及 `tauri/custom-protocol` 特性解析。它包括构建工具，不能等同于最终 EXE 的链接图；npm 安装项也不能仅按 dev 标志推定是否进入 Vite bundle。
 
@@ -54,6 +54,8 @@ Windows 图由 `cargo tree --locked --offline`、目标 `x86_64-pc-windows-msvc`
 - `simd_helpers` 的[固定 Cargo.toml](https://github.com/lu-zero/simd_helpers/blob/ca1a2f84aa386d758e98f8a609d990263932fb85/Cargo.toml)声明 MIT 与 `proc-macro = true`，但包和已核对的固定仓库根目录仍无完整许可文本；该文本与版权声明缺口保留，没有补造权利人或年份。
 
 四个 npm 平台工具包分别与 `esbuild`、`rollup`、`@tauri-apps/cli` 的锁定版本、同版本父包 optionalDependency 和仓库字段相符；父包的 LICENSE 候选已在本地池内。这个关系补齐了文本查找路径，尚不替代对生成代码及最终分发范围的核对。
+
+后续[前端输出与声明草稿](V0_26_FRONTEND_DISTRIBUTION_SCOPE.md)已按原候选三个文件的完全相同字节绑定实际 chunk 模块，识别五个 npm 包及两个生成 helper。五个发布包的完整 SRI 和 31 个相关文件核对通过，插件缺失的条款全文由固定上游来源补充，本地草稿保留十份原样文本。这个范围与完整 lock、构建工具图及尚待确认的原生链接范围分别记录。
 
 主目录曾检出 `source-map-js` 和 `vite` 的已安装版本落后于锁文件，首轮清单正确停止，没有输出清单结果。实际应用使用独立构建目录；本轮已改从该目录取证，并确认其产品源码与所记录 main 相同。该停止记录与主目录安装缓存均保留。
 
