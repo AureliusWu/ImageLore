@@ -41,6 +41,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Sensitive information guard failed' }
           ./scripts/check_gitleaks.ps1
 
+      - name: Verify pinned upgrade baseline source identity checks
+        run: python scripts/test_windows_upgrade_baseline.py
+
       - name: Verify Windows release signature gate refusals
         shell: pwsh
         run: ./scripts/test_windows_release_signatures.ps1
@@ -112,6 +115,7 @@ jobs:
             @{ Version = '0.25.1'; Commit = '6748b1259b8b2e8b2f150b067e7fbc6ee7c321c9' }
           )
           $built = @()
+          $baselineVerifier = Join-Path $env:GITHUB_WORKSPACE 'scripts/check_windows_upgrade_baseline.py'
           foreach ($source in $baselines) {
             $baseline = Join-Path $env:RUNNER_TEMP ("imagelore-v$($source.Version)-" + [Guid]::NewGuid().ToString("N"))
             if (Test-Path -LiteralPath $baseline) { throw "Upgrade baseline directory already exists" }
@@ -129,18 +133,20 @@ jobs:
               if ((git rev-parse HEAD) -ne $source.Commit -or (Get-Content VERSION).Trim() -ne $source.Version) {
                 throw "Upgrade baseline source or version changed during build"
               }
-              git diff --exit-code
-              if ($LASTEXITCODE -ne 0) { throw "Tracked baseline sources changed during build" }
+              $identityJson = python $baselineVerifier --repository $baseline --commit $source.Commit --version $source.Version
+              if ($LASTEXITCODE -ne 0) { throw "Pinned baseline source identity check failed" }
+              $identity = $identityJson | ConvertFrom-Json
+              Write-Host "Pinned baseline source identity: $identityJson"
             } finally {
               Pop-Location
             }
             $previous = @(Get-ChildItem "$baseline/src-tauri/target/release/bundle/nsis/*.exe")
             if ($previous.Count -ne 1) { throw "Expected one baseline installer" }
-            $built += @{ Version = $source.Version; Commit = $source.Commit; Installer = $previous[0].FullName; Schema = "$baseline/src-tauri/schema.sql" }
+            $built += @{ Version = $source.Version; Commit = $source.Commit; Installer = $previous[0].FullName; Schema = "$baseline/src-tauri/schema.sql"; SourceIdentity = $identity }
           }
           $manifest = Join-Path $env:RUNNER_TEMP ("imagelore-upgrade-baselines-" + [Guid]::NewGuid().ToString("N") + '.json')
           if (Test-Path -LiteralPath $manifest) { throw "Upgrade baseline manifest already exists" }
-          $built | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $manifest -Encoding UTF8
+          $built | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $manifest -Encoding UTF8
           "IMAGELORE_UPGRADE_BASELINES=$manifest" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Rust tests

@@ -25,6 +25,10 @@
 
 工作流把两份历史基线的完整构建提前到耗时的当前库测试和当前 NSIS 之前，使旧源码重建错误尽早显现。当前前端、Rust 完整门禁、安装升级及签名/上传顺序仍全部保留，固定源码、完整版本与数据断言没有放宽。
 
+`391bb8d` 的[运行 40306957432](https://github.com/AureliusWu/ImageLore/actions/runs/40306957432)实际完成 `0.19.0` release/NSIS 构建，但 Tauri 在 `Cargo.toml` 的 `tauri-build` 条目补入空的 `features=[]`，触发新增的严格 Git diff 检查。该轮未构建第二基线、未运行当前完整 Rust tests/NSIS 或安装升级，上传/Release 跳过、产物 0；此前的 239 项结果不能记到该轮。
+
+后续只读校验器继续要求固定 HEAD、VERSION 和 Cargo package 版本，拒绝其他 tracked 文件（含 lockfile）改变；仅允许 `tauri-build` 原本未声明 features 时补入空数组，并要求解析后的整个 Cargo TOML 其余内容相同。原始/构建后清单摘要和这项归一化都输出到回执。四个已知、有效 JSON 的生成 schema 文件单独记录；未知 untracked 文件拒绝。13 项独立 Git 夹具检查覆盖正常原件、该归一化及源码、依赖、非空 features、其他表、版本、lockfile 和生成文件异常的拒绝。该组件检查仍不代替下一轮实际双基线安装。
+
 ## 数据与原件核对
 
 `0.19.0` 保留原有七表哨兵。`0.25.1` 从其实际 schema 创建 **23 张非空业务/设置表**：包括两张图片记录、编辑历史、标签/集合/谱系、Visual DNA、生成参数索引、512 维语义向量、模型设置、生成会话、别名、筛选器、待解析谱系、资料源、Vision 设置/分析、Remix 和来源信息。每行的全部列都进入快照，向量 BLOB 按完整十六进制字节比较。

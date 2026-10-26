@@ -20,6 +20,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Verify pinned upgrade baseline source identity checks
+        run: python scripts/test_windows_upgrade_baseline.py
+
       - name: Verify owned Windows ACL fixture lifecycle
         shell: pwsh
         run: |
