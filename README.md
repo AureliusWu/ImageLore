@@ -33,7 +33,7 @@ ImageLore 是一个 local-first 的 AI 视觉生成记忆库，用来保存图�
 - Reference Card：保留来源页面、原图 URL、页面标题、采集时间与用途；重复图片会合并多个来源
 - Image to Prompt：调用可配置的 OpenAI-compatible 视觉模型，把当前图片拆成结构化 Visual DNA + 可生成 Prompt
 - AI 分析结果保留 Provider / 模型 / 时间；默认只补充 Visual DNA 空字段，可载入 Prompt 编辑器或保存为独立 Revision
-- Vision API Key 仅保存在当前进程内存，也可由 IMAGELORE_VISION_API_KEY 环境变量提供，不写入 SQLite / Sidecar / 日志
+- Vision 专用 API Key 字段保存在当前进程内存，也可由 IMAGELORE_VISION_API_KEY 环境变量提供；本地数据、图片分析请求及日志范围见[本地数据与联网说明](docs/DATA_AND_NETWORK.md)
 - Visual DNA 进入本地 FTS / CJK 搜索，并随 Sidecar v3 导入导出
 - Prompt Revision 历史版本；保存版本会原子写入当前编辑内容，避免 autosave 竞态
 - 图库右键菜单可直接在文件管理器中定位原图
