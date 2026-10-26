@@ -118,39 +118,56 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Tracked sources changed during verification" }
           npm run tauri:build
 
-      - name: Build v0.19.0 upgrade baseline
+      - name: Build pinned upgrade baselines
         shell: pwsh
         run: |
-          $baseline = Join-Path $env:RUNNER_TEMP ("imagelore-v0.19.0-" + [Guid]::NewGuid().ToString("N"))
-          if (Test-Path -LiteralPath $baseline) { throw "Upgrade baseline directory already exists" }
-          git worktree add --detach "$baseline" cfe80c5dfa6e4290b6372910e2a98908193e0b13
-          if ($LASTEXITCODE -ne 0) { throw "Could not prepare upgrade baseline" }
-          Push-Location $baseline
-          try {
-            npm ci
-            if ($LASTEXITCODE -ne 0) { throw "Baseline frontend dependency install failed" }
-            npm run tauri:build
-            if ($LASTEXITCODE -ne 0) { throw "Baseline installer build failed" }
-          } finally {
-            Pop-Location
+          $baselines = @(
+            @{ Version = '0.19.0'; Commit = 'cfe80c5dfa6e4290b6372910e2a98908193e0b13' },
+            @{ Version = '0.25.1'; Commit = '202dee3a6b5c3746bbad5e4c7f58e0e2e0875ef3' }
+          )
+          $built = @()
+          foreach ($source in $baselines) {
+            $baseline = Join-Path $env:RUNNER_TEMP ("imagelore-v$($source.Version)-" + [Guid]::NewGuid().ToString("N"))
+            if (Test-Path -LiteralPath $baseline) { throw "Upgrade baseline directory already exists" }
+            git worktree add --detach "$baseline" $source.Commit
+            if ($LASTEXITCODE -ne 0) { throw "Could not prepare upgrade baseline" }
+            Push-Location $baseline
+            try {
+              if ((git rev-parse HEAD) -ne $source.Commit -or (Get-Content VERSION).Trim() -ne $source.Version) {
+                throw "Upgrade baseline source or version does not match its pin"
+              }
+              npm ci
+              if ($LASTEXITCODE -ne 0) { throw "Baseline frontend dependency install failed" }
+              npm run tauri:build
+              if ($LASTEXITCODE -ne 0) { throw "Baseline installer build failed" }
+            } finally {
+              Pop-Location
+            }
+            $previous = @(Get-ChildItem "$baseline/src-tauri/target/release/bundle/nsis/*.exe")
+            if ($previous.Count -ne 1) { throw "Expected one baseline installer" }
+            $built += @{ Version = $source.Version; Commit = $source.Commit; Installer = $previous[0].FullName; Schema = "$baseline/src-tauri/schema.sql" }
           }
-          $previous = Get-ChildItem "$baseline/src-tauri/target/release/bundle/nsis/*.exe" | Select-Object -First 1
-          if (-not $previous) { throw "v0.19.0 baseline installer not found" }
-          "IMAGELore_PREVIOUS_INSTALLER=$($previous.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "IMAGELore_PREVIOUS_SCHEMA=$baseline/src-tauri/schema.sql" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $manifest = Join-Path $env:RUNNER_TEMP ("imagelore-upgrade-baselines-" + [Guid]::NewGuid().ToString("N") + '.json')
+          if (Test-Path -LiteralPath $manifest) { throw "Upgrade baseline manifest already exists" }
+          $built | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $manifest -Encoding UTF8
+          "IMAGELORE_UPGRADE_BASELINES=$manifest" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: Verify in-place upgrade from v0.19.0
+      - name: Verify in-place upgrades from v0.19.0 and v0.25.1
         shell: pwsh
         run: |
           $current = Get-ChildItem "src-tauri/target/release/bundle/nsis/*.exe" | Select-Object -First 1
           if (-not $current) { throw "Current NSIS installer not found" }
-          ./scripts/test_windows_upgrade.ps1 `
-            -PreviousInstaller "$env:IMAGELore_PREVIOUS_INSTALLER" `
-            -CurrentInstaller "$($current.FullName)" `
-            -CurrentExecutable "src-tauri/target/release/imagelore.exe" `
-            -PreviousSchema "$env:IMAGELore_PREVIOUS_SCHEMA" `
-            -PreviousVersion "0.19.0" `
-            -CurrentVersion "$((Get-Content VERSION).Trim())"
+          $baselines = @(Get-Content -LiteralPath $env:IMAGELORE_UPGRADE_BASELINES -Raw -Encoding UTF8 | ConvertFrom-Json)
+          if ($baselines.Count -ne 2) { throw "Both pinned upgrade baselines are required" }
+          foreach ($baseline in $baselines) {
+            ./scripts/test_windows_upgrade.ps1 `
+              -PreviousInstaller $baseline.Installer `
+              -CurrentInstaller "$($current.FullName)" `
+              -CurrentExecutable "src-tauri/target/release/imagelore.exe" `
+              -PreviousSchema $baseline.Schema `
+              -PreviousVersion $baseline.Version `
+              -CurrentVersion "$((Get-Content VERSION).Trim())"
+          }
 
       - name: Verify tested source before upload or publication
         shell: pwsh

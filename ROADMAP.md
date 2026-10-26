@@ -2,6 +2,8 @@
 
 ## 当前进度（2026-10-26）
 
+补齐 `0.25.1` 独立数据目录的[升级基线准备](docs/V0_26_MODERN_UPGRADE_BASELINE.md)，与原 `0.19.0` 迁移路径分别验收：23 张业务/设置表、合成向量与原图字节哨兵，13 项本地组件检查通过；真正的双基线托管安装/正常关闭仍待取得，不记为发布完成。
+
 新增签名/安装哈希门禁的托管验证实际发现 Tauri 会临时改变 NSIS 内层 EXE、随后恢复构建输出，因此在启动应用前拒绝了字节不符；完整 Rust **239/0/3** 和 20 项策略测试通过，上传/Release 跳过。修订使用锁定版本已有的保留字节选项，重新托管验证中。另对 **403 个锁定 Rust 发布包 / 678 份既有许可文本**核对无不一致；DirectML 官方完整 NuGet 包的 catalog 哈希、成员与 Microsoft 作者/nuget.org 仓库签名均通过。见[签名门禁](docs/V0_26_RELEASE_SIGNATURE_GATE.md)及[依赖来源](docs/V0_26_DISTRIBUTION_DEPENDENCIES.md)；签名服务、GUI、正式性能与 v1.0.0 仍待完成。
 
 固定模型的五份配套 JSON 原先只有语法/大小检查，现已与匿名取得的固定 revision 字节摘要绑定，并在初始化时使用同一已校验缓冲区。原实现接受无关有效 JSON 的故障已实际复现；修复后本地及 `152d2a4` [同提交 Native](https://github.com/AureliusWu/ImageLore/actions/runs/40180556173) 均为 **239/0/3、0 filtered**，旧缓存离线保全与拒绝/修复路径通过；远端严格库 Clippy、快速 CI 和敏感门禁成功。新源码真实推理、GUI 与性能仍待完成，详见[模型配套完整性](docs/V0_26_MODEL_SUPPORT_INTEGRITY.md)。
