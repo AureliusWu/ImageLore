@@ -27,6 +27,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./scripts/test_backup_acl_fixture.ps1 -LegacyDacl
 
+      - name: Verify Windows release signature gate refusals
+        shell: pwsh
+        run: ./scripts/test_windows_release_signatures.ps1
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22

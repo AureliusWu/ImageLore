@@ -1,6 +1,7 @@
 param(
   [Parameter(Mandatory=$true)][string]$PreviousInstaller,
   [Parameter(Mandatory=$true)][string]$CurrentInstaller,
+  [Parameter(Mandatory=$true)][string]$CurrentExecutable,
   [Parameter(Mandatory=$true)][string]$PreviousSchema,
   [string]$PreviousVersion = "0.19.0",
   [Parameter(Mandatory=$true)][string]$CurrentVersion
@@ -164,6 +165,11 @@ function Invoke-AppStartupAndClose([string]$Executable, [string]$LogPath, [strin
   Assert-True ($app.ExitCode -eq 0) "$Label exited with code $($app.ExitCode)"
 }
 
+Assert-NoReparsePoint $CurrentExecutable
+# Keep the built EXE immutable while the installer payload is exercised.
+$builtExecutable = [IO.File]::Open([IO.Path]::GetFullPath($CurrentExecutable), [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+try {
+$expectedExecutableHash = (Get-FileHash -LiteralPath $CurrentExecutable -Algorithm SHA256).Hash
 $uninstallRoot = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall"
 $uninstallKey = Join-Path $uninstallRoot "ImageLore"
 $localDataRoot = [IO.Path]::GetFullPath($env:LOCALAPPDATA)
@@ -250,6 +256,7 @@ $newInstallDir = Unquote $newReg.InstallLocation
 Assert-True ([string]::Equals([IO.Path]::GetFullPath($newInstallDir), [IO.Path]::GetFullPath($oldInstallDir), [StringComparison]::OrdinalIgnoreCase)) "Upgrade installed side-by-side instead of replacing old location"
 $currentExe = Join-Path $newInstallDir "ImageLore.exe"
 Assert-True (Test-Path -LiteralPath $currentExe) "Upgraded ImageLore.exe missing"
+Assert-True ((Get-FileHash -LiteralPath $currentExe -Algorithm SHA256).Hash -eq $expectedExecutableHash) "Installed executable bytes differ from the built release application"
 Assert-True (Test-Path -LiteralPath (Join-Path $newInstallDir "uninstall.exe")) "Upgraded uninstaller missing"
 
 $entries = @(
@@ -293,6 +300,8 @@ con.close()
 
 foreach ($label in @("first upgraded launch", "upgraded restart")) {
   Invoke-AppStartupAndClose $currentExe $logPath $label
+  Assert-True ((Get-FileHash -LiteralPath $currentExe -Algorithm SHA256).Hash -eq $expectedExecutableHash) "$label changed the installed application bytes"
+  Write-Host "$label installed application: SHA256=$expectedExecutableHash, matches-built=true"
   Assert-True (Test-Path -LiteralPath $newDb) "$label did not migrate the legacy database to the isolated data root"
   Assert-True (-not (Test-Path -LiteralPath $legacyDb)) "$label left the legacy database in the install directory"
   $verifyDb | python - $newDb $expectedSnapshot
@@ -310,3 +319,4 @@ Invoke-RegisteredUninstaller
 Remove-ExpectedDataRoot $legacyRoot
 Remove-ExpectedDataRoot $dataRoot
 Write-Host "ImageLore Windows upgrade smoke test: PASS ($PreviousVersion -> $CurrentVersion; two normal closes and complete readbacks)"
+} finally { $builtExecutable.Dispose() }
