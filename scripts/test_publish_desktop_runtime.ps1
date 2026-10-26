@@ -75,8 +75,15 @@ internal static class Program { private static void Main() { } }
   $metadata = @{ version=$Version; executable='ImageLore.exe'; builtFrom=(Get-FixtureHead); sha256=(Get-Digest $testSourceExe); candidate=$true; fixturePath=$testSource }
   Write-Text $testSourceManifest ($metadata | ConvertTo-Json)
 }
-function Invoke-Publisher {
-  & $testPublisher -SourceDirectory $testSource -DesktopDirectory $testDesktop -StatePath $testState
+function Invoke-Publisher([switch]$WithoutHashCmdlet) {
+  if ($WithoutHashCmdlet) {
+    & {
+      function Get-FileHash { throw 'Get-FileHash unavailable in nested publication host' }
+      & $testPublisher -SourceDirectory $testSource -DesktopDirectory $testDesktop -StatePath $testState
+    }
+  } else {
+    & $testPublisher -SourceDirectory $testSource -DesktopDirectory $testDesktop -StatePath $testState
+  }
 }
 function Assert-Current([string]$Version, [string]$Commit, [string]$Provenance = 'source-runtime-manifest') {
   Assert-Test ((Get-Item -LiteralPath $testCurrentExe).VersionInfo.ProductVersion -eq $Version) "current version $Version"
@@ -141,11 +148,11 @@ try {
   Assert-Test ($LASTEXITCODE -eq 0) 'docs-only fixture add'
   Commit-Fixture 'Docs-only HEAD ahead of candidate'
   Assert-Test ((Get-FixtureHead) -cne $firstCommit) 'candidate commit differs from current HEAD'
-  Invoke-Publisher
+  Invoke-Publisher -WithoutHashCmdlet
   Assert-Current '0.26.0' $firstCommit
   Assert-Test ((Get-Digest $testCurrentExe) -eq $firstBinaryDigest) 'first promotion contains exact compiled binary'
   Assert-Test (@(Get-ChildItem -LiteralPath $testRuntime -Directory -Filter 'previous-*').Count -eq 0) 'first promotion has no fake previous'
-  Complete-Scenario 'initial promotion preserves candidate commit/hash despite docs-only HEAD ahead'
+  Complete-Scenario 'initial promotion without Get-FileHash preserves candidate commit/hash despite docs-only HEAD ahead'
 
   Compile-TestBinary '0.27.0'
   $currentCommit = Get-FixtureHead

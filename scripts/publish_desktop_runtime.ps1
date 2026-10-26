@@ -4,6 +4,19 @@ param(
   [string]$StatePath = (Join-Path $env:LOCALAPPDATA 'app.imagelore.desktop\desktop-shortcut.json')
 )
 $ErrorActionPreference = 'Stop'
+function Get-RuntimeFileSha256([string]$Path) {
+  # Keep publication usable in nested Windows PowerShell hosts where the
+  # inherited module environment does not expose Get-FileHash.
+  $algorithm = [Security.Cryptography.SHA256]::Create()
+  $stream = $null
+  try {
+    $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+    return [BitConverter]::ToString($algorithm.ComputeHash($stream)).Replace('-', '')
+  } finally {
+    if ($null -ne $stream) { $stream.Dispose() }
+    $algorithm.Dispose()
+  }
+}
 $usesDefaultSource = -not $PSBoundParameters.ContainsKey('SourceDirectory')
 $project = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $hash = [Security.Cryptography.SHA256]::Create()
@@ -25,7 +38,7 @@ if ($actual -notmatch '(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)' -or $Matches[1] -ne 
   throw "Application binary does not match VERSION=$version ($actual)"
 }
 $sourceManifestPath = Join-Path $source 'runtime.json'
-$binaryHash = (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash
+$binaryHash = Get-RuntimeFileSha256 $binary
 if (Test-Path -LiteralPath $sourceManifestPath) {
   if (-not (Test-Path -LiteralPath $sourceManifestPath -PathType Leaf)) { throw 'Source runtime.json must be a file' }
   $sourceManifest = Get-Content -LiteralPath $sourceManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -63,7 +76,7 @@ foreach ($target in @($current,$staged,$previous,$failed)) {
 }
 New-Item -ItemType Directory -Path $staged -Force | Out-Null
 Copy-Item -LiteralPath $binary -Destination (Join-Path $staged 'ImageLore.exe')
-$stagedHash = (Get-FileHash -LiteralPath (Join-Path $staged 'ImageLore.exe') -Algorithm SHA256).Hash
+$stagedHash = Get-RuntimeFileSha256 (Join-Path $staged 'ImageLore.exe')
 if ($stagedHash -ine $binaryHash) { throw 'Staged executable SHA256 changed during publication' }
 Get-ChildItem -LiteralPath $source -Filter '*.dll' -File | ForEach-Object {
   Copy-Item -LiteralPath $_.FullName -Destination $staged
