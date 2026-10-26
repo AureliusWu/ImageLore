@@ -1,6 +1,6 @@
 # Windows 分发依赖的来源与许可准备
 
-记录日期：2026-10-25。版本仍为 `0.26.0`，阶段 A 继续验收，签名、安装升级、updater 与正式发布保持各自门槛。
+记录日期：2026-10-25；来源复核补充：2026-10-26。版本仍为 `0.26.0`，阶段 A 继续验收，签名、安装升级、updater 与正式发布保持各自门槛。
 
 本轮实际应用候选来自 `1dfe36999fd63eacdb26259da7ffde0a6f0a836b`，EXE SHA-256 为 `f32d25ace7ebd358b486f3907a20cc0246eda2480dac5e88c47ce5ebd589bdad`。对照文档输入 main `177283b`，选定产品源码、锁文件和 LICENSE 相同；本轮没有推广该候选到桌面 current。
 
@@ -59,7 +59,28 @@ Windows 图由 `cargo tree --locked --offline`、目标 `x86_64-pc-windows-msvc`
 
 主目录曾检出 `source-map-js` 和 `vite` 的已安装版本落后于锁文件，首轮清单正确停止，没有输出清单结果。实际应用使用独立构建目录；本轮已改从该目录取证，并确认其产品源码与所记录 main 相同。该停止记录与主目录安装缓存均保留。
 
-上述是许可声明、文本及来源材料，未将“有 SPDX 字段”直接当作分发许可全部完成。当前仍须完成最终产物包含范围、部分缺失文本及版权声明、模型与资产的署名范围；DirectML 的官方 NuGet 文本、其整包签名/成员身份验证与 SignPath 的 System Libraries 例外分别处理。项目 MIT 不会替第三方组件重新许可。
+上述是许可声明、文本及来源材料，未将“有 SPDX 字段”直接当作分发许可全部完成。当前仍须完成最终产物包含范围、部分缺失文本及版权声明、模型与资产的署名范围；DirectML 的整包签名与成员身份已在下面补充，实际分发条款与服务方适用条件仍分别核对。项目 MIT 不会替第三方组件重新许可。
+
+## 锁定 Rust 发布包与既有文本的逐字节复核
+
+10 月 26 日从干净 main `1a77f3966e2c87fd205f0da77eaa9dda262b79dd` 重新只读解析相同 Windows 目标、特性和 normal/build 图，包身份集合与此前清单相同。所选 **403 个 registry `.crate`** 的完整 SHA-256 全部符合当前 Cargo.lock；逐项读取发布包内的 Cargo.toml，包名、版本和声明与清单/缓存相同。既有池内 **678 份 Rust 许可文本**分别与对应发布包成员、先前清单摘要及当前缓存文本字节核对，**0 不一致**。
+
+这 678 份不包括池中 72 份 npm 文本，也不包括另取的固定源补充；没有重复计数为新收集文本。没有解包执行 crate、编译或更改锁文件。初次缺少顶层文本的 11 项及 `simd_helpers` 的完整文本/版权缺口仍保留；本次证明文本来源，没有证明整个依赖都从源码编译、最终静态链接范围、完整许可交付或法律批准。
+
+## DirectML 完整官方 NuGet 包与双层签名
+
+10 月 26 日匿名取得 [Microsoft.AI.DirectML 1.15.4 官方完整包](https://api.nuget.org/v3-flatcontainer/microsoft.ai.directml/1.15.4/microsoft.ai.directml.1.15.4.nupkg)，**202,292,617 字节**、SHA-256 为 `4e7cb7ddce8cf837a7a75dc029209b520ca0101470fcdf275c1f49736a3615b9`，完整 SHA-512 与 NuGet 官方 catalog 相同。四份先前收集的 LICENSE、LICENSE-CODE、ThirdPartyNotices 和 nuspec 均与完整包成员逐字节相同；包内 x64 DirectML DLL 与上表实际运行库的大小、SHA-256 完全相同。`LICENSE-CODE` 的 MIT 范围没有据此扩展至 DLL。
+
+使用 [NuGet 官方工具](https://www.nuget.org/downloads) `7.9.0.83` 执行 `verify -All`。工具自身先经已安装 Microsoft SDK SignTool 验证嵌入签名/时间戳、退出 0；验证进程采用独立空配置与缓存，不继承账号/服务凭据，不执行包内载荷。
+
+配置保留 `signatureValidationMode=require`、在线撤销检查及 `allowUntrustedRoot=false`，明确限制为 Microsoft 官方[配置参考](https://learn.microsoft.com/en-us/nuget/reference/nuget-config-file#trustedsigners-section)中列出的 Microsoft 作者证书。整包实际验证退出 **0**，原始输出分别报告：
+
+| 签名范围 | 证书 SHA-256 |
+| --- | --- |
+| Microsoft Corporation 作者主签名 | `566A31882BE208BE4422F7CFD66ED09F5D4524A5994F50CCC8B05EC0528C1353` |
+| nuget.org 仓库签名 | `1F4B311D9ACC115C8DC8018B5A49E00FCE6DA8E2855F9F014CA6F34570BC482D` |
+
+作者及仓库签名的时间戳均实际检查，工具和完整包在验证期间只读持有、前后字节相同。先前失败的配置解析、缺少可信签名者 `NU3034` 及下载边界尝试分别保留；没有关闭 require、忽略不可信根或放宽签名错误来取得通过。该结果补齐此前“只有 DLL 嵌入签名、整包未验证”的范围，仍不代表 ImageLore 已签名、SignPath 批准或第三方条款验收完毕。
 
 ## 当前性能与发布边界
 

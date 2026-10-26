@@ -35,7 +35,7 @@ VC++ 与 DirectML 保持各自许可。应用目录中的 VC++ DLL 随应用版�
 
 PowerShell 对 DirectML 返回 `Valid / Catalog`；[官方说明](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.security/get-authenticodesignature)明确有目录签名时优先返回它。另以已安装 Windows SDK SignTool 执行 `verify /pa /all /v /tw`，不使用目录搜索 `/a`，对同一文件的嵌入签名验证实际退出 **0**，**1 个签名、0 warning、0 error**；签名者为 Microsoft Corporation，时间戳验证为 2024-10-26。完整文件哈希与 Authenticode 摘要属于不同范围，不混用。
 
-这项证据补充了 DirectML 的 Microsoft 身份，不代表 ImageLore 已签名，也不代表验证了整个 NuGet 包。现有 ImageLore EXE 的证书表为空且 `NotSigned`，Windows Authenticode、服务商资格、updater 与正式 Release 条件继续独立处理。
+这项 DLL 证据本身没有验证整个 NuGet 包。10 月 26 日另已取得官方完整包，核对完整 catalog 哈希、四份既有许可/声明文本及同一 x64 DLL，并以隔离 NuGet `verify -All` 验证 Microsoft 作者和 nuget.org 仓库签名，实际退出 0；详见[整包复核](V0_26_DISTRIBUTION_DEPENDENCIES.md#directml-完整官方-nuget-包与双层签名)。这仍不代表 ImageLore 已签名：现有 ImageLore EXE 的证书表为空且 `NotSigned`，Windows Authenticode、服务商资格、updater 与正式 Release 条件继续独立处理。
 
 ## 同提交托管 Windows 安装升级
 
