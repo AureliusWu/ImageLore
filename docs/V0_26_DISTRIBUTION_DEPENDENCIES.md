@@ -67,6 +67,12 @@ Windows 图由 `cargo tree --locked --offline`、目标 `x86_64-pc-windows-msvc`
 
 这 678 份不包括池中 72 份 npm 文本，也不包括另取的固定源补充；没有重复计数为新收集文本。没有解包执行 crate、编译或更改锁文件。初次缺少顶层文本的 11 项及 `simd_helpers` 的完整文本/版权缺口仍保留；本次证明文本来源，没有证明整个依赖都从源码编译、最终静态链接范围、完整许可交付或法律批准。
 
+同日进一步核对上述 403 个发布包的**全部 17,809 份成员文件（417,957,669 字节）**，逐项与本机缓存源码比较；所有完整压缩包摘要仍符合 lock，成员大小/摘要相同，**0 不一致**。缓存文件集合也与发布包相符，仅排除 Cargo 自己生成的 `.cargo-ok` 和 `.cargo-checksum.json` 标记；没有采用未发布的额外源码或跟随 reparse point。这超出前一轮只核对清单与许可文本的范围。
+
+该观察对应当前本机候选的依赖准备，`f4b6f3e` 与上轮 `1a77f39` 的 Cargo/目标配置输入相同。它证明读取时本机缓存的完整发布源码字节，没有据此宣称追踪了编译器全部读取、标准库/工具链、远端 runner 缓存或最终静态链接；缺失许可、版权与分发交付范围也没有因此自动关闭。
+
+当前源码另经干净 lock 安装生成前端，全部三个实际 HTML/CSS/JS 文件与[已有 notice 清单](../third_party/frontend/notice-manifest.json)的已核对输出完全相同，没有额外前端资源。它将现有前端文本材料重新绑定到本轮实际输出，仍不等同于安装器已经交付完整声明或当前 EXE 的 GUI 验收。
+
 ## DirectML 完整官方 NuGet 包与双层签名
 
 10 月 26 日匿名取得 [Microsoft.AI.DirectML 1.15.4 官方完整包](https://api.nuget.org/v3-flatcontainer/microsoft.ai.directml/1.15.4/microsoft.ai.directml.1.15.4.nupkg)，**202,292,617 字节**、SHA-256 为 `4e7cb7ddce8cf837a7a75dc029209b520ca0101470fcdf275c1f49736a3615b9`，完整 SHA-512 与 NuGet 官方 catalog 相同。四份先前收集的 LICENSE、LICENSE-CODE、ThirdPartyNotices 和 nuspec 均与完整包成员逐字节相同；包内 x64 DirectML DLL 与上表实际运行库的大小、SHA-256 完全相同。`LICENSE-CODE` 的 MIT 范围没有据此扩展至 DLL。
