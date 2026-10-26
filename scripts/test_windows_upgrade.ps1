@@ -256,7 +256,9 @@ $newInstallDir = Unquote $newReg.InstallLocation
 Assert-True ([string]::Equals([IO.Path]::GetFullPath($newInstallDir), [IO.Path]::GetFullPath($oldInstallDir), [StringComparison]::OrdinalIgnoreCase)) "Upgrade installed side-by-side instead of replacing old location"
 $currentExe = Join-Path $newInstallDir "ImageLore.exe"
 Assert-True (Test-Path -LiteralPath $currentExe) "Upgraded ImageLore.exe missing"
-Assert-True ((Get-FileHash -LiteralPath $currentExe -Algorithm SHA256).Hash -eq $expectedExecutableHash) "Installed executable bytes differ from the built release application"
+$installedExecutableHash = (Get-FileHash -LiteralPath $currentExe -Algorithm SHA256).Hash
+Write-Host "Upgrade application binding: built-SHA256=$expectedExecutableHash, installed-SHA256=$installedExecutableHash"
+Assert-True ($installedExecutableHash -eq $expectedExecutableHash) "Installed executable bytes differ from the built release application"
 Assert-True (Test-Path -LiteralPath (Join-Path $newInstallDir "uninstall.exe")) "Upgraded uninstaller missing"
 
 $entries = @(

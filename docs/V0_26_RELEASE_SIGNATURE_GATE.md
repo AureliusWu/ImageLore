@@ -29,6 +29,10 @@ Microsoft 文档说明 [Get-AuthenticodeSignature](https://learn.microsoft.com/e
 
 原有托管 runner 限制保留：脚本首先要求 `GITHUB_ACTIONS=true` 与 `RUNNER_ENVIRONMENT=github-hosted`，没有本机或 self-hosted override。旧 schema、七表哨兵、两次正常关闭、运行库实际加载位置与备份/模型字节检查继续执行。
 
+新增哈希门禁在 `e31be32` 的[托管升级运行](https://github.com/AureliusWu/ImageLore/actions/runs/40285926901)中实际拒绝了安装载荷：完整 Rust **239/0/3、0 filtered**、20 项签名策略回归及 NSIS 构建通过，但安装的 EXE 与构建输出不同，应用尚未启动，上传/Release 均跳过。锁定 Tauri CLI `2.12.0` 的上游 `bundle.rs` 会临时写入 NSIS 标记、打包该字节后恢复原构建输出，能够解释这个差异，也会改变预先外部签名的输入。
+
+修订打包命令使用该锁定版本已有的 `--no-binary-patching`，并核对打包前后构建 EXE 哈希；当前仅生成 NSIS。升级检查仍要求完整文件哈希相同，拒绝条件没有放宽。[上游发布说明](https://tauri.app/release/tauri-bundler/v2.10.0/)说明此选项保留已有签名，自动标记主要用于同平台多种安装格式。新的托管安装结果须另行取得；未来 updater 的格式选择和签名仍须实测。
+
 ## 本地已执行与剩余范围
 
 本地策略/组件回归实际 **20 项通过**，包括稳定版/RC 的正向策略合约、产品/版本不符、未知或缺失证书、目录/损坏/未签名状态、缺少时间戳、空/错误清单、Microsoft SDK verifier 读取，以及编译出的真实未签名 managed PE 和 CLI 拒绝。正向策略合约使用合成记录，不代表真实签名链已通过。

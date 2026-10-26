@@ -72,12 +72,20 @@ try {
       [IO.File]::WriteAllText($overlay, ($value | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
       $node = (Get-Command node -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
       $cli = Join-Path $project 'node_modules/@tauri-apps/cli/tauri.js'
-      $arguments = @($cli, 'bundle', '--bundles', 'nsis', '--ci', '--config', $overlay)
+      # NSIS is our only Windows bundle. Keep the exact EXE bytes: by default
+      # Tauri patches the embedded bundle marker, then restores the build output.
+      # That would package different bytes and invalidate an external signature.
+      $binaryHash = (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash
+      $arguments = @($cli, 'bundle', '--bundles', 'nsis', '--no-binary-patching', '--ci', '--config', $overlay)
       if ($Target) { $arguments += @('--target', $Target) }
       if ($DebugBuild) { $arguments += '--debug' }
       if ($NoSign) { $arguments += '--no-sign' }
       & $node @arguments
       if ($LASTEXITCODE -ne 0) { throw 'Windows installer bundling failed' }
+      if ((Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash -cne $binaryHash) {
+        throw 'Windows bundling changed the application executable bytes'
+      }
+      Write-Output ('Bundled unchanged application executable: SHA256=' + $binaryHash.ToLowerInvariant())
       $held.Position = 0
       if ((Get-StreamSha256 $held) -cne $directMLHash) {
         throw 'DirectML.dll changed during bundling'
