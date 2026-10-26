@@ -104,26 +104,12 @@ jobs:
       - name: Rust clippy
         run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --lib -- -D warnings
 
-      - name: Rust tests
-        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib
-
-      - name: Build NSIS setup EXE
-        shell: pwsh
-        run: |
-          $releaseSourceSha = git rev-parse HEAD
-          if ($LASTEXITCODE -ne 0 -or $releaseSourceSha -ne $env:IMAGELORE_RELEASE_SOURCE_SHA) {
-            throw "Release source changed after verification"
-          }
-          git diff --exit-code
-          if ($LASTEXITCODE -ne 0) { throw "Tracked sources changed during verification" }
-          npm run tauri:build
-
       - name: Build pinned upgrade baselines
         shell: pwsh
         run: |
           $baselines = @(
             @{ Version = '0.19.0'; Commit = 'cfe80c5dfa6e4290b6372910e2a98908193e0b13' },
-            @{ Version = '0.25.1'; Commit = '202dee3a6b5c3746bbad5e4c7f58e0e2e0875ef3' }
+            @{ Version = '0.25.1'; Commit = '6748b1259b8b2e8b2f150b067e7fbc6ee7c321c9' }
           )
           $built = @()
           foreach ($source in $baselines) {
@@ -140,6 +126,11 @@ jobs:
               if ($LASTEXITCODE -ne 0) { throw "Baseline frontend dependency install failed" }
               npm run tauri:build
               if ($LASTEXITCODE -ne 0) { throw "Baseline installer build failed" }
+              if ((git rev-parse HEAD) -ne $source.Commit -or (Get-Content VERSION).Trim() -ne $source.Version) {
+                throw "Upgrade baseline source or version changed during build"
+              }
+              git diff --exit-code
+              if ($LASTEXITCODE -ne 0) { throw "Tracked baseline sources changed during build" }
             } finally {
               Pop-Location
             }
@@ -151,6 +142,20 @@ jobs:
           if (Test-Path -LiteralPath $manifest) { throw "Upgrade baseline manifest already exists" }
           $built | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $manifest -Encoding UTF8
           "IMAGELORE_UPGRADE_BASELINES=$manifest" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Rust tests
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib
+
+      - name: Build NSIS setup EXE
+        shell: pwsh
+        run: |
+          $releaseSourceSha = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $releaseSourceSha -ne $env:IMAGELORE_RELEASE_SOURCE_SHA) {
+            throw "Release source changed after verification"
+          }
+          git diff --exit-code
+          if ($LASTEXITCODE -ne 0) { throw "Tracked sources changed during verification" }
+          npm run tauri:build
 
       - name: Verify in-place upgrades from v0.19.0 and v0.25.1
         shell: pwsh
