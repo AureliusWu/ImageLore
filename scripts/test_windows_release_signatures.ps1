@@ -84,6 +84,8 @@ $commandOutput = & $shell -NoProfile -NonInteractive -File $cli -ApplicationPath
 $commandCode = $LASTEXITCODE
 [IO.File]::WriteAllText((Join-Path $root 'cli-negative.log'), ($commandOutput | Out-String), [Text.UTF8Encoding]::new($false))
 if ($commandCode -eq 0 -or ($commandOutput | Out-String) -notlike '*not a valid embedded*') { throw 'Unsigned PE CLI did not refuse publication' }
+# The negative exit has been checked. Do not leak it to the GitHub pwsh wrapper.
+$global:LASTEXITCODE = 0
 $caseCount++
 $projectPolicy = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../src-tauri/windows-signing-policy.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 if (@($projectPolicy.approvedSignerCertificateSha256).Count -eq 0) {
