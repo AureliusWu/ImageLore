@@ -34,6 +34,8 @@ The smoke test checks the existing install directory, executable and registered 
 
 The mandatory `CurrentExecutable` parameter binds the installed inner application to the exact built EXE. The script holds the build output read-only throughout acceptance and compares the installed file hash before launch and after both normal closes. Signing only an output EXE after packaging cannot qualify an installer containing different inner bytes.
 
+The NSIS-only bundling helper disables Tauri's temporary binary patching and checks the build EXE hash before/after bundling. Its stream hashing uses .NET rather than relying on `Get-FileHash` availability in a nested Windows PowerShell host; Cargo metadata is decoded explicitly as UTF-8 so Chinese project/output paths remain intact. The local full-entry prototype uses an old frozen EXE copy and does not replace current-source hosted installation evidence; see [signature-gate validation history](V0_26_RELEASE_SIGNATURE_GATE.md).
+
 For each upgraded launch the smoke also requires DirectML and the two imported MSVCP DLLs to exist in the installation directory and verifies that the process actually loaded them from there. A globally installed runtime on the hosted runner therefore cannot satisfy this check. Filename, version and SHA-256 are recorded without exposing user library contents.
 
 ## Local developer build

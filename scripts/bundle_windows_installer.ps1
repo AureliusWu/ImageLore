@@ -11,6 +11,12 @@ function Get-StreamSha256([IO.Stream]$Stream) {
     return [BitConverter]::ToString($algorithm.ComputeHash($Stream)).Replace('-', '').ToLowerInvariant()
   } finally { $algorithm.Dispose() }
 }
+function Get-FileStreamSha256([string]$Path) {
+  # Also works in Windows PowerShell child processes with inherited PS7 paths;
+  # Get-FileHash may not be available from their module environment.
+  $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+  try { return Get-StreamSha256 $stream } finally { $stream.Dispose() }
+}
 $project = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'Windows installer bundling requires Windows' }
 $manifest = Get-Content -LiteralPath (Join-Path $project 'src-tauri/windows-runtime.json') -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -33,8 +39,29 @@ if (-not $Target) {
 }
 Push-Location $project
 try {
-  $metadataText = & cargo metadata --locked --offline --no-deps --format-version 1 --manifest-path src-tauri/Cargo.toml
-  if ($LASTEXITCODE -ne 0) { throw 'Could not resolve the Cargo output directory' }
+  # Cargo emits UTF-8 JSON. Windows PowerShell's native pipeline may decode it
+  # with a legacy code page, corrupting non-ASCII project/output paths.
+  $metadataStart = [Diagnostics.ProcessStartInfo]::new()
+  $metadataStart.FileName = (Get-Command cargo -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+  $metadataStart.Arguments = 'metadata --locked --offline --no-deps --format-version 1 --manifest-path src-tauri/Cargo.toml'
+  $metadataStart.WorkingDirectory = $project
+  $metadataStart.UseShellExecute = $false
+  $metadataStart.CreateNoWindow = $true
+  $metadataStart.RedirectStandardOutput = $true
+  $metadataStart.RedirectStandardError = $true
+  $metadataStart.StandardOutputEncoding = [Text.UTF8Encoding]::new($false)
+  $metadataStart.StandardErrorEncoding = [Text.UTF8Encoding]::new($false)
+  $metadataProcess = [Diagnostics.Process]::new()
+  try {
+    $metadataProcess.StartInfo = $metadataStart
+    $null = $metadataProcess.Start()
+    $metadataOutput = $metadataProcess.StandardOutput.ReadToEndAsync()
+    $metadataError = $metadataProcess.StandardError.ReadToEndAsync()
+    $metadataProcess.WaitForExit()
+    $metadataText = $metadataOutput.GetAwaiter().GetResult()
+    $null = $metadataError.GetAwaiter().GetResult()
+    if ($metadataProcess.ExitCode -ne 0) { throw 'Could not resolve the Cargo output directory' }
+  } finally { $metadataProcess.Dispose() }
   $metadata = $metadataText | ConvertFrom-Json
   $targetDirectory = [IO.Path]::GetFullPath($metadata.target_directory)
   if ($Target) { $targetDirectory = Join-Path $targetDirectory $Target }
@@ -75,14 +102,14 @@ try {
       # NSIS is our only Windows bundle. Keep the exact EXE bytes: by default
       # Tauri patches the embedded bundle marker, then restores the build output.
       # That would package different bytes and invalidate an external signature.
-      $binaryHash = (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash
+      $binaryHash = Get-FileStreamSha256 $binary
       $arguments = @($cli, 'bundle', '--bundles', 'nsis', '--no-binary-patching', '--ci', '--config', $overlay)
       if ($Target) { $arguments += @('--target', $Target) }
       if ($DebugBuild) { $arguments += '--debug' }
       if ($NoSign) { $arguments += '--no-sign' }
       & $node @arguments
       if ($LASTEXITCODE -ne 0) { throw 'Windows installer bundling failed' }
-      if ((Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash -cne $binaryHash) {
+      if ((Get-FileStreamSha256 $binary) -cne $binaryHash) {
         throw 'Windows bundling changed the application executable bytes'
       }
       Write-Output ('Bundled unchanged application executable: SHA256=' + $binaryHash.ToLowerInvariant())

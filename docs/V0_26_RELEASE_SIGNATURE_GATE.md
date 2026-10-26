@@ -43,4 +43,10 @@ Microsoft 文档说明 [Get-AuthenticodeSignature](https://learn.microsoft.com/e
 
 首轮远端 `5a95460` 的快速/安装器工作流在测试步骤失败：20 项断言已经通过，但预期拒绝的 CLI exit 1 泄漏给 GitHub pwsh 的退出状态包装。两个失败运行与原始日志保留，没有执行应用构建或发布。按相同包装本地重现 exit 1 后，测试只在核实该预期负例的状态与原因后清零已消费的 native 状态；同包装再次实际 exit 0。签名验证器、拒绝条件和 20 项断言均未放宽，修订源码远端结果另行登记。
 
+`9fec7d0` 的[下一轮托管任务](https://github.com/AureliusWu/ImageLore/actions/runs/40291481543)实际完成 20 项签名回归、Rust **239/0/3、0 filtered（1024.19 秒）**和当前应用 release 编译，但新增的 EXE 哈希调用依赖 `Get-FileHash`，在嵌套 Windows PowerShell 子进程中不可用，NSIS 打包前停止。基线构建/安装升级/上传/Release 均未执行，运行产物列表 0，不能记为安装通过。
+
+后续修订复用 .NET 流式 SHA-256，兼容该子进程环境。仓库外新目录的完整打包原型还复现了中文路径下 Cargo UTF-8 JSON 被旧代码页解码的问题；改为进程流显式读取 UTF-8 后，Windows PowerShell 5 在故意禁用 `Get-FileHash` 的条件下实际打包成功、退出 0，EXE 与冻结原件前后字节相同。CLI `2.12.0` 的两个实际 npm 发布包先按 lock SRI 校验，失败源码/日志与成功原型均保留。
+
+该原型使用冻结的旧源码 `1dfe369` EXE 副本，只证明新打包入口的完整执行与输入保全；没有解包核对内层文件、安装或启动它，也不能转记为当前产品源码、模型推理或签名成功。当前源码仍须完成新的[双基线安装升级](V0_26_MODERN_UPGRADE_BASELINE.md)，其中实际内层文件的完整哈希检查保持。
+
 手动分支验证仍默认不上传、不创建 Release；其显式 `upload_installer` 用于分发审查后的评估材料，不是稳定版更新渠道。本轮不启用该输入、不推标签、不切换桌面 current。新源码的托管安装/升级、真实批准签名的正向路径、签名最终产物的匿名下载、updater、GUI、正式性能及 RC 仍待分别验证。
