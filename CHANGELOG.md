@@ -1,6 +1,11 @@
 # Changelog
 
-## Unreleased
+## 1.0.0 — Released with known limitations
+
+- Publish the stable version number with explicit maintainer-approved limitations: unsigned Windows application/NSIS, manual updates only, and deferred desktop/performance/long-running acceptance. These deferred gates remain open rather than being recorded as passed.
+- Keep the strict signing policy for future versions, with a separately verified, exact-version v1.0.0 exception and hash-bound release notes.
+- Include source-attributed third-party notices with the installer and publish source/build evidence plus SHA-256 checksums.
+- Retain both pinned historical NSIS upgrade paths, installed application byte identity, normal closes and complete synthetic data readbacks before publication.
 
 - Stop automatic recovery before replacing the active library when the newest backup is temporarily unavailable; retry the same newest backup after unlocking, while retaining fallback for confirmed-invalid candidates.
 - Isolated sidecar-free WAL backups during validation and snapshot creation so SQLite cannot create WAL/SHM beside the originals; added real-file preservation regressions.

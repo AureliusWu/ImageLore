@@ -8,3 +8,9 @@
 third_party/frontend/licenses/** -text
 # The original Vite notice intentionally retains upstream blockquote spaces.
 third_party/frontend/licenses/vite-generated-helpers/7.3.7/LICENSE.md -whitespace
+
+# Reviewed distribution attribution also keeps original bytes and spacing.
+third_party/distribution/** -text -whitespace
+scripts/public_attribution_hashes.json text eol=lf
+docs/releases/*.md text eol=lf
+src-tauri/release-exceptions.json text eol=lf

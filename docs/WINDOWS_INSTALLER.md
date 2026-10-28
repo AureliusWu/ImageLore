@@ -1,5 +1,7 @@
 # Windows one-click installer
 
+The maintainer-authorized **v1.0.0 RELEASED_WITH_WARNINGS** is unsigned and has no updater. Its exact-tag exception verifies unsigned state, product/version and artifact bytes, while retaining all source/privacy/build/upgrade gates; future releases still require approved Authenticode signatures. See [release limitations and backup instructions](releases/v1.0.0.md). The installer carries third-party attribution under `licenses`; its inventory includes build tools and is not a final link map.
+
 ImageLore uses a Tauri 2 NSIS installer in current-user mode. The application identity remains stable across upgrades so a newer installer replaces the existing installation while preserving local user data.
 
 ## End user

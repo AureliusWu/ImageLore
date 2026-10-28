@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "productName": "ImageLore",
+  "version": "1.0.0",
+  "tag": "refs/tags/v1.0.0",
+  "status": "RELEASED_WITH_WARNINGS",
+  "releaseNotesPath": "docs/releases/v1.0.0.md",
+  "releaseNotesSha256": "da99c7edd0cd7020d68ddfcef88d920b0629d9d3c91d4ae8513dd5929e1a49a2",
+  "limitations": [
+    "unsigned-windows-binaries",
+    "manual-updates-only",
+    "desktop-and-performance-acceptance-deferred",
+    "third-party-inventory-not-link-map"
+  ]
+}

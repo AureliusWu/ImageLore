@@ -27,6 +27,16 @@ jobs:
       - name: Verify pinned upgrade baseline source identity checks
         run: python scripts/test_windows_upgrade_baseline.py
 
+      - name: Verify distribution notices and release asset preparation
+        shell: pwsh
+        run: |
+          python scripts/verify_distribution_notices.py
+          if ($LASTEXITCODE -ne 0) { throw 'Source notice verification failed' }
+          python scripts/test_distribution_notices.py
+          if ($LASTEXITCODE -ne 0) { throw 'Notice regression failed' }
+          python scripts/test_prepare_release_assets.py
+          if ($LASTEXITCODE -ne 0) { throw 'Release asset regression failed' }
+
       - name: Verify owned Windows ACL fixture lifecycle
         shell: pwsh
         run: |
@@ -36,7 +46,10 @@ jobs:
 
       - name: Verify Windows release signature gate refusals
         shell: pwsh
-        run: ./scripts/test_windows_release_signatures.ps1
+        run: |
+          ./scripts/test_windows_release_signatures.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Strict signature regression failed' }
+          ./scripts/test_windows_release_exceptions.ps1
 
       - uses: actions/setup-node@v4
         with:

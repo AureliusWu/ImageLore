@@ -44,9 +44,22 @@ jobs:
       - name: Verify pinned upgrade baseline source identity checks
         run: python scripts/test_windows_upgrade_baseline.py
 
+      - name: Verify distribution notices and release asset preparation
+        shell: pwsh
+        run: |
+          python scripts/verify_distribution_notices.py
+          if ($LASTEXITCODE -ne 0) { throw 'Source notice verification failed' }
+          python scripts/test_distribution_notices.py
+          if ($LASTEXITCODE -ne 0) { throw 'Notice regression failed' }
+          python scripts/test_prepare_release_assets.py
+          if ($LASTEXITCODE -ne 0) { throw 'Release asset regression failed' }
+
       - name: Verify Windows release signature gate refusals
         shell: pwsh
-        run: ./scripts/test_windows_release_signatures.ps1
+        run: |
+          ./scripts/test_windows_release_signatures.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Strict signature regression failed' }
+          ./scripts/test_windows_release_exceptions.ps1
 
       - uses: actions/setup-node@v4
         with:
@@ -89,8 +102,13 @@ jobs:
         shell: pwsh
         run: |
           . ./scripts/windows_release_signatures.ps1
-          $policy = Get-Content -LiteralPath src-tauri/windows-signing-policy.json -Raw -Encoding UTF8 | ConvertFrom-Json
-          $null = @(Get-ApprovedReleaseCertificateHashes $policy)
+          . ./scripts/windows_release_exceptions.ps1
+          $mode = Get-ReleasePublicationMode $env:GITHUB_WORKSPACE (Get-Content VERSION).Trim() $env:GITHUB_REF
+          if ($mode -eq 'SIGNED_REQUIRED') {
+            $policy = Get-Content -LiteralPath src-tauri/windows-signing-policy.json -Raw -Encoding UTF8 | ConvertFrom-Json
+            $null = @(Get-ApprovedReleaseCertificateHashes $policy)
+          }
+          Write-Host "Release publication mode: $mode"
 
       - name: Verify frontend
         run: npm run check
@@ -190,24 +208,44 @@ jobs:
           git diff --exit-code
           if ($LASTEXITCODE -ne 0) { throw "Tracked sources changed after verification" }
 
-      - name: Verify release Authenticode signatures before publication
+      - name: Verify release signing policy or exact v1.0.0 limitations before publication
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
         timeout-minutes: 5
         run: |
           $installer = Get-ChildItem "src-tauri/target/release/bundle/nsis/*.exe" | Select-Object -First 1
           if (-not $installer) { throw "NSIS installer not found" }
-          ./scripts/verify_windows_release_signatures.ps1 `
-            -ApplicationPath "src-tauri/target/release/imagelore.exe" `
-            -InstallerPath "$($installer.FullName)" `
-            -ExpectedVersion "$((Get-Content VERSION).Trim())"
+          . ./scripts/windows_release_exceptions.ps1
+          $version = (Get-Content VERSION).Trim()
+          $mode = Get-ReleasePublicationMode $env:GITHUB_WORKSPACE $version $env:GITHUB_REF
+          if ($mode -eq 'UNSIGNED_KNOWN_LIMITATIONS') {
+            $result = Invoke-KnownLimitationsReleaseGate $env:GITHUB_WORKSPACE 'src-tauri/target/release/imagelore.exe' $installer.FullName $version $env:GITHUB_REF
+          } else {
+            $policy = Get-Content -LiteralPath src-tauri/windows-signing-policy.json -Raw -Encoding UTF8 | ConvertFrom-Json
+            $result = Invoke-WindowsReleaseSignatureGate 'src-tauri/target/release/imagelore.exe' $installer.FullName $version $policy
+          }
+          $verification = Join-Path $env:RUNNER_TEMP ('imagelore-release-verification-' + [Guid]::NewGuid().ToString('N') + '.json')
+          [IO.File]::WriteAllText($verification, ($result | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
+          "IMAGELORE_RELEASE_VERIFICATION=$verification" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host ('Actual release artifact verification: ' + ($result | ConvertTo-Json -Compress -Depth 8))
+
+      - name: Stage checksums notices dependency sources and release evidence
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $installer = @(Get-ChildItem 'src-tauri/target/release/bundle/nsis/*.exe')
+          if ($installer.Count -ne 1) { throw 'Expected one validated release installer' }
+          $assets = Join-Path $env:RUNNER_TEMP ('imagelore-release-assets-' + [Guid]::NewGuid().ToString('N'))
+          python scripts/prepare_release_assets.py --output $assets --verification $env:IMAGELORE_RELEASE_VERIFICATION --application 'src-tauri/target/release/imagelore.exe' --installer $installer[0].FullName
+          if ($LASTEXITCODE -ne 0) { throw 'Release asset staging failed' }
+          "IMAGELORE_RELEASE_ASSETS=$assets" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Upload Windows installer artifact
         if: success() && (github.event_name != 'workflow_dispatch' || inputs.upload_installer)
         uses: actions/upload-artifact@v4
         with:
           name: ImageLore-Windows-x64-setup
-          path: src-tauri/target/release/bundle/nsis/*.exe
+          path: ${{ env.IMAGELORE_RELEASE_ASSETS || 'src-tauri/target/release/bundle/nsis/*.exe' }}
           if-no-files-found: error
           retention-days: 30
 
@@ -217,6 +255,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $installer = Get-ChildItem "src-tauri/target/release/bundle/nsis/*.exe" | Select-Object -First 1
-          if (-not $installer) { throw "NSIS installer not found" }
-          gh release create "$env:GITHUB_REF_NAME" "$($installer.FullName)" --title "ImageLore $env:GITHUB_REF_NAME" --notes "Windows one-click installer."
+          . ./scripts/windows_release_exceptions.ps1
+          $version = (Get-Content VERSION).Trim()
+          $mode = Get-ReleasePublicationMode $env:GITHUB_WORKSPACE $version $env:GITHUB_REF
+          if ($mode -ne 'UNSIGNED_KNOWN_LIMITATIONS') { throw 'Prepare reviewed release notes/assets for this signed version before publication' }
+          $assets = @(Get-ChildItem -LiteralPath $env:IMAGELORE_RELEASE_ASSETS -File)
+          if ($assets.Count -ne 5) { throw 'Expected installer, notices, dependency sources, manifest and checksums' }
+          gh release create "$env:GITHUB_REF_NAME" @($assets.FullName) --verify-tag --title "ImageLore v1.0.0 · 带已知限制" --notes-file 'docs/releases/v1.0.0.md' --latest
+          if ($LASTEXITCODE -ne 0) { throw 'GitHub Release publication failed; inspect existing release state before retrying' }

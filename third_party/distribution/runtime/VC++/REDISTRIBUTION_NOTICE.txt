@@ -1,0 +1,20 @@
+Microsoft Visual C++ Runtime
+
+Microsoft Corporation. All rights reserved.
+
+The Windows build bundles application-local Microsoft VC runtime CRT DLLs.
+These vendor files retain their own Microsoft license terms and are not
+relicensed under ImageLore's MIT license. Actual vendor file versions and
+SHA-256 digests are recorded by the release build/runtime receipt.
+
+Redistribution reference:
+https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution
+
+Microsoft runtime terms:
+https://visualstudio.microsoft.com/license-terms/vs2022-cruntime/
+
+Redistribution remains subject to the applicable Visual Studio/license terms.
+The release uses vendor redistributable CRT files without modification; debug
+non-redistributable CRT folders are excluded by the runtime staging process.
+This notice records the component and official references; it does not accept
+new service terms or grant rights beyond the vendor's own terms.

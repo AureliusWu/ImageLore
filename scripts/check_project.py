@@ -2,6 +2,7 @@ from pathlib import Path
 import json
 root=Path(__file__).resolve().parents[1]
 required=[
+ 'scripts/windows_release_exceptions.ps1','scripts/test_windows_release_exceptions.ps1','scripts/verify_distribution_notices.py','scripts/prepare_release_assets.py','src-tauri/release-exceptions.json','docs/releases/v1.0.0.md','third_party/distribution/notice-manifest.json',
  'scripts/check_windows_upgrade_baseline.py','scripts/test_windows_upgrade_baseline.py',
  'VERSION','package.json','package-lock.json','scripts/version_targets.mjs','scripts/test_preview_workflow.mjs','scripts/test_remix_workflow.mjs','scripts/test_browser_extension.mjs','browser-extension/manifest.json','browser-extension/background.js','browser-extension/shared.js','browser-extension/popup.html','browser-extension/popup.js','browser-extension/README.md','src/App.tsx','src/api.ts','src/styles.css','src/previewWorkflow.ts','src/hooks/useEditorDraft.ts', 'src/hooks/useVisionWorkflow.ts', 'src/hooks/useAssetContext.ts','src/hooks/useNativeDrop.ts',
  'src-tauri/Cargo.toml','src-tauri/Cargo.lock','src-tauri/schema.sql','src-tauri/src/lib.rs','src-tauri/src/db.rs','src-tauri/src/importer.rs','src-tauri/src/migrations.rs',

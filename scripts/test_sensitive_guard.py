@@ -13,6 +13,22 @@ import check_sensitive as guard
 
 
 class SensitiveGuardTests(unittest.TestCase):
+    def test_distribution_attribution_index_is_byte_bound(self):
+        data = Path(guard.__file__).with_name("public_attribution_hashes.json").read_bytes()
+        self.assertEqual(len(guard.load_public_attribution_index(data)), 35)
+        with self.assertRaisesRegex(RuntimeError, "reviewed bytes"):
+            guard.load_public_attribution_index(data + b"\n")
+
+    def test_all_reviewed_distribution_emails_are_exact_attribution(self):
+        root = Path(__file__).resolve().parents[1]
+        for name in guard.PUBLIC_ATTRIBUTION_SHA256:
+            if name.startswith("third_party/distribution/"):
+                with self.subTest(path=name):
+                    data = (root / name).read_bytes()
+                    self.assertEqual(guard.inspect(name, data), [])
+                    self.assertIn((0, "public-attribution-byte-mismatch"), guard.inspect(name, data + b"\n"))
+                    self.assertTrue(any(rule == "private-email" for _, rule in guard.inspect("unreviewed.txt", data)))
+
     def test_credentials_and_private_key_are_blocked(self):
         values = [
             "sk-" + string.ascii_letters + string.digits,

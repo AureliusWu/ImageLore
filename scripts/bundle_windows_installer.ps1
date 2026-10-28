@@ -94,6 +94,11 @@ try {
       if ((Get-StreamSha256 $staged) -cne $directMLHash) { throw 'Staged DirectML.dll hash does not match the reviewed input' }
       $overlay = Join-Path $inputDirectory 'runtime-resources.json'
       $resources = [ordered]@{}
+      if ($config.bundle.resources) {
+        foreach ($property in $config.bundle.resources.PSObject.Properties) {
+          $resources[$property.Name] = $property.Value
+        }
+      }
       $resources[$stagedDLL] = 'DirectML.dll'
       $value = [ordered]@{ bundle = [ordered]@{ resources = $resources } }
       [IO.File]::WriteAllText($overlay, ($value | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))

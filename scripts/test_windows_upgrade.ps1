@@ -356,6 +356,13 @@ foreach ($label in @("first upgraded launch", "upgraded restart")) {
   Invoke-AppStartupAndClose $currentExe $logPath $label
   Assert-True ((Get-FileHash -LiteralPath $currentExe -Algorithm SHA256).Hash -eq $expectedExecutableHash) "$label changed the installed application bytes"
   Write-Host "$label installed application: SHA256=$expectedExecutableHash, matches-built=true"
+  python (Join-Path $PSScriptRoot 'verify_distribution_notices.py') --installed-root (Join-Path $newInstallDir 'licenses')
+  Assert-True ($LASTEXITCODE -eq 0) "$label failed complete installed notice byte verification"
+  $installedNotes = Join-Path $newInstallDir 'RELEASE-NOTES.md'
+  Assert-NoReparsePoint $installedNotes
+  Assert-True (Test-Path -LiteralPath $installedNotes -PathType Leaf) "$label release notes are missing"
+  $sourceNotes = Join-Path $PSScriptRoot '../docs/releases/v1.0.0.md'
+  Assert-True ((Get-FileHash -LiteralPath $installedNotes -Algorithm SHA256).Hash -eq (Get-FileHash -LiteralPath $sourceNotes -Algorithm SHA256).Hash) "$label installed release notes differ from reviewed bytes"
   Assert-True (Test-Path -LiteralPath $newDb) "$label data-root database is missing"
   Assert-True (-not (Test-Path -LiteralPath $legacyDb)) "$label left the legacy database in the install directory"
   $verifyDb | python - $newDb $expectedSnapshot

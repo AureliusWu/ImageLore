@@ -1,4 +1,6 @@
-# ImageLore v0.26.0
+# ImageLore v1.0.0
+
+**带已知限制发布（RELEASED_WITH_WARNINGS）**：Windows 应用与安装器未签名、无自动更新，部分桌面/性能/长期内存验收延期。安装前备份资料库和原图，详见 [v1.0.0 发布说明](docs/releases/v1.0.0.md)。
 
 ![ImageLore 应用预览](docs/og.svg)
 

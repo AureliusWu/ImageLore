@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import re
 import subprocess
 import sys
@@ -16,6 +17,25 @@ PUBLIC_ATTRIBUTION_SHA256 = {
     "third_party/frontend/licenses/vite-generated-helpers/7.3.7/LICENSE.md":
         "a77a1c089806b39ad339535bdf3677f636c91d96693e8ad7b11fe733f650ea64",
 }
+PUBLIC_ATTRIBUTION_INDEX_SHA256 = "2fe646cda5bf8c56a6f8c340de34d821269aed221f5dc9f82d33e750695965ab"
+
+
+def load_public_attribution_index(data: bytes) -> dict[str, str]:
+    if hashlib.sha256(data).hexdigest() != PUBLIC_ATTRIBUTION_INDEX_SHA256:
+        raise RuntimeError("Public attribution index differs from its reviewed bytes")
+    index = json.loads(data)
+    if not isinstance(index, dict) or len(index) != 35:
+        raise RuntimeError("Invalid public attribution index")
+    for name, digest in index.items():
+        path = PurePosixPath(name)
+        if not name.startswith("third_party/distribution/") or ".." in path.parts or "\\" in name or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise RuntimeError("Invalid public attribution identity")
+    return index
+
+
+PUBLIC_ATTRIBUTION_SHA256.update(load_public_attribution_index(
+    Path(__file__).with_name("public_attribution_hashes.json").read_bytes()
+))
 PRIVATE_DIRS = {
     ".git", "node_modules", "target", "desktop-runtime", "task-evidence",
     "private", "private-data", "user-data", "secrets", "credentials",
