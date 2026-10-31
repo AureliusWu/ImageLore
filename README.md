@@ -1,5 +1,9 @@
 # ImageLore v1.0.0
 
+<!-- project-badges:start -->
+[![Version](https://img.shields.io/github/v/tag/AureliusWu/ImageLore?sort=semver&style=flat-square&label=version)](https://github.com/AureliusWu/ImageLore/tags) [![Build](https://github.com/AureliusWu/ImageLore/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AureliusWu/ImageLore/actions/workflows/ci.yml) [![Last commit](https://img.shields.io/github/last-commit/AureliusWu/ImageLore?style=flat-square)](https://github.com/AureliusWu/ImageLore/commits/main) [![License](https://img.shields.io/github/license/AureliusWu/ImageLore?style=flat-square)](LICENSE)
+<!-- project-badges:end -->
+
 **带已知限制发布（RELEASED_WITH_WARNINGS）**：Windows 应用与安装器未签名、无自动更新，部分桌面/性能/长期内存验收延期。安装前备份资料库和原图，详见 [v1.0.0 发布说明](docs/releases/v1.0.0.md)。
 
 ![ImageLore 应用预览](docs/og.svg)
