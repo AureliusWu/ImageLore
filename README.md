@@ -44,7 +44,7 @@ npm run tauri:build
 
 ## AI / 维护者入口
 
-本仓暂未设置根级 `AGENTS.md`，维护时以以下入口为准：
+修改前先读 [AGENTS.md](AGENTS.md)。长期维护规则以该文件为准。
 
 - `VERSION`：当前应用版本唯一事实源。
 - `npm run version:sync` / `npm run version:check`：同步和校验 npm、Tauri、Cargo、前端与 README 版本。
@@ -52,7 +52,7 @@ npm run tauri:build
 - `docs/releases/`：发行说明与已知限制。
 - `CHANGELOG.md` / `ROADMAP.md`：历史与后续规划。
 
-不要把逐版本功能流水、性能审计或安装器验收重新堆进 README；详细证据留在 `docs/` 和 CI。不要删除用户原图、绕过本地数据边界或把 Vision API Key 写入持久日志。
+不要把逐版本功能流水、性能审计或安装器验收重新堆进 README；详细证据留在 `docs/` 和 CI。
 
 ## License
 
