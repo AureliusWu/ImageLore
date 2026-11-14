@@ -12,7 +12,8 @@ const jsonText = (source, value) =>
 
 function replaceExactly(text, regex, replacement, expectedCount, label) {
   let count = 0;
-  const next = text.replace(regex, (...args) => {
+  const all = new RegExp(regex.source, regex.flags.includes("g") ? regex.flags : regex.flags + "g");
+  const next = text.replace(all, (...args) => {
     count += 1;
     return typeof replacement === "function" ? replacement(...args) : replacement;
   });
@@ -147,10 +148,12 @@ export function collectVersionEntries(root) {
   const generated = read(root, "src/version.ts").match(/APP_VERSION = "([^"]+)"/)?.[1];
   push("src/version.ts", generated);
 
-  const readme = read(root, "README.md").match(
-    /^# ImageLore v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)[ \t]*\r?$/m,
-  )?.[1];
-  push("README.md heading", readme);
+  const readme = [
+    ...read(root, "README.md").matchAll(
+      /^# ImageLore v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)[ \t]*\r?$/gm,
+    ),
+  ];
+  push("README.md heading", readme.length === 1 ? readme[0][1] : `marker-count:${readme.length}`);
 
   const previewVersions = markedVersions(read(root, "docs/UI_PREVIEW.html"));
   if (previewVersions.length !== 2) {

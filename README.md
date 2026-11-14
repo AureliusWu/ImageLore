@@ -1,4 +1,4 @@
-# ImageLore v1.0.0
+# ImageLore v1.0.1-dev
 
 <!-- project-badges:start -->
 [![Version](https://img.shields.io/github/v/tag/AureliusWu/ImageLore?sort=semver&style=flat-square&label=version)](https://github.com/AureliusWu/ImageLore/tags) [![Build](https://github.com/AureliusWu/ImageLore/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AureliusWu/ImageLore/actions/workflows/ci.yml) [![Last commit](https://img.shields.io/github/last-commit/AureliusWu/ImageLore?style=flat-square)](https://github.com/AureliusWu/ImageLore/commits/main) [![License](https://img.shields.io/github/license/AureliusWu/ImageLore?style=flat-square)](LICENSE)

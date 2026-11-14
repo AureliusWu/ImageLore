@@ -620,6 +620,7 @@ mod tests {
         fs::copy(&base, &duplicate).unwrap();
         sidecar::write_atomic(&sidecar::path_for(&duplicate), &json!({
             "schema":"imagelore.sidecar.v3", "prompt":"mustnotreplacebase",
+            "visual_dna":{"subject":"mergeddnaanchor 绿色披风"},
             "reference":{"source_url":"https://example.test/base.png", "page_url":"https://example.test/base", "page_title":"duplicatereferenceanchor", "captured_at":2}
         }).to_string()).unwrap();
         let duplicate_summary = import_files(&state, &[&duplicate]);
@@ -634,6 +635,8 @@ mod tests {
         assert_eq!(duplicate_summary.last_id, Some(base_id));
         assert_search("duplicatereferenceanchor", base_id);
         assert_search("baseanchor", base_id);
+        assert_search("mergeddnaanchor", base_id);
+        assert_search("绿色披风", base_id);
 
         sidecar::write_atomic(&sidecar::path_for(&base), &json!({
             "schema":"imagelore.sidecar.v3", "prompt":"mustnotreplacebase",

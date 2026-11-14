@@ -1,7 +1,7 @@
 {
   "name": "imagelore",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1-dev",
   "type": "module",
   "scripts": {
     "version:sync": "node scripts/sync_version.mjs",
@@ -17,7 +17,8 @@
     "tauri:build": "node scripts/sync_version.mjs && tauri build --no-bundle -- --locked && powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/bundle_windows_installer.ps1",
     "desktop:build": "node scripts/sync_version.mjs && tauri build --no-bundle -- --locked && powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/publish_desktop_runtime.ps1",
     "desktop:shortcut": "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/update_desktop_shortcut.ps1 -ExecutablePath desktop-runtime/current/ImageLore.exe",
-    "check": "node scripts/check_version.mjs && python scripts/check_project.py && python scripts/test_schema.py && python scripts/test_scale.py && python scripts/test_contract.py && npm run test:preview && npm run test:remix && npm run test:browser && npm run test:stability && npm run test:shortcut && npm run test:runtime && npm run format:check && npm run lint",
+    "check": "node scripts/check_version.mjs && python scripts/check_project.py && python scripts/test_schema.py && python scripts/test_scale.py && python scripts/test_contract.py && npm run test:version && npm run test:preview && npm run test:remix && npm run test:browser && npm run test:stability && npm run test:shortcut && npm run test:runtime && npm run format:check && npm run lint",
+    "test:version": "node --test scripts/test_version_targets.mjs",
     "test:preview": "node --experimental-strip-types --test scripts/test_preview_workflow.mjs",
     "test:remix": "node --experimental-strip-types --test scripts/test_remix_workflow.mjs",
     "test:browser": "node --test scripts/test_browser_extension.mjs",

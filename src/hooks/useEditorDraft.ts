@@ -30,6 +30,7 @@ export function useEditorDraft(
   const [negative, setNegativeState] = useState("");
   const [model, setModelState] = useState("");
   const [tagsText, setTagsTextState] = useState("");
+  const [baselineRevision, setBaselineRevision] = useState(0);
   const draft = useRef<Draft>({ ...empty });
   const baseline = useRef<Draft>({ ...empty });
   const timer = useRef<number | undefined>(undefined);
@@ -111,6 +112,7 @@ export function useEditorDraft(
       model: next.model,
       tagsText: next.tags.join(", "),
     };
+    setBaselineRevision((revision) => revision + 1);
     return true;
   }, []);
 
@@ -153,6 +155,7 @@ export function useEditorDraft(
           };
           if (draft.current.assetId === latest.id) {
             baseline.current = savedBaseline;
+            setBaselineRevision((revision) => revision + 1);
             onSaved(latest);
             if (
               draft.current.prompt === snapshot.prompt &&
@@ -201,6 +204,7 @@ export function useEditorDraft(
           };
           if (draft.current.assetId === latest.id) {
             baseline.current = savedBaseline;
+            setBaselineRevision((revision) => revision + 1);
             onSaved(latest);
             if (
               draft.current.prompt === snapshot.prompt &&
@@ -243,7 +247,7 @@ export function useEditorDraft(
       void flush().catch(() => {});
     }, 700);
     return () => window.clearTimeout(timer.current);
-  }, [prompt, negative, model, tagsText, flush]);
+  }, [prompt, negative, model, tagsText, baselineRevision, flush]);
 
   useEffect(
     () => () => {

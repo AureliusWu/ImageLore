@@ -3,7 +3,7 @@ name: ImageLore Native CI
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, 'maintenance/**']
     paths:
       - 'src-tauri/**'
       - 'VERSION'
@@ -17,13 +17,14 @@ on:
 
 concurrency:
   group: imagelore-native-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
 
 jobs:
   native:
+    timeout-minutes: 45
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4

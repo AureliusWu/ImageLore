@@ -3,19 +3,20 @@ name: ImageLore CI
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, 'maintenance/**']
   pull_request:
     branches: [main]
 
 concurrency:
   group: imagelore-fast-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
 
 jobs:
   verify:
+    timeout-minutes: 25
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4

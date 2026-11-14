@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.1-dev — Data-integrity maintenance
+
+- Refuse Save As aliases by comparing opened file handles before truncation; keep the same handles for copying, preserve source permissions, and cover hard links, symbolic links and normal overwrite behavior with synthetic files.
+- Recheck autosave after an acknowledged baseline change so edits reverted during an in-flight ordinary save or revision are persisted without another manual save.
+- Count every occurrence of single-target version markers and reject duplicated README headings; add version-target regressions to the required project checks.
+- Verify fingerprint-duplicate Sidecar DNA is searchable through both text and CJK indexes.
+- Run the existing frontend/native gates on maintenance candidate branches before fast-forward integration; retain main runs instead of canceling them. Sensitive-file/history checks remain mandatory.
+- This is an unreleased development source revision. No application EXE or installer is produced by this maintenance task; v1.0.0 publication limitations and strict future signing gates remain in force.
+
 ## 1.0.0 — Released with known limitations
 
 - Publish the stable version number with explicit maintainer-approved limitations: unsigned Windows application/NSIS, manual updates only, and deferred desktop/performance/long-running acceptance. These deferred gates remain open rather than being recorded as passed.

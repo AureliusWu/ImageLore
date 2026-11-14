@@ -104,6 +104,12 @@ function hookHarness(name, api = {}, getCurrentWindow = () => {}, eventApi = nul
     emitProgress(payload) {
       eventListener({ payload });
     },
+    async fireTimers() {
+      const batch = [...timers.values()];
+      timers.clear();
+      for (const callback of batch) callback();
+      await new Promise(setImmediate);
+    },
   };
 }
 
@@ -1663,3 +1669,38 @@ test("actual App close saves an edit typed while the final save is pending befor
   assert.deepEqual(writes, ["before close", "typed during final save"]);
   assert.equal(app.destroyed(), 1);
 });
+
+for (const save of ["flush", "saveRevision"]) {
+  test(`a reverted edit during an in-flight ${save} is automatically persisted`, async () => {
+    const firstWrite = deferred();
+    const writes = [];
+    const update = (id, patch) => {
+      writes.push(patch.prompt);
+      return writes.length === 1 ? firstWrite.promise : Promise.resolve({ ...asset(id), ...patch });
+    };
+    const hook = hookHarness("useEditorDraft", {
+      updatePrompt: update,
+      savePromptRevision: update,
+    });
+    const callbacks = [() => {}, () => {}, () => {}];
+    const current = asset(1, "original");
+    const draft = hook.render(current, ...callbacks);
+    draft.setPrompt("intermediate");
+    hook.render(current, ...callbacks);
+    const pending = draft[save]();
+    await new Promise(setImmediate);
+    draft.setPrompt("original");
+    hook.render(current, ...callbacks);
+    firstWrite.resolve(asset(1, "intermediate"));
+    await pending;
+
+    hook.render(current, ...callbacks);
+    await hook.fireTimers();
+    assert.deepEqual(writes, ["intermediate", "original"]);
+    const after = hook.render(current, ...callbacks);
+    assert.equal(after.prompt, "original");
+    assert.equal(after.hasUnsavedChanges(), false);
+    await hook.fireTimers();
+    assert.equal(writes.length, 2);
+  });
+}

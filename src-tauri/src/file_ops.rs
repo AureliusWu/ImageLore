@@ -1,6 +1,6 @@
 use crate::{db, state::AppState};
 use std::{
-    fs,
+    fs, io,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -96,7 +96,33 @@ fn copy_file_to(source_path: &Path, destination_path: &Path) -> Result<(), Strin
         return Err("目标位置与原文件相同".into());
     }
 
-    fs::copy(&source, &destination).map_err(|error| error.to_string())?;
+    let source_file = fs::File::open(&source).map_err(|error| error.to_string())?;
+    let source_metadata = source_file.metadata().map_err(|error| error.to_string())?;
+    if !source_metadata.is_file() {
+        return Err("原图片路径不是普通文件，无法另存为".into());
+    }
+    // Do not truncate until the opened handles have been compared. Keeping the
+    // same handles for the copy also avoids reopening a replaced path afterwards.
+    let destination_file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&destination)
+        .map_err(|error| error.to_string())?;
+    let source_handle =
+        same_file::Handle::from_file(source_file).map_err(|error| error.to_string())?;
+    let mut destination_handle =
+        same_file::Handle::from_file(destination_file).map_err(|error| error.to_string())?;
+    if source_handle == destination_handle {
+        return Err("目标位置与原文件相同".into());
+    }
+    let mut input = source_handle.as_file();
+    let output = destination_handle.as_file_mut();
+    output.set_len(0).map_err(|error| error.to_string())?;
+    io::copy(&mut input, output).map_err(|error| error.to_string())?;
+    output
+        .set_permissions(source_metadata.permissions())
+        .map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -150,6 +176,53 @@ mod tests {
             .contains("目标位置与原文件相同"));
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn save_as_rejects_hard_link_without_truncating_original() {
+        let root = temp_dir();
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("source.png");
+        let alias = root.join("hard-link.png");
+        let original = b"synthetic original image bytes";
+        fs::write(&source, original).unwrap();
+        fs::hard_link(&source, &alias).unwrap();
+
+        let result = copy_file_to(&source, &alias);
+        assert_eq!(fs::read(&source).unwrap(), original);
+        assert_eq!(fs::read(&alias).unwrap(), original);
+        assert!(result.unwrap_err().contains("目标位置与原文件相同"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn save_as_overwrites_a_distinct_file_without_leaving_old_tail() {
+        let root = temp_dir();
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("source.png");
+        let destination = root.join("existing.png");
+        fs::write(&source, b"short").unwrap();
+        fs::write(&destination, b"synthetic longer previous image").unwrap();
+
+        copy_file_to(&source, &destination).unwrap();
+        assert_eq!(fs::read(&source).unwrap(), b"short");
+        assert_eq!(fs::read(&destination).unwrap(), b"short");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_as_rejects_symbolic_link_to_original() {
+        let root = temp_dir();
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("source.png");
+        let alias = root.join("symbolic-link.png");
+        fs::write(&source, b"synthetic original image").unwrap();
+        std::os::unix::fs::symlink(&source, &alias).unwrap();
+
+        assert!(copy_file_to(&source, &alias).is_err());
+        assert_eq!(fs::read(&source).unwrap(), b"synthetic original image");
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
