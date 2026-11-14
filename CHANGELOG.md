@@ -7,6 +7,7 @@
 - Count every occurrence of single-target version markers and reject duplicated README headings; add version-target regressions to the required project checks.
 - Verify fingerprint-duplicate Sidecar DNA is searchable through both text and CJK indexes.
 - Run the existing frontend/native gates on maintenance candidate branches before fast-forward integration; retain main runs instead of canceling them. Sensitive-file/history checks remain mandatory.
+- Pin native/release builds to the recorded Rust 1.99.1 toolchain after Cargo 1.100 exposed the locked ort-sys DLL-copy layout assumption; retain every runtime/linking check and the existing DirectML identity.
 - This is an unreleased development source revision. No application EXE or installer is produced by this maintenance task; v1.0.0 publication limitations and strict future signing gates remain in force.
 
 ## 1.0.0 — Released with known limitations

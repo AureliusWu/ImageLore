@@ -67,7 +67,7 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.1
 
       - uses: swatinem/rust-cache@v2
         with:
